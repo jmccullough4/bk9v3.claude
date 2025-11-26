@@ -1339,3 +1339,31 @@ body.resizing * {
 .breadcrumb-marker:hover {
     opacity: 1;
 }
+
+/* Target status indicators */
+.target-detected {
+    color: var(--accent-success);
+}
+
+.target-not-detected {
+    color: var(--text-muted);
+    opacity: 0.7;
+}
+
+.target-item {
+    cursor: context-menu;
+}
+
+.context-menu .target-remove {
+    color: var(--accent-danger);
+}
+
+.context-menu .target-remove:hover {
+    background: rgba(255, 59, 48, 0.2);
+}
+
+/* CEP cell in survey table */
+.cep-cell {
+    color: var(--accent-warning);
+    font-size: 11px;
+}

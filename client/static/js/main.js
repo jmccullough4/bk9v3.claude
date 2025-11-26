@@ -202,6 +202,10 @@ function updateSurveyTable() {
             ? `${device.emitter_lat.toFixed(4)}, ${device.emitter_lon.toFixed(4)}`
             : '--';
 
+        const cep = device.emitter_accuracy
+            ? `${device.emitter_accuracy.toFixed(0)}m`
+            : '--';
+
         const lastSeen = device.last_seen
             ? new Date(device.last_seen).toLocaleTimeString()
             : '--';
@@ -211,7 +215,8 @@ function updateSurveyTable() {
             <td title="${device.device_name || 'Unknown'}">${truncate(device.device_name || 'Unknown', 12)}</td>
             <td title="${device.manufacturer || 'Unknown'}">${truncate(device.manufacturer || '?', 8)}</td>
             <td>${device.rssi || '--'}</td>
-            <td>${emitterLoc}</td>
+            <td class="cep-cell">${cep}</td>
+            <td title="${emitterLoc}">${emitterLoc !== '--' ? emitterLoc.split(',')[0] + '...' : '--'}</td>
             <td>${lastSeen}</td>
             <td>
                 <button class="action-btn" onclick="getDeviceInfo('${device.bd_address}')" title="Get Info">i</button>
@@ -712,15 +717,148 @@ function updateTargetList() {
     Object.values(targets).forEach(target => {
         const item = document.createElement('div');
         item.className = 'target-item';
+
+        // Check if target is in detected devices
+        const detected = devices[target.bd_address];
+        const statusClass = detected ? 'target-detected' : 'target-not-detected';
+
         item.innerHTML = `
             <div class="item-info">
-                <span class="item-primary">${target.bd_address}</span>
+                <span class="item-primary ${statusClass}">${target.bd_address}</span>
                 <span class="item-secondary">${target.alias || 'No alias'}</span>
             </div>
             <button class="item-delete" onclick="deleteTarget('${target.bd_address}')">&times;</button>
         `;
+
+        // Right-click context menu for targets
+        item.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            showTargetContextMenu(e, target.bd_address);
+        });
+
         list.appendChild(item);
     });
+}
+
+function showTargetContextMenu(event, bdAddress) {
+    contextMenuTarget = bdAddress;
+
+    let menu = document.getElementById('targetContextMenu');
+    if (!menu) {
+        menu = createTargetContextMenu();
+    }
+
+    // Position menu at click location
+    menu.style.left = event.pageX + 'px';
+    menu.style.top = event.pageY + 'px';
+    menu.classList.remove('hidden');
+
+    event.preventDefault();
+}
+
+function createTargetContextMenu() {
+    const existing = document.getElementById('targetContextMenu');
+    if (existing) existing.remove();
+
+    const menu = document.createElement('div');
+    menu.id = 'targetContextMenu';
+    menu.className = 'context-menu hidden';
+    menu.innerHTML = `
+        <div class="context-menu-item" onclick="targetContextAction('info')">
+            <i>ℹ</i> Get Device Info
+        </div>
+        <div class="context-menu-item" onclick="targetContextAction('name')">
+            <i>📝</i> Get Device Name
+        </div>
+        <div class="context-menu-item" onclick="targetContextAction('stimulate')">
+            <i>📡</i> Stimulate (BT Classic)
+        </div>
+        <div class="context-menu-divider"></div>
+        <div class="context-menu-item" onclick="targetContextAction('locate')">
+            <i>📍</i> Geolocate Device
+        </div>
+        <div class="context-menu-item" onclick="targetContextAction('georeset')">
+            <i>🔄</i> Reset Device Geo
+        </div>
+        <div class="context-menu-divider"></div>
+        <div class="context-menu-item" onclick="targetContextAction('copy')">
+            <i>📋</i> Copy BD Address
+        </div>
+        <div class="context-menu-item" onclick="targetContextAction('zoom')">
+            <i>🗺</i> Zoom to Location
+        </div>
+        <div class="context-menu-divider"></div>
+        <div class="context-menu-item target-remove" onclick="targetContextAction('remove')">
+            <i>🗑</i> Remove Target
+        </div>
+    `;
+    document.body.appendChild(menu);
+    return menu;
+}
+
+function targetContextAction(action) {
+    if (!contextMenuTarget) return;
+
+    const bdAddress = contextMenuTarget;
+    const device = devices[bdAddress];
+
+    switch (action) {
+        case 'info':
+            getDeviceInfo(bdAddress);
+            break;
+        case 'name':
+            requestDeviceName(bdAddress);
+            break;
+        case 'stimulate':
+            stimulateForDevice(bdAddress);
+            break;
+        case 'locate':
+            requestGeolocation(bdAddress);
+            break;
+        case 'georeset':
+            resetDeviceGeo(bdAddress);
+            break;
+        case 'copy':
+            navigator.clipboard.writeText(bdAddress).then(() => {
+                addLogEntry(`Copied ${bdAddress} to clipboard`, 'INFO');
+            });
+            break;
+        case 'zoom':
+            if (device && device.emitter_lat && device.emitter_lon) {
+                map.flyTo({
+                    center: [device.emitter_lon, device.emitter_lat],
+                    zoom: 18
+                });
+            } else {
+                addLogEntry('No location data for this target', 'WARNING');
+            }
+            break;
+        case 'remove':
+            deleteTarget(bdAddress);
+            break;
+    }
+
+    hideTargetContextMenu();
+}
+
+function hideTargetContextMenu() {
+    const menu = document.getElementById('targetContextMenu');
+    if (menu) menu.classList.add('hidden');
+    contextMenuTarget = null;
+}
+
+function stimulateForDevice(bdAddress) {
+    addLogEntry(`Stimulating to find ${bdAddress}...`, 'INFO');
+    fetch('/api/scan/stimulate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'classic' })
+    })
+        .then(r => r.json())
+        .then(data => {
+            addLogEntry(`Stimulation complete. Found ${data.devices_found || 0} devices.`, 'INFO');
+        })
+        .catch(e => addLogEntry(`Stimulation failed: ${e}`, 'ERROR'));
 }
 
 function addTarget() {
@@ -1456,10 +1594,11 @@ function requestGeolocation(bdAddress) {
         .catch(e => addLogEntry(`Geolocation failed: ${e}`, 'ERROR'));
 }
 
-// Click anywhere to close context menu
+// Click anywhere to close context menus
 document.addEventListener('click', (e) => {
     if (!e.target.closest('.context-menu')) {
         hideContextMenu();
+        hideTargetContextMenu();
     }
 });
 
