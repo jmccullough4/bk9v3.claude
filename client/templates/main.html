@@ -49,6 +49,182 @@
         </div>
     </div>
 
+    <!-- Settings Modal -->
+    <div id="settingsModal" class="modal hidden">
+        <div class="modal-content modal-large">
+            <div class="modal-header">
+                <span>&#9881; SYSTEM SETTINGS</span>
+                <button class="modal-close" onclick="closeSettingsModal()">&times;</button>
+            </div>
+            <div class="modal-body settings-body">
+                <!-- Settings Tabs -->
+                <div class="settings-tabs">
+                    <button class="settings-tab active" onclick="showSettingsTab('general')">General</button>
+                    <button class="settings-tab" onclick="showSettingsTab('gps')">GPS</button>
+                    <button class="settings-tab" onclick="showSettingsTab('users')">Users</button>
+                    <button class="settings-tab" onclick="showSettingsTab('ui')">UI Layout</button>
+                </div>
+
+                <!-- General Settings Tab -->
+                <div id="settingsGeneral" class="settings-content active">
+                    <div class="settings-group">
+                        <h3>System Identification</h3>
+                        <div class="form-row">
+                            <label>System ID:</label>
+                            <input type="text" id="settingSystemId" placeholder="BK9-001">
+                        </div>
+                        <div class="form-row">
+                            <label>System Name:</label>
+                            <input type="text" id="settingSystemName" placeholder="BlueK9 Unit 1">
+                        </div>
+                    </div>
+                    <div class="settings-group">
+                        <h3>Scan Settings</h3>
+                        <div class="form-row">
+                            <label>Scan Interval (sec):</label>
+                            <input type="number" id="settingScanInterval" min="1" max="60" value="2">
+                        </div>
+                    </div>
+                    <div class="settings-group">
+                        <h3>Alert Settings</h3>
+                        <div class="form-row">
+                            <label>SMS Alert Interval (sec):</label>
+                            <input type="number" id="settingSmsInterval" min="30" max="600" value="60">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- GPS Settings Tab -->
+                <div id="settingsGps" class="settings-content">
+                    <div class="settings-group">
+                        <h3>GPS Source</h3>
+                        <div class="form-row">
+                            <label>Source Type:</label>
+                            <select id="settingGpsSource" onchange="updateGpsSettingsFields()">
+                                <option value="nmea_tcp">NMEA TCP</option>
+                                <option value="gpsd">GPSD</option>
+                                <option value="serial">Serial</option>
+                            </select>
+                        </div>
+                        <div id="gpsNmeaSettings">
+                            <div class="form-row">
+                                <label>NMEA Host:</label>
+                                <input type="text" id="settingNmeaHost" placeholder="127.0.0.1">
+                            </div>
+                            <div class="form-row">
+                                <label>NMEA Port:</label>
+                                <input type="number" id="settingNmeaPort" value="10110">
+                            </div>
+                        </div>
+                        <div id="gpsGpsdSettings" class="hidden">
+                            <div class="form-row">
+                                <label>GPSD Host:</label>
+                                <input type="text" id="settingGpsdHost" placeholder="127.0.0.1">
+                            </div>
+                            <div class="form-row">
+                                <label>GPSD Port:</label>
+                                <input type="number" id="settingGpsdPort" value="2947">
+                            </div>
+                        </div>
+                        <div id="gpsSerialSettings" class="hidden">
+                            <div class="form-row">
+                                <label>Serial Port:</label>
+                                <input type="text" id="settingSerialPort" placeholder="/dev/ttyUSB0">
+                            </div>
+                            <div class="form-row">
+                                <label>Baud Rate:</label>
+                                <select id="settingSerialBaud">
+                                    <option value="4800">4800</option>
+                                    <option value="9600" selected>9600</option>
+                                    <option value="38400">38400</option>
+                                    <option value="115200">115200</option>
+                                </select>
+                            </div>
+                        </div>
+                        <button class="btn btn-secondary" onclick="testGpsSettings()">Test Connection</button>
+                    </div>
+                </div>
+
+                <!-- Users Tab -->
+                <div id="settingsUsers" class="settings-content">
+                    <div class="settings-group">
+                        <h3>User Management</h3>
+                        <div id="userList" class="user-list">
+                            <!-- Users will be populated here -->
+                        </div>
+                        <div id="addUserForm" class="add-user-form {{ 'hidden' if not is_admin else '' }}">
+                            <h4>Add New User</h4>
+                            <div class="form-row">
+                                <label>Username:</label>
+                                <input type="text" id="newUsername" placeholder="username">
+                            </div>
+                            <div class="form-row">
+                                <label>Password:</label>
+                                <input type="password" id="newPassword" placeholder="password">
+                            </div>
+                            <div class="form-row">
+                                <label>Admin:</label>
+                                <input type="checkbox" id="newUserAdmin">
+                            </div>
+                            <button class="btn btn-success" onclick="createUser()">Create User</button>
+                        </div>
+                    </div>
+                    <div class="settings-group">
+                        <h3>Change Your Password</h3>
+                        <div class="form-row">
+                            <label>Current Password:</label>
+                            <input type="password" id="currentPassword">
+                        </div>
+                        <div class="form-row">
+                            <label>New Password:</label>
+                            <input type="password" id="newPasswordChange">
+                        </div>
+                        <div class="form-row">
+                            <label>Confirm Password:</label>
+                            <input type="password" id="confirmPassword">
+                        </div>
+                        <button class="btn btn-primary" onclick="changePassword()">Change Password</button>
+                    </div>
+                </div>
+
+                <!-- UI Layout Tab -->
+                <div id="settingsUi" class="settings-content">
+                    <div class="settings-group">
+                        <h3>Panel Layout</h3>
+                        <p class="settings-hint">Drag panel edges to resize. Your layout is saved automatically.</p>
+                        <div class="form-row">
+                            <label>Left Panel Width:</label>
+                            <input type="number" id="settingLeftPanelWidth" min="200" max="500" value="280">
+                            <span>px</span>
+                        </div>
+                        <div class="form-row">
+                            <label>Right Panel Width:</label>
+                            <input type="number" id="settingRightPanelWidth" min="300" max="600" value="420">
+                            <span>px</span>
+                        </div>
+                    </div>
+                    <div class="settings-group">
+                        <h3>Export/Import Configuration</h3>
+                        <div class="btn-group">
+                            <button class="btn btn-secondary" onclick="exportConfig()">Export Config</button>
+                            <button class="btn btn-secondary" onclick="document.getElementById('importConfigFile').click()">Import Config</button>
+                            <input type="file" id="importConfigFile" accept=".json" style="display:none" onchange="importConfig(event)">
+                        </div>
+                    </div>
+                    <div class="settings-group">
+                        <h3>Reset Layout</h3>
+                        <button class="btn btn-danger" onclick="resetLayout()">Reset to Default</button>
+                    </div>
+                </div>
+
+                <!-- Save Button -->
+                <div class="settings-footer">
+                    <button class="btn btn-primary" onclick="saveAllSettings()">Save Settings</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Main Layout -->
     <div class="app-container">
         <!-- Header -->
@@ -81,6 +257,7 @@
                 </div>
             </div>
             <div class="header-right">
+                <button class="settings-btn" onclick="openSettingsModal()" title="Settings">&#9881;</button>
                 <span class="operator-info">OP: {{ username }}</span>
                 <a href="{{ url_for('logout') }}" class="logout-btn">LOGOUT</a>
             </div>
@@ -330,8 +507,10 @@
 
     <script src="{{ url_for('static', filename='js/main.js') }}"></script>
     <script>
-        // Initialize with Mapbox token
+        // Initialize with Mapbox token and user info
         const MAPBOX_TOKEN = '{{ mapbox_token }}';
+        const IS_ADMIN = {{ 'true' if is_admin else 'false' }};
+        const CURRENT_USER = '{{ username }}';
         initApp();
     </script>
 </body>

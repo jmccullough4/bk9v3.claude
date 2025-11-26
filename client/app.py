@@ -127,6 +127,38 @@ def init_database():
         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
     )''')
 
+    # Users table for authentication
+    c.execute('''CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        is_admin INTEGER DEFAULT 0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        last_login DATETIME,
+        created_by TEXT
+    )''')
+
+    # User preferences table for UI config
+    c.execute('''CREATE TABLE IF NOT EXISTS user_config (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT UNIQUE NOT NULL,
+        config_json TEXT,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )''')
+
+    # System settings table
+    c.execute('''CREATE TABLE IF NOT EXISTS system_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )''')
+
+    # Create default admin user if not exists
+    import hashlib
+    default_pass_hash = hashlib.sha256(CONFIG['DEFAULT_PASS'].encode()).hexdigest()
+    c.execute('''INSERT OR IGNORE INTO users (username, password_hash, is_admin)
+                 VALUES (?, ?, 1)''', (CONFIG['DEFAULT_USER'], default_pass_hash))
+
     conn.commit()
     conn.close()
     logger.info("Database initialized")
@@ -584,15 +616,99 @@ def scan_ble_devices(interface='hci0'):
 
 
 def get_device_rssi(bd_address, interface='hci0'):
-    """Get RSSI for a specific device."""
+    """
+    Get RSSI for a specific device by establishing a connection first.
+    Uses l2ping or hcitool name to establish connection, then queries RSSI.
+    """
+    rssi = None
+
     try:
+        # Method 1: Try direct RSSI query first (if already connected)
         result = subprocess.run(
             ['hcitool', '-i', interface, 'rssi', bd_address],
             capture_output=True,
             text=True,
-            timeout=5
+            timeout=3
         )
         match = re.search(r'RSSI return value:\s*(-?\d+)', result.stdout)
+        if match:
+            rssi = int(match.group(1))
+            add_log(f"Got RSSI {rssi} for {bd_address} (direct)", "DEBUG")
+            return rssi
+    except:
+        pass
+
+    try:
+        # Method 2: Establish connection with l2ping, then get RSSI
+        # l2ping sends L2CAP echo request which establishes a connection
+        l2ping_proc = subprocess.Popen(
+            ['l2ping', '-i', interface, '-c', '1', '-t', '2', bd_address],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+
+        # While l2ping is running, try to get RSSI
+        time.sleep(0.5)
+
+        result = subprocess.run(
+            ['hcitool', '-i', interface, 'rssi', bd_address],
+            capture_output=True,
+            text=True,
+            timeout=2
+        )
+        match = re.search(r'RSSI return value:\s*(-?\d+)', result.stdout)
+        if match:
+            rssi = int(match.group(1))
+            add_log(f"Got RSSI {rssi} for {bd_address} (via l2ping)", "DEBUG")
+
+        l2ping_proc.terminate()
+
+        if rssi:
+            return rssi
+    except Exception as e:
+        add_log(f"l2ping RSSI method failed for {bd_address}: {e}", "DEBUG")
+
+    try:
+        # Method 3: Use hcitool name to establish connection
+        name_proc = subprocess.Popen(
+            ['hcitool', '-i', interface, 'name', bd_address],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+
+        time.sleep(0.3)
+
+        result = subprocess.run(
+            ['hcitool', '-i', interface, 'rssi', bd_address],
+            capture_output=True,
+            text=True,
+            timeout=2
+        )
+        match = re.search(r'RSSI return value:\s*(-?\d+)', result.stdout)
+        if match:
+            rssi = int(match.group(1))
+            add_log(f"Got RSSI {rssi} for {bd_address} (via name)", "DEBUG")
+
+        name_proc.terminate()
+
+        if rssi:
+            return rssi
+    except Exception as e:
+        add_log(f"hcitool name RSSI method failed for {bd_address}: {e}", "DEBUG")
+
+    return rssi
+
+
+def get_rssi_from_bluetoothctl(bd_address):
+    """Get RSSI from bluetoothctl info if available."""
+    try:
+        result = subprocess.run(
+            ['bluetoothctl', 'info', bd_address],
+            capture_output=True,
+            text=True,
+            timeout=3
+        )
+        match = re.search(r'RSSI:\s*(-?\d+)', result.stdout)
         if match:
             return int(match.group(1))
     except:
@@ -1147,16 +1263,20 @@ def alert_target_found(device, is_new=True):
         for number in numbers:
             send_sms_alert(number, msg)
 
-    # Always emit visual/audio alert
-    socketio.emit('target_alert', {
-        'device': device,
-        'message': msg,
-        'system_id': system_id,
-        'system_name': system_name,
-        'location': current_location if current_location['lat'] else None
-    })
+        # Log recurring SMS alerts
+        if not is_new:
+            add_log(f"Recurring SMS alert sent for target {bd_addr} (RSSI: {rssi})", "INFO")
 
-    add_log(f"TARGET ALERT: {bd_addr} detected! (RSSI: {rssi})", "WARNING")
+    # Only emit visual/audio alert for new targets (avoid constant beeping)
+    if is_new:
+        socketio.emit('target_alert', {
+            'device': device,
+            'message': msg,
+            'system_id': system_id,
+            'system_name': system_name,
+            'location': current_location if current_location['lat'] else None
+        })
+        add_log(f"TARGET ALERT: {bd_addr} detected! (RSSI: {rssi})", "WARNING")
 
 
 # ==================== SCANNING THREAD ====================
@@ -1190,8 +1310,24 @@ def process_found_device(device_info):
     is_target = target is not None
     devices[bd_addr]['is_target'] = is_target
 
-    # Update location estimate if we have RSSI
+    # Get RSSI - try multiple methods
     rssi = device_info.get('rssi')
+
+    # If no RSSI from scan, try to get it actively (for Classic BT)
+    if rssi is None and device_info.get('device_type') != 'ble':
+        # Try bluetoothctl first (faster)
+        rssi = get_rssi_from_bluetoothctl(bd_addr)
+
+        # If still no RSSI, try hcitool with connection
+        if rssi is None:
+            rssi = get_device_rssi(bd_addr)
+
+        if rssi:
+            device_info['rssi'] = rssi
+            devices[bd_addr]['rssi'] = rssi
+            add_log(f"Active RSSI capture for {bd_addr}: {rssi} dBm", "DEBUG")
+
+    # Update location estimate if we have RSSI
     emitter_loc = None
     if rssi:
         emitter_loc = update_device_location(bd_addr, rssi)
@@ -1228,9 +1364,9 @@ def process_found_device(device_info):
     # Send update to UI
     socketio.emit('device_update', devices[bd_addr])
 
-    # Alert if target
-    if is_target and is_new:
-        alert_target_found(devices[bd_addr])
+    # Alert if target - call for all targets (not just new) to handle recurring SMS
+    if is_target:
+        alert_target_found(devices[bd_addr], is_new=is_new)
 
     return devices[bd_addr]
 
@@ -1361,17 +1497,34 @@ def index():
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     """Login page."""
+    import hashlib
     error = None
     if request.method == 'POST':
         username = request.form.get('username')
         password = request.form.get('password')
 
-        if username == CONFIG['DEFAULT_USER'] and password == CONFIG['DEFAULT_PASS']:
+        # Authenticate against database
+        conn = get_db()
+        c = conn.cursor()
+        password_hash = hashlib.sha256(password.encode()).hexdigest()
+        c.execute('SELECT id, is_admin FROM users WHERE username = ? AND password_hash = ?',
+                  (username, password_hash))
+        user = c.fetchone()
+
+        if user:
             session['logged_in'] = True
             session['username'] = username
+            session['is_admin'] = bool(user['is_admin'])
+
+            # Update last login
+            c.execute('UPDATE users SET last_login = datetime("now") WHERE username = ?', (username,))
+            conn.commit()
+            conn.close()
+
             add_log(f"User {username} logged in", "INFO")
             return redirect(url_for('main'))
         else:
+            conn.close()
             error = 'Invalid credentials'
             add_log(f"Failed login attempt for {username}", "WARNING")
 
@@ -1393,7 +1546,8 @@ def main():
     """Main application page."""
     return render_template('main.html',
                          mapbox_token=CONFIG['MAPBOX_TOKEN'],
-                         username=session.get('username'))
+                         username=session.get('username'),
+                         is_admin=session.get('is_admin', False))
 
 
 @app.route('/api/config')
@@ -1523,7 +1677,7 @@ def device_locate(bd_address):
     c = conn.cursor()
     c.execute('''
         SELECT system_lat, system_lon, rssi, timestamp
-        FROM device_log
+        FROM rssi_history
         WHERE bd_address = ? AND system_lat IS NOT NULL AND rssi IS NOT NULL
         ORDER BY timestamp DESC
         LIMIT 50
@@ -1855,6 +2009,255 @@ def test_gps():
     else:
         add_log(f"GPS test failed for source: {source}", "WARNING")
         return jsonify({'status': 'failed', 'error': f'Could not connect to {source}'})
+
+
+@app.route('/api/settings', methods=['GET', 'POST'])
+@login_required
+def manage_settings():
+    """Get or update system settings."""
+    conn = get_db()
+    c = conn.cursor()
+
+    if request.method == 'POST':
+        data = request.json
+
+        # Update CONFIG and store in database
+        settings_map = {
+            'system_id': 'SYSTEM_ID',
+            'system_name': 'SYSTEM_NAME',
+            'gps_source': 'GPS_SOURCE',
+            'nmea_host': 'NMEA_TCP_HOST',
+            'nmea_port': 'NMEA_TCP_PORT',
+            'gpsd_host': 'GPSD_HOST',
+            'gpsd_port': 'GPSD_PORT',
+            'serial_port': 'GPS_SERIAL_PORT',
+            'serial_baud': 'GPS_SERIAL_BAUD',
+            'sms_alert_interval': 'SMS_ALERT_INTERVAL',
+        }
+
+        for key, config_key in settings_map.items():
+            if key in data:
+                value = data[key]
+                # Convert to int for numeric fields
+                if key in ['nmea_port', 'gpsd_port', 'serial_baud', 'sms_alert_interval']:
+                    value = int(value)
+                CONFIG[config_key] = value
+                # Store in database
+                c.execute('''INSERT OR REPLACE INTO system_settings (key, value, updated_at)
+                            VALUES (?, ?, datetime('now'))''', (config_key, str(value)))
+
+        conn.commit()
+        add_log(f"System settings updated by {session.get('username')}", "INFO")
+        conn.close()
+        return jsonify({'status': 'updated'})
+
+    # GET - return current settings
+    conn.close()
+    return jsonify({
+        'system_id': CONFIG.get('SYSTEM_ID', 'BK9-001'),
+        'system_name': CONFIG.get('SYSTEM_NAME', 'BlueK9 Unit 1'),
+        'gps_source': CONFIG.get('GPS_SOURCE', 'nmea_tcp'),
+        'nmea_host': CONFIG.get('NMEA_TCP_HOST', '127.0.0.1'),
+        'nmea_port': CONFIG.get('NMEA_TCP_PORT', 10110),
+        'gpsd_host': CONFIG.get('GPSD_HOST', '127.0.0.1'),
+        'gpsd_port': CONFIG.get('GPSD_PORT', 2947),
+        'serial_port': CONFIG.get('GPS_SERIAL_PORT', '/dev/ttyUSB0'),
+        'serial_baud': CONFIG.get('GPS_SERIAL_BAUD', 9600),
+        'sms_alert_interval': CONFIG.get('SMS_ALERT_INTERVAL', 60),
+    })
+
+
+@app.route('/api/users', methods=['GET', 'POST'])
+@login_required
+def manage_users():
+    """Get users or create a new user (admin only)."""
+    import hashlib
+    conn = get_db()
+    c = conn.cursor()
+
+    if request.method == 'POST':
+        # Check if current user is admin
+        current_user = session.get('username')
+        c.execute('SELECT is_admin FROM users WHERE username = ?', (current_user,))
+        user_row = c.fetchone()
+        if not user_row or not user_row['is_admin']:
+            conn.close()
+            return jsonify({'error': 'Admin access required'}), 403
+
+        data = request.json
+        username = data.get('username', '').strip()
+        password = data.get('password', '')
+        is_admin = 1 if data.get('is_admin') else 0
+
+        if not username or not password:
+            conn.close()
+            return jsonify({'error': 'Username and password required'}), 400
+
+        # Check if user exists
+        c.execute('SELECT id FROM users WHERE username = ?', (username,))
+        if c.fetchone():
+            conn.close()
+            return jsonify({'error': 'User already exists'}), 400
+
+        password_hash = hashlib.sha256(password.encode()).hexdigest()
+        c.execute('''INSERT INTO users (username, password_hash, is_admin, created_by)
+                    VALUES (?, ?, ?, ?)''', (username, password_hash, is_admin, current_user))
+        conn.commit()
+        add_log(f"User {username} created by {current_user}", "INFO")
+        conn.close()
+        return jsonify({'status': 'created', 'username': username})
+
+    # GET - return all users
+    c.execute('SELECT id, username, is_admin, created_at, last_login, created_by FROM users')
+    users = [dict(row) for row in c.fetchall()]
+    conn.close()
+    return jsonify(users)
+
+
+@app.route('/api/users/<username>', methods=['DELETE'])
+@login_required
+def delete_user(username):
+    """Delete a user (admin only)."""
+    conn = get_db()
+    c = conn.cursor()
+
+    # Check if current user is admin
+    current_user = session.get('username')
+    c.execute('SELECT is_admin FROM users WHERE username = ?', (current_user,))
+    user_row = c.fetchone()
+    if not user_row or not user_row['is_admin']:
+        conn.close()
+        return jsonify({'error': 'Admin access required'}), 403
+
+    # Can't delete yourself or the default admin
+    if username == current_user:
+        conn.close()
+        return jsonify({'error': 'Cannot delete yourself'}), 400
+    if username == CONFIG['DEFAULT_USER']:
+        conn.close()
+        return jsonify({'error': 'Cannot delete default admin'}), 400
+
+    c.execute('DELETE FROM users WHERE username = ?', (username,))
+    if c.rowcount > 0:
+        conn.commit()
+        add_log(f"User {username} deleted by {current_user}", "INFO")
+        conn.close()
+        return jsonify({'status': 'deleted'})
+    else:
+        conn.close()
+        return jsonify({'error': 'User not found'}), 404
+
+
+@app.route('/api/users/password', methods=['POST'])
+@login_required
+def change_password():
+    """Change password for current user."""
+    import hashlib
+    conn = get_db()
+    c = conn.cursor()
+
+    data = request.json
+    current_password = data.get('current_password', '')
+    new_password = data.get('new_password', '')
+
+    if not current_password or not new_password:
+        conn.close()
+        return jsonify({'error': 'Current and new password required'}), 400
+
+    username = session.get('username')
+    current_hash = hashlib.sha256(current_password.encode()).hexdigest()
+
+    # Verify current password
+    c.execute('SELECT id FROM users WHERE username = ? AND password_hash = ?',
+              (username, current_hash))
+    if not c.fetchone():
+        conn.close()
+        return jsonify({'error': 'Current password incorrect'}), 401
+
+    # Update password
+    new_hash = hashlib.sha256(new_password.encode()).hexdigest()
+    c.execute('UPDATE users SET password_hash = ? WHERE username = ?', (new_hash, username))
+    conn.commit()
+    add_log(f"Password changed for user {username}", "INFO")
+    conn.close()
+    return jsonify({'status': 'changed'})
+
+
+@app.route('/api/config/export')
+@login_required
+def export_config():
+    """Export user's UI configuration."""
+    conn = get_db()
+    c = conn.cursor()
+
+    username = session.get('username')
+    c.execute('SELECT config_json FROM user_config WHERE username = ?', (username,))
+    row = c.fetchone()
+    conn.close()
+
+    if row and row['config_json']:
+        config = json.loads(row['config_json'])
+    else:
+        config = {}
+
+    # Include system settings for admin
+    config['exported_at'] = datetime.now().isoformat()
+    config['exported_by'] = username
+
+    return jsonify(config)
+
+
+@app.route('/api/config/import', methods=['POST'])
+@login_required
+def import_config():
+    """Import user's UI configuration."""
+    conn = get_db()
+    c = conn.cursor()
+
+    data = request.json
+    username = session.get('username')
+
+    # Store config
+    config_json = json.dumps(data)
+    c.execute('''INSERT OR REPLACE INTO user_config (username, config_json, updated_at)
+                VALUES (?, ?, datetime('now'))''', (username, config_json))
+    conn.commit()
+    add_log(f"Config imported for user {username}", "INFO")
+    conn.close()
+
+    return jsonify({'status': 'imported'})
+
+
+@app.route('/api/config/layout', methods=['POST'])
+@login_required
+def save_layout():
+    """Save user's layout configuration."""
+    conn = get_db()
+    c = conn.cursor()
+
+    data = request.json
+    username = session.get('username')
+
+    # Get existing config
+    c.execute('SELECT config_json FROM user_config WHERE username = ?', (username,))
+    row = c.fetchone()
+
+    if row and row['config_json']:
+        config = json.loads(row['config_json'])
+    else:
+        config = {}
+
+    # Update layout section
+    config['layout'] = data
+
+    # Store config
+    config_json = json.dumps(config)
+    c.execute('''INSERT OR REPLACE INTO user_config (username, config_json, updated_at)
+                VALUES (?, ?, datetime('now'))''', (username, config_json))
+    conn.commit()
+    conn.close()
+
+    return jsonify({'status': 'saved'})
 
 
 @app.route('/api/logs')
