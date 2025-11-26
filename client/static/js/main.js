@@ -1272,3 +1272,337 @@ document.addEventListener('click', (e) => {
         hideContextMenu();
     }
 });
+
+// ==================== SETTINGS MODAL ====================
+
+function openSettingsModal() {
+    loadSettings();
+    loadUsers();
+    document.getElementById('settingsModal').classList.remove('hidden');
+}
+
+function closeSettingsModal() {
+    document.getElementById('settingsModal').classList.add('hidden');
+}
+
+function showSettingsTab(tabName) {
+    // Hide all tabs
+    document.querySelectorAll('.settings-content').forEach(el => el.classList.remove('active'));
+    document.querySelectorAll('.settings-tab').forEach(el => el.classList.remove('active'));
+
+    // Show selected tab
+    document.getElementById('settings' + tabName.charAt(0).toUpperCase() + tabName.slice(1)).classList.add('active');
+    event.target.classList.add('active');
+}
+
+function updateGpsSettingsFields() {
+    const source = document.getElementById('settingGpsSource').value;
+    document.getElementById('gpsNmeaSettings').classList.toggle('hidden', source !== 'nmea_tcp');
+    document.getElementById('gpsGpsdSettings').classList.toggle('hidden', source !== 'gpsd');
+    document.getElementById('gpsSerialSettings').classList.toggle('hidden', source !== 'serial');
+}
+
+function loadSettings() {
+    fetch('/api/settings')
+        .then(r => r.json())
+        .then(data => {
+            // General settings
+            document.getElementById('settingSystemId').value = data.system_id || 'BK9-001';
+            document.getElementById('settingSystemName').value = data.system_name || 'BlueK9 Unit 1';
+            document.getElementById('settingScanInterval').value = data.scan_interval || 2;
+            document.getElementById('settingSmsInterval').value = data.sms_alert_interval || 60;
+
+            // GPS settings
+            document.getElementById('settingGpsSource').value = data.gps_source || 'nmea_tcp';
+            document.getElementById('settingNmeaHost').value = data.nmea_tcp_host || '127.0.0.1';
+            document.getElementById('settingNmeaPort').value = data.nmea_tcp_port || 10110;
+            document.getElementById('settingGpsdHost').value = data.gpsd_host || '127.0.0.1';
+            document.getElementById('settingGpsdPort').value = data.gpsd_port || 2947;
+            document.getElementById('settingSerialPort').value = data.gps_serial_port || '/dev/ttyUSB0';
+            document.getElementById('settingSerialBaud').value = data.gps_serial_baud || 9600;
+
+            updateGpsSettingsFields();
+
+            // UI settings
+            document.getElementById('settingLeftPanelWidth').value = data.left_panel_width || 280;
+            document.getElementById('settingRightPanelWidth').value = data.right_panel_width || 420;
+        })
+        .catch(e => addLogEntry(`Failed to load settings: ${e}`, 'ERROR'));
+}
+
+function saveAllSettings() {
+    const settings = {
+        system_id: document.getElementById('settingSystemId').value,
+        system_name: document.getElementById('settingSystemName').value,
+        scan_interval: parseInt(document.getElementById('settingScanInterval').value),
+        sms_alert_interval: parseInt(document.getElementById('settingSmsInterval').value),
+        gps_source: document.getElementById('settingGpsSource').value,
+        nmea_tcp_host: document.getElementById('settingNmeaHost').value,
+        nmea_tcp_port: parseInt(document.getElementById('settingNmeaPort').value),
+        gpsd_host: document.getElementById('settingGpsdHost').value,
+        gpsd_port: parseInt(document.getElementById('settingGpsdPort').value),
+        gps_serial_port: document.getElementById('settingSerialPort').value,
+        gps_serial_baud: parseInt(document.getElementById('settingSerialBaud').value),
+        left_panel_width: parseInt(document.getElementById('settingLeftPanelWidth').value),
+        right_panel_width: parseInt(document.getElementById('settingRightPanelWidth').value)
+    };
+
+    fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(settings)
+    })
+        .then(r => r.json())
+        .then(data => {
+            if (data.status === 'saved') {
+                addLogEntry('Settings saved successfully', 'INFO');
+                applyLayoutSettings(settings);
+                closeSettingsModal();
+            } else {
+                addLogEntry('Failed to save settings', 'ERROR');
+            }
+        })
+        .catch(e => addLogEntry(`Save settings error: ${e}`, 'ERROR'));
+}
+
+function applyLayoutSettings(settings) {
+    const leftPanel = document.querySelector('.panel-left');
+    const rightPanel = document.querySelector('.panel-right');
+
+    if (leftPanel && settings.left_panel_width) {
+        leftPanel.style.width = settings.left_panel_width + 'px';
+    }
+    if (rightPanel && settings.right_panel_width) {
+        rightPanel.style.width = settings.right_panel_width + 'px';
+    }
+}
+
+function testGpsSettings() {
+    const source = document.getElementById('settingGpsSource').value;
+    let config = { source: source };
+
+    if (source === 'nmea_tcp') {
+        config.host = document.getElementById('settingNmeaHost').value;
+        config.port = parseInt(document.getElementById('settingNmeaPort').value);
+    } else if (source === 'gpsd') {
+        config.host = document.getElementById('settingGpsdHost').value;
+        config.port = parseInt(document.getElementById('settingGpsdPort').value);
+    } else if (source === 'serial') {
+        config.port = document.getElementById('settingSerialPort').value;
+        config.baud = parseInt(document.getElementById('settingSerialBaud').value);
+    }
+
+    addLogEntry('Testing GPS connection...', 'INFO');
+    fetch('/api/gps/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config)
+    })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                addLogEntry(`GPS test successful: ${data.lat}, ${data.lon}`, 'INFO');
+            } else {
+                addLogEntry(`GPS test failed: ${data.error}`, 'ERROR');
+            }
+        })
+        .catch(e => addLogEntry(`GPS test error: ${e}`, 'ERROR'));
+}
+
+// ==================== USER MANAGEMENT ====================
+
+function loadUsers() {
+    fetch('/api/users')
+        .then(r => r.json())
+        .then(data => {
+            const userList = document.getElementById('userList');
+            userList.innerHTML = '';
+
+            data.forEach(user => {
+                const item = document.createElement('div');
+                item.className = 'user-item';
+                // Only admins can delete, and can't delete bluek9 or themselves
+                const canDelete = typeof IS_ADMIN !== 'undefined' && IS_ADMIN &&
+                                  user.username !== 'bluek9' &&
+                                  user.username !== (typeof CURRENT_USER !== 'undefined' ? CURRENT_USER : '');
+                item.innerHTML = `
+                    <div>
+                        <span class="user-name">${user.username}</span>
+                        <span class="user-role">${user.is_admin ? '[ADMIN]' : '[USER]'}</span>
+                    </div>
+                    <div class="user-actions">
+                        ${canDelete ? `<button onclick="deleteUser('${user.username}')">Delete</button>` : ''}
+                    </div>
+                `;
+                userList.appendChild(item);
+            });
+        })
+        .catch(e => addLogEntry(`Failed to load users: ${e}`, 'ERROR'));
+}
+
+function createUser() {
+    const username = document.getElementById('newUsername').value;
+    const password = document.getElementById('newPassword').value;
+    const isAdmin = document.getElementById('newUserAdmin').checked;
+
+    if (!username || !password) {
+        addLogEntry('Username and password are required', 'ERROR');
+        return;
+    }
+
+    fetch('/api/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password, is_admin: isAdmin })
+    })
+        .then(r => r.json())
+        .then(data => {
+            if (data.status === 'created') {
+                addLogEntry(`User ${username} created`, 'INFO');
+                document.getElementById('newUsername').value = '';
+                document.getElementById('newPassword').value = '';
+                document.getElementById('newUserAdmin').checked = false;
+                loadUsers();
+            } else {
+                addLogEntry(data.error || 'Failed to create user', 'ERROR');
+            }
+        })
+        .catch(e => addLogEntry(`Create user error: ${e}`, 'ERROR'));
+}
+
+function deleteUser(username) {
+    if (!confirm(`Delete user ${username}?`)) return;
+
+    fetch(`/api/users/${username}`, { method: 'DELETE' })
+        .then(r => r.json())
+        .then(data => {
+            if (data.status === 'deleted') {
+                addLogEntry(`User ${username} deleted`, 'INFO');
+                loadUsers();
+            } else {
+                addLogEntry(data.error || 'Failed to delete user', 'ERROR');
+            }
+        })
+        .catch(e => addLogEntry(`Delete user error: ${e}`, 'ERROR'));
+}
+
+function changePassword() {
+    const current = document.getElementById('currentPassword').value;
+    const newPass = document.getElementById('newPasswordChange').value;
+    const confirm = document.getElementById('confirmPassword').value;
+
+    if (newPass !== confirm) {
+        addLogEntry('New passwords do not match', 'ERROR');
+        return;
+    }
+
+    fetch('/api/users/password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ current_password: current, new_password: newPass })
+    })
+        .then(r => r.json())
+        .then(data => {
+            if (data.status === 'changed') {
+                addLogEntry('Password changed successfully', 'INFO');
+                document.getElementById('currentPassword').value = '';
+                document.getElementById('newPasswordChange').value = '';
+                document.getElementById('confirmPassword').value = '';
+            } else {
+                addLogEntry(data.error || 'Failed to change password', 'ERROR');
+            }
+        })
+        .catch(e => addLogEntry(`Change password error: ${e}`, 'ERROR'));
+}
+
+// ==================== CONFIG EXPORT/IMPORT ====================
+
+function exportConfig() {
+    fetch('/api/config/export')
+        .then(r => r.json())
+        .then(data => {
+            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `bluek9-config-${new Date().toISOString().slice(0,10)}.json`;
+            a.click();
+            URL.revokeObjectURL(url);
+            addLogEntry('Configuration exported', 'INFO');
+        })
+        .catch(e => addLogEntry(`Export error: ${e}`, 'ERROR'));
+}
+
+function importConfig(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        try {
+            const config = JSON.parse(e.target.result);
+            fetch('/api/config/import', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(config)
+            })
+                .then(r => r.json())
+                .then(data => {
+                    if (data.status === 'imported') {
+                        addLogEntry('Configuration imported successfully', 'INFO');
+                        loadSettings();
+                    } else {
+                        addLogEntry(data.error || 'Import failed', 'ERROR');
+                    }
+                });
+        } catch (err) {
+            addLogEntry('Invalid configuration file', 'ERROR');
+        }
+    };
+    reader.readAsText(file);
+    event.target.value = '';
+}
+
+function resetLayout() {
+    if (!confirm('Reset UI layout to default?')) return;
+
+    const leftPanel = document.querySelector('.panel-left');
+    const rightPanel = document.querySelector('.panel-right');
+
+    leftPanel.style.width = '280px';
+    rightPanel.style.width = '420px';
+
+    document.getElementById('settingLeftPanelWidth').value = 280;
+    document.getElementById('settingRightPanelWidth').value = 420;
+
+    addLogEntry('Layout reset to default', 'INFO');
+}
+
+// Save layout on panel resize
+const observeResize = () => {
+    const leftPanel = document.querySelector('.panel-left');
+    const rightPanel = document.querySelector('.panel-right');
+
+    if (leftPanel && rightPanel) {
+        new ResizeObserver(() => {
+            // Debounce save
+            clearTimeout(window.layoutSaveTimeout);
+            window.layoutSaveTimeout = setTimeout(() => {
+                const config = {
+                    left_panel_width: leftPanel.offsetWidth,
+                    right_panel_width: rightPanel.offsetWidth
+                };
+                fetch('/api/config/layout', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(config)
+                }).catch(() => {});
+            }, 500);
+        }).observe(leftPanel);
+    }
+};
+
+// Call after DOM ready
+document.addEventListener('DOMContentLoaded', () => {
+    setTimeout(observeResize, 1000);
+});
