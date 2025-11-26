@@ -499,6 +499,7 @@ body {
     border-collapse: collapse;
     font-family: var(--font-mono);
     font-size: 11px;
+    table-layout: fixed;
 }
 
 .survey-table th {
@@ -511,6 +512,15 @@ body {
     border-bottom: 1px solid var(--border-color);
     font-weight: 500;
     letter-spacing: 1px;
+    /* Resizable columns */
+    resize: horizontal;
+    overflow: auto;
+    min-width: 50px;
+    cursor: col-resize;
+}
+
+.survey-table th:hover {
+    background: var(--bg-panel);
 }
 
 .survey-table td {
@@ -520,7 +530,49 @@ body {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 100px;
+}
+
+/* Context menu */
+.context-menu {
+    position: fixed;
+    background: var(--bg-panel);
+    border: 1px solid var(--border-color);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+    z-index: 10000;
+    min-width: 180px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+}
+
+.context-menu-item {
+    padding: 10px 15px;
+    cursor: pointer;
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    transition: background 0.2s;
+}
+
+.context-menu-item:hover {
+    background: rgba(0, 212, 255, 0.1);
+    color: var(--accent-primary);
+}
+
+.context-menu-item.danger:hover {
+    background: rgba(255, 59, 48, 0.1);
+    color: var(--accent-danger);
+}
+
+.context-menu-divider {
+    height: 1px;
+    background: var(--border-color);
+    margin: 5px 0;
+}
+
+.context-menu-item i {
+    width: 16px;
+    text-align: center;
 }
 
 .survey-table tr:hover {
