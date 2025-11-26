@@ -924,6 +924,50 @@ body {
     border-top-color: var(--bg-panel);
 }
 
+/* ==================== MAPBOX ATTRIBUTION (MINIMIZED) ==================== */
+
+.mapboxgl-ctrl-logo {
+    display: none !important;
+}
+
+.mapboxgl-ctrl-attrib {
+    font-size: 9px !important;
+    background: rgba(0, 0, 0, 0.5) !important;
+    padding: 2px 5px !important;
+    opacity: 0.5;
+    transition: opacity 0.2s;
+}
+
+.mapboxgl-ctrl-attrib:hover {
+    opacity: 1;
+}
+
+.mapboxgl-ctrl-attrib a {
+    color: var(--text-secondary) !important;
+}
+
+.mapboxgl-ctrl-attrib-inner {
+    max-width: 200px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.mapboxgl-ctrl-attrib.mapboxgl-compact {
+    min-height: 20px !important;
+    padding: 2px 24px 2px 5px !important;
+    background: rgba(0, 0, 0, 0.5) !important;
+}
+
+.mapboxgl-ctrl-attrib.mapboxgl-compact::after {
+    background-color: rgba(0, 0, 0, 0.5) !important;
+}
+
+.mapboxgl-ctrl-bottom-right {
+    right: 5px !important;
+    bottom: 5px !important;
+}
+
 /* ==================== RESPONSIVE ==================== */
 
 @media (max-width: 1400px) {
