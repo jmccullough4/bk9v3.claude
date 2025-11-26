@@ -16,6 +16,11 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
+# Get script directory (before any cd commands)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+CLIENT_DIR="$PROJECT_DIR/client"
+
 # ASCII Banner
 print_banner() {
     echo -e "${CYAN}"
@@ -211,10 +216,7 @@ configure_modem() {
 install_python_deps() {
     log_step "Installing Python dependencies..."
 
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-
-    cd "$PROJECT_DIR/client"
+    cd "$CLIENT_DIR"
 
     # Create virtual environment
     python3 -m venv venv
@@ -235,10 +237,7 @@ install_python_deps() {
 download_alert_sound() {
     log_step "Downloading alert sound..."
 
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-    SOUNDS_DIR="$PROJECT_DIR/client/static/sounds"
-
+    SOUNDS_DIR="$CLIENT_DIR/static/sounds"
     mkdir -p "$SOUNDS_DIR"
 
     # Download a simple alert sound
@@ -262,9 +261,6 @@ download_alert_sound() {
 create_directories() {
     log_step "Creating directories..."
 
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-
     mkdir -p "$PROJECT_DIR/logs"
     mkdir -p "$PROJECT_DIR/data"
     mkdir -p "$PROJECT_DIR/client/static/sounds"
@@ -277,9 +273,6 @@ create_directories() {
 # Create systemd service
 create_service() {
     log_step "Creating systemd service..."
-
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
     cat > /etc/systemd/system/bluek9.service << EOF
 [Unit]
@@ -306,9 +299,6 @@ EOF
 
 # Print completion message
 print_completion() {
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-
     echo ""
     echo -e "${GREEN}=============================================="
     echo "  INSTALLATION COMPLETE!"
