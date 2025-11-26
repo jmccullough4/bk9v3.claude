@@ -29,7 +29,18 @@ CONFIG = {
     'DEFAULT_PASS': 'warhammer',
     'SMS_NUMBERS': [],  # Up to 10 US phone numbers
     'SCAN_INTERVAL': 2,  # seconds between scans
+    'DEMO_MODE': False,  # Set to True for testing without BT hardware
+    # GPS Configuration
+    'GPS_SOURCE': 'nmea_tcp',  # Options: 'gpsd', 'nmea_tcp', 'serial'
+    'NMEA_TCP_HOST': '127.0.0.1',
+    'NMEA_TCP_PORT': 10110,
+    'GPSD_HOST': '127.0.0.1',
+    'GPSD_PORT': 2947,
+    'GPS_SERIAL_PORT': '/dev/ttyUSB0',
+    'GPS_SERIAL_BAUD': 9600,
 }
+
+import random
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -228,8 +239,98 @@ def parse_bluetoothctl_scan(output):
     return devices_found
 
 
+# ==================== DEMO MODE ====================
+
+DEMO_DEVICES = [
+    {'name': 'iPhone 15 Pro', 'oui': '8C:85:90', 'type': 'classic'},
+    {'name': 'Galaxy S24', 'oui': '40:F3:AE', 'type': 'classic'},
+    {'name': 'AirPods Pro', 'oui': 'AC:DE:48', 'type': 'ble'},
+    {'name': 'Apple Watch', 'oui': 'D0:81:7A', 'type': 'ble'},
+    {'name': 'Pixel 8', 'oui': 'F4:F5:D8', 'type': 'classic'},
+    {'name': 'Bose QC45', 'oui': '00:15:8D', 'type': 'classic'},
+    {'name': 'Tile Tracker', 'oui': '3C:5A:B4', 'type': 'ble'},
+    {'name': 'Fitbit Sense', 'oui': 'B8:D6:1A', 'type': 'ble'},
+    {'name': 'MacBook Pro', 'oui': '7C:6D:F8', 'type': 'classic'},
+    {'name': 'iPad Air', 'oui': '5C:59:48', 'type': 'classic'},
+    {'name': 'Tesla Model 3', 'oui': '00:25:67', 'type': 'ble'},
+    {'name': 'Unknown Device', 'oui': '00:1A:7D', 'type': 'ble'},
+    {'name': 'JBL Speaker', 'oui': '00:02:72', 'type': 'classic'},
+    {'name': 'Sony WH-1000XM5', 'oui': '2C:54:CF', 'type': 'classic'},
+    {'name': 'Garmin Watch', 'oui': '00:17:C9', 'type': 'ble'},
+]
+
+demo_device_pool = {}  # Persistent demo devices
+
+def generate_demo_bd_address(oui):
+    """Generate a random BD address with given OUI."""
+    suffix = ':'.join([f'{random.randint(0, 255):02X}' for _ in range(3)])
+    return f"{oui}:{suffix}"
+
+def generate_demo_devices(count=3, scan_type='both'):
+    """Generate demo devices for testing without real BT hardware."""
+    global demo_device_pool, current_location
+
+    devices_found = []
+
+    # Set demo location if not set
+    if current_location['lat'] == 0:
+        current_location = {
+            'lat': CONFIG['DEMO_LOCATION']['lat'],
+            'lon': CONFIG['DEMO_LOCATION']['lon'],
+            'accuracy': 5.0
+        }
+        socketio.emit('gps_update', current_location)
+
+    # Randomly select devices to "detect"
+    available = [d for d in DEMO_DEVICES if scan_type == 'both' or d['type'] == scan_type]
+    selected = random.sample(available, min(count, len(available)))
+
+    for device in selected:
+        # Check if we've seen this device before (by name)
+        existing = next((bd for bd, d in demo_device_pool.items() if d.get('device_name') == device['name']), None)
+
+        if existing:
+            bd_addr = existing
+        else:
+            bd_addr = generate_demo_bd_address(device['oui'])
+            demo_device_pool[bd_addr] = {'device_name': device['name']}
+
+        # Generate realistic RSSI (stronger = closer)
+        rssi = random.randint(-85, -45)
+
+        # Generate emitter location with some randomness around system location
+        offset_lat = random.uniform(-0.001, 0.001)
+        offset_lon = random.uniform(-0.001, 0.001)
+        emitter_lat = current_location['lat'] + offset_lat
+        emitter_lon = current_location['lon'] + offset_lon
+
+        # CEP accuracy based on RSSI (stronger signal = better accuracy)
+        cep = max(10, 100 + rssi)  # -45 dBm = 55m, -85 dBm = 15m
+
+        devices_found.append({
+            'bd_address': bd_addr,
+            'device_name': device['name'],
+            'device_type': device['type'],
+            'manufacturer': get_manufacturer(bd_addr),
+            'rssi': rssi,
+            'emitter_lat': emitter_lat,
+            'emitter_lon': emitter_lon,
+            'emitter_accuracy': cep,
+        })
+
+    return devices_found
+
+
 def scan_classic_bluetooth(interface='hci0'):
     """Scan for Classic Bluetooth devices."""
+    # DEMO MODE
+    if CONFIG.get('DEMO_MODE'):
+        add_log(f"[DEMO] Classic BT scan on {interface}", "INFO")
+        time.sleep(1)  # Simulate scan time
+        devices_found = generate_demo_devices(random.randint(1, 4), 'classic')
+        add_log(f"[DEMO] Classic scan found {len(devices_found)} devices", "INFO")
+        return devices_found
+
     try:
         add_log(f"Starting Classic BT scan on {interface}", "INFO")
         # Standard inquiry scan
@@ -252,6 +353,14 @@ def scan_classic_bluetooth(interface='hci0'):
 
 def scan_ble_devices(interface='hci0'):
     """Scan for Bluetooth Low Energy devices."""
+    # DEMO MODE
+    if CONFIG.get('DEMO_MODE'):
+        add_log(f"[DEMO] BLE scan on {interface}", "INFO")
+        time.sleep(1)  # Simulate scan time
+        devices_found = generate_demo_devices(random.randint(1, 3), 'ble')
+        add_log(f"[DEMO] BLE scan found {len(devices_found)} devices", "INFO")
+        return devices_found
+
     try:
         add_log(f"Starting BLE scan on {interface}", "INFO")
         # Use btmgmt for LE scanning
@@ -523,57 +632,217 @@ def update_device_location(bd_address, rssi):
 
 # ==================== GPS TRACKING ====================
 
-def get_gps_location():
-    """Get GPS location from gpsd or other sources."""
+def parse_nmea_gga(sentence):
+    """Parse NMEA GGA sentence for position."""
+    try:
+        parts = sentence.split(',')
+        if len(parts) < 10:
+            return None
+
+        # Check for valid fix
+        fix_quality = parts[6]
+        if fix_quality == '0':
+            return None
+
+        lat_raw = parts[2]
+        lat_dir = parts[3]
+        lon_raw = parts[4]
+        lon_dir = parts[5]
+
+        if not lat_raw or not lon_raw:
+            return None
+
+        # Parse latitude (DDMM.MMMM)
+        lat_deg = float(lat_raw[:2])
+        lat_min = float(lat_raw[2:])
+        lat = lat_deg + lat_min / 60.0
+        if lat_dir == 'S':
+            lat = -lat
+
+        # Parse longitude (DDDMM.MMMM)
+        lon_deg = float(lon_raw[:3])
+        lon_min = float(lon_raw[3:])
+        lon = lon_deg + lon_min / 60.0
+        if lon_dir == 'W':
+            lon = -lon
+
+        # HDOP for accuracy estimate
+        hdop = float(parts[8]) if parts[8] else 1.0
+        accuracy = hdop * 5  # Rough accuracy in meters
+
+        return {'lat': lat, 'lon': lon, 'accuracy': accuracy}
+    except Exception as e:
+        return None
+
+
+def parse_nmea_rmc(sentence):
+    """Parse NMEA RMC sentence for position."""
+    try:
+        parts = sentence.split(',')
+        if len(parts) < 10:
+            return None
+
+        # Check for valid status
+        status = parts[2]
+        if status != 'A':
+            return None
+
+        lat_raw = parts[3]
+        lat_dir = parts[4]
+        lon_raw = parts[5]
+        lon_dir = parts[6]
+
+        if not lat_raw or not lon_raw:
+            return None
+
+        # Parse latitude
+        lat_deg = float(lat_raw[:2])
+        lat_min = float(lat_raw[2:])
+        lat = lat_deg + lat_min / 60.0
+        if lat_dir == 'S':
+            lat = -lat
+
+        # Parse longitude
+        lon_deg = float(lon_raw[:3])
+        lon_min = float(lon_raw[3:])
+        lon = lon_deg + lon_min / 60.0
+        if lon_dir == 'W':
+            lon = -lon
+
+        return {'lat': lat, 'lon': lon, 'accuracy': 10.0}
+    except Exception as e:
+        return None
+
+
+def get_gps_from_nmea_tcp():
+    """Get GPS location from NMEA TCP stream (port 10110)."""
+    global current_location
+    import socket
+
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(5)
+        sock.connect((CONFIG['NMEA_TCP_HOST'], CONFIG['NMEA_TCP_PORT']))
+
+        buffer = ''
+        for _ in range(50):  # Read up to 50 lines
+            data = sock.recv(1024).decode('utf-8', errors='ignore')
+            buffer += data
+
+            for line in buffer.split('\n'):
+                line = line.strip()
+                if line.startswith('$GPGGA') or line.startswith('$GNGGA'):
+                    result = parse_nmea_gga(line)
+                    if result:
+                        sock.close()
+                        return result
+                elif line.startswith('$GPRMC') or line.startswith('$GNRMC'):
+                    result = parse_nmea_rmc(line)
+                    if result:
+                        sock.close()
+                        return result
+
+            # Keep only incomplete line in buffer
+            if '\n' in buffer:
+                buffer = buffer.split('\n')[-1]
+
+        sock.close()
+    except Exception as e:
+        add_log(f"NMEA TCP error: {str(e)}", "WARNING")
+
+    return None
+
+
+def get_gps_from_gpsd():
+    """Get GPS location from GPSD."""
+    global current_location
+    import socket
+
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(5)
+        sock.connect((CONFIG['GPSD_HOST'], CONFIG['GPSD_PORT']))
+        sock.send(b'?WATCH={"enable":true,"json":true}')
+
+        buffer = ''
+        for _ in range(20):
+            data = sock.recv(4096).decode('utf-8', errors='ignore')
+            buffer += data
+
+            for line in buffer.split('\n'):
+                line = line.strip()
+                if line.startswith('{"class":"TPV"'):
+                    try:
+                        tpv = json.loads(line)
+                        if 'lat' in tpv and 'lon' in tpv:
+                            sock.close()
+                            return {
+                                'lat': tpv['lat'],
+                                'lon': tpv['lon'],
+                                'accuracy': tpv.get('epx', 10)
+                            }
+                    except:
+                        pass
+
+        sock.close()
+    except Exception as e:
+        add_log(f"GPSD error: {str(e)}", "WARNING")
+
+    return None
+
+
+def get_gps_from_serial():
+    """Get GPS location from serial device."""
     global current_location
 
     try:
-        # Try gpsd first
-        import socket
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(2)
-        sock.connect(('localhost', 2947))
-        sock.send(b'?WATCH={"enable":true,"json":true}')
+        import serial
+        port = CONFIG['GPS_SERIAL_PORT']
+        baud = CONFIG['GPS_SERIAL_BAUD']
 
-        while True:
-            data = sock.recv(4096).decode('utf-8')
-            for line in data.split('\n'):
-                if line.startswith('{"class":"TPV"'):
-                    tpv = json.loads(line)
-                    if 'lat' in tpv and 'lon' in tpv:
-                        current_location = {
-                            'lat': tpv['lat'],
-                            'lon': tpv['lon'],
-                            'accuracy': tpv.get('epx', 10)
-                        }
-                        return current_location
-    except:
-        pass
+        if not os.path.exists(port):
+            return None
 
-    # Fallback: try to read from a GPS device directly
-    try:
-        gps_devices = ['/dev/ttyUSB0', '/dev/ttyACM0', '/dev/ttyS0']
-        for dev in gps_devices:
-            if os.path.exists(dev):
-                import serial
-                ser = serial.Serial(dev, 9600, timeout=2)
-                for _ in range(20):
-                    line = ser.readline().decode('utf-8', errors='ignore')
-                    if line.startswith('$GPGGA') or line.startswith('$GNGGA'):
-                        parts = line.split(',')
-                        if len(parts) >= 6 and parts[2] and parts[4]:
-                            lat = float(parts[2][:2]) + float(parts[2][2:]) / 60
-                            if parts[3] == 'S':
-                                lat = -lat
-                            lon = float(parts[4][:3]) + float(parts[4][3:]) / 60
-                            if parts[5] == 'W':
-                                lon = -lon
-                            current_location = {'lat': lat, 'lon': lon, 'accuracy': 10}
-                            ser.close()
-                            return current_location
-                ser.close()
-    except:
-        pass
+        ser = serial.Serial(port, baud, timeout=2)
+
+        for _ in range(30):
+            line = ser.readline().decode('utf-8', errors='ignore').strip()
+            if line.startswith('$GPGGA') or line.startswith('$GNGGA'):
+                result = parse_nmea_gga(line)
+                if result:
+                    ser.close()
+                    return result
+            elif line.startswith('$GPRMC') or line.startswith('$GNRMC'):
+                result = parse_nmea_rmc(line)
+                if result:
+                    ser.close()
+                    return result
+
+        ser.close()
+    except Exception as e:
+        add_log(f"GPS Serial error: {str(e)}", "WARNING")
+
+    return None
+
+
+def get_gps_location():
+    """Get GPS location based on configured source."""
+    global current_location
+
+    gps_source = CONFIG.get('GPS_SOURCE', 'gpsd')
+
+    if gps_source == 'nmea_tcp':
+        result = get_gps_from_nmea_tcp()
+    elif gps_source == 'gpsd':
+        result = get_gps_from_gpsd()
+    elif gps_source == 'serial':
+        result = get_gps_from_serial()
+    else:
+        # Try all sources
+        result = get_gps_from_nmea_tcp() or get_gps_from_gpsd() or get_gps_from_serial()
+
+    if result:
+        current_location = result
 
     return current_location
 
@@ -581,10 +850,12 @@ def get_gps_location():
 def gps_update_loop():
     """Background thread for GPS updates."""
     global current_location
+    add_log(f"GPS thread started, source: {CONFIG.get('GPS_SOURCE', 'auto')}", "INFO")
+
     while True:
         try:
             loc = get_gps_location()
-            if loc and loc['lat'] != 0:
+            if loc and loc.get('lat') and loc['lat'] != 0:
                 socketio.emit('gps_update', loc)
         except Exception as e:
             logger.error(f"GPS error: {e}")
