@@ -223,6 +223,11 @@ function updateSurveyTable() {
             }
         });
 
+        // Right-click context menu
+        row.addEventListener('contextmenu', (e) => {
+            showContextMenu(e, device.bd_address);
+        });
+
         tbody.appendChild(row);
     });
 }
@@ -1086,6 +1091,7 @@ document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
         closeAlertModal();
         closeDeviceInfoModal();
+        hideContextMenu();
     }
 
     // Ctrl+S to start/stop scan
@@ -1096,5 +1102,173 @@ document.addEventListener('keydown', (e) => {
         } else {
             startScan();
         }
+    }
+});
+
+// ==================== CONTEXT MENU ====================
+
+let contextMenuTarget = null;
+
+function createContextMenu() {
+    // Remove existing menu if any
+    const existing = document.getElementById('deviceContextMenu');
+    if (existing) existing.remove();
+
+    const menu = document.createElement('div');
+    menu.id = 'deviceContextMenu';
+    menu.className = 'context-menu hidden';
+    menu.innerHTML = `
+        <div class="context-menu-item" onclick="contextMenuAction('info')">
+            <i>ℹ</i> Get Device Info
+        </div>
+        <div class="context-menu-item" onclick="contextMenuAction('name')">
+            <i>📝</i> Get Device Name
+        </div>
+        <div class="context-menu-item" onclick="contextMenuAction('locate')">
+            <i>📍</i> Geolocate Device
+        </div>
+        <div class="context-menu-divider"></div>
+        <div class="context-menu-item" onclick="contextMenuAction('target')">
+            <i>🎯</i> Add as Target
+        </div>
+        <div class="context-menu-item" onclick="contextMenuAction('copy')">
+            <i>📋</i> Copy BD Address
+        </div>
+        <div class="context-menu-divider"></div>
+        <div class="context-menu-item" onclick="contextMenuAction('zoom')">
+            <i>🗺</i> Zoom to Location
+        </div>
+    `;
+    document.body.appendChild(menu);
+    return menu;
+}
+
+function showContextMenu(e, bdAddress) {
+    e.preventDefault();
+    contextMenuTarget = bdAddress;
+
+    let menu = document.getElementById('deviceContextMenu');
+    if (!menu) {
+        menu = createContextMenu();
+    }
+
+    // Update menu items based on device state
+    const device = devices[bdAddress];
+    const targetItem = menu.querySelector('[onclick*="target"]');
+    if (device && device.is_target) {
+        targetItem.innerHTML = '<i>🎯</i> Remove from Targets';
+    } else {
+        targetItem.innerHTML = '<i>🎯</i> Add as Target';
+    }
+
+    // Position the menu
+    menu.style.left = e.clientX + 'px';
+    menu.style.top = e.clientY + 'px';
+    menu.classList.remove('hidden');
+
+    // Adjust position if menu goes off screen
+    const rect = menu.getBoundingClientRect();
+    if (rect.right > window.innerWidth) {
+        menu.style.left = (window.innerWidth - rect.width - 10) + 'px';
+    }
+    if (rect.bottom > window.innerHeight) {
+        menu.style.top = (window.innerHeight - rect.height - 10) + 'px';
+    }
+}
+
+function hideContextMenu() {
+    const menu = document.getElementById('deviceContextMenu');
+    if (menu) {
+        menu.classList.add('hidden');
+    }
+    contextMenuTarget = null;
+}
+
+function contextMenuAction(action) {
+    if (!contextMenuTarget) return;
+
+    const bdAddress = contextMenuTarget;
+    const device = devices[bdAddress];
+
+    switch (action) {
+        case 'info':
+            getDeviceInfo(bdAddress);
+            break;
+        case 'name':
+            requestDeviceName(bdAddress);
+            break;
+        case 'locate':
+            requestGeolocation(bdAddress);
+            break;
+        case 'target':
+            if (device && device.is_target) {
+                removeTarget(bdAddress);
+            } else {
+                quickAddTarget(bdAddress);
+            }
+            break;
+        case 'copy':
+            navigator.clipboard.writeText(bdAddress).then(() => {
+                addLogEntry(`Copied ${bdAddress} to clipboard`, 'INFO');
+            });
+            break;
+        case 'zoom':
+            if (device && device.emitter_lat && device.emitter_lon) {
+                map.flyTo({
+                    center: [device.emitter_lon, device.emitter_lat],
+                    zoom: 18
+                });
+            } else {
+                addLogEntry('No location data for this device', 'WARNING');
+            }
+            break;
+    }
+
+    hideContextMenu();
+}
+
+function requestDeviceName(bdAddress) {
+    addLogEntry(`Requesting name for ${bdAddress}...`, 'INFO');
+    fetch(`/api/device/${bdAddress}/name`, { method: 'GET' })
+        .then(r => r.json())
+        .then(data => {
+            if (data.name) {
+                addLogEntry(`Device name: ${data.name}`, 'INFO');
+                if (devices[bdAddress]) {
+                    devices[bdAddress].device_name = data.name;
+                    updateSurveyTable();
+                }
+            } else {
+                addLogEntry(`Could not get name for ${bdAddress}`, 'WARNING');
+            }
+        })
+        .catch(e => addLogEntry(`Name request failed: ${e}`, 'ERROR'));
+}
+
+function requestGeolocation(bdAddress) {
+    addLogEntry(`Requesting geolocation for ${bdAddress}...`, 'INFO');
+    fetch(`/api/device/${bdAddress}/locate`, { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+            if (data.location) {
+                addLogEntry(`Location: ${data.location.lat.toFixed(6)}, ${data.location.lon.toFixed(6)} (CEP: ${data.location.cep}m)`, 'INFO');
+                if (devices[bdAddress]) {
+                    devices[bdAddress].emitter_lat = data.location.lat;
+                    devices[bdAddress].emitter_lon = data.location.lon;
+                    devices[bdAddress].emitter_accuracy = data.location.cep;
+                    updateDeviceMarker(devices[bdAddress]);
+                    updateSurveyTable();
+                }
+            } else {
+                addLogEntry(data.message || 'Insufficient data for geolocation', 'WARNING');
+            }
+        })
+        .catch(e => addLogEntry(`Geolocation failed: ${e}`, 'ERROR'));
+}
+
+// Click anywhere to close context menu
+document.addEventListener('click', (e) => {
+    if (!e.target.closest('.context-menu')) {
+        hideContextMenu();
     }
 });

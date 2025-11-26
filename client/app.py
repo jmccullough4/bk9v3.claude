@@ -30,6 +30,9 @@ CONFIG = {
     'SMS_NUMBERS': [],  # Up to 10 US phone numbers
     'SCAN_INTERVAL': 2,  # seconds between scans
     'DEMO_MODE': False,  # Set to True for testing without BT hardware
+    # System Identification
+    'SYSTEM_ID': 'BK9-001',  # Unique system identifier
+    'SYSTEM_NAME': 'BlueK9 Unit 1',  # Human-readable name
     # GPS Configuration
     'GPS_SOURCE': 'nmea_tcp',  # Options: 'gpsd', 'nmea_tcp', 'serial'
     'NMEA_TCP_HOST': '127.0.0.1',
@@ -38,6 +41,8 @@ CONFIG = {
     'GPSD_PORT': 2947,
     'GPS_SERIAL_PORT': '/dev/ttyUSB0',
     'GPS_SERIAL_BAUD': 9600,
+    # Alert Configuration
+    'SMS_ALERT_INTERVAL': 60,  # Seconds between recurring SMS alerts for same target
 }
 
 import random
@@ -192,6 +197,39 @@ def get_manufacturer(bd_address):
         '002567': 'Samsung Electronics',
     }
     return oui_db.get(oui, f'OUI:{oui}')
+
+
+def get_device_type(bd_address):
+    """Determine if device is Classic or BLE using bluetoothctl info."""
+    try:
+        result = subprocess.run(
+            ['bluetoothctl', 'info', bd_address],
+            capture_output=True,
+            text=True,
+            timeout=3
+        )
+        output = result.stdout
+
+        # Check for LE (Low Energy) indicators
+        if 'AddressType: random' in output.lower() or 'addresstype: random' in output.lower():
+            return 'ble'
+        if 'AddressType: public' in output.lower():
+            # Public address can be either, check for LE services
+            if 'UUID: Generic Access' in output or 'UUID: Generic Attribute' in output:
+                return 'ble'
+        # Check for classic indicators
+        if 'Icon: phone' in output or 'Icon: audio' in output or 'Icon: computer' in output:
+            return 'classic'
+        if 'Class:' in output:
+            # Has Bluetooth Class of Device = Classic
+            return 'classic'
+        # Check if it supports BR/EDR (classic)
+        if 'BR/EDR' in output:
+            return 'classic'
+        # Default based on RSSI behavior - BLE typically has more frequent RSSI updates
+        return 'unknown'
+    except Exception:
+        return 'unknown'
 
 
 def parse_hcitool_scan(output, scan_type='classic'):
@@ -369,7 +407,7 @@ def scan_classic_bluetooth(interface='hci0'):
                         devices_found.append({
                             'bd_address': bd_addr,
                             'device_name': name,
-                            'device_type': 'classic',
+                            'device_type': 'unknown',  # Will be determined later
                             'manufacturer': get_manufacturer(bd_addr),
                             'rssi': device_rssi.get(bd_addr)
                         })
@@ -381,9 +419,23 @@ def scan_classic_bluetooth(interface='hci0'):
                     bd_addr = rssi_match.group(1).upper()
                     rssi = int(rssi_match.group(2))
                     device_rssi[bd_addr] = rssi
+                    # Update existing device or add new one
+                    found = False
                     for dev in devices_found:
                         if dev['bd_address'] == bd_addr:
                             dev['rssi'] = rssi
+                            found = True
+                            break
+                    if not found:
+                        # Device exists in bluetoothctl cache, add it
+                        devices_found.append({
+                            'bd_address': bd_addr,
+                            'device_name': 'Unknown',
+                            'device_type': 'unknown',
+                            'manufacturer': get_manufacturer(bd_addr),
+                            'rssi': rssi
+                        })
+                        add_log(f"Found device via RSSI: {bd_addr} (RSSI: {rssi})", "DEBUG")
 
                 # Parse [CHG] Device XX:XX:XX:XX:XX:XX Name: XXX
                 name_match = re.search(r'\[CHG\]\s+Device\s+([0-9A-Fa-f:]{17})\s+Name:\s*(.*)', line)
@@ -398,6 +450,11 @@ def scan_classic_bluetooth(interface='hci0'):
         finally:
             proc.terminate()
             proc.wait()
+
+        # Get device info to determine type (classic vs BLE)
+        for dev in devices_found:
+            dev_type = get_device_type(dev['bd_address'])
+            dev['device_type'] = dev_type
 
         # Also get list of cached devices from bluetoothctl
         result = subprocess.run(
@@ -1007,64 +1064,99 @@ def send_sms_alert(phone_number, message):
         if not phone_number.startswith('+'):
             phone_number = '+1' + re.sub(r'\D', '', phone_number)
 
-        # Create and send SMS
-        result = subprocess.run([
-            'mmcli', '-m', modem_id, '--messaging-create-sms',
-            f"text='{message}'", f"number='{phone_number}'"
+        # Escape message for shell
+        safe_message = message.replace("'", "'\\''")
+
+        # Create SMS using correct mmcli syntax
+        create_result = subprocess.run([
+            'mmcli', '-m', modem_id,
+            f"--messaging-create-sms=text='{safe_message}',number='{phone_number}'"
         ], capture_output=True, text=True)
 
-        sms_match = re.search(r'/org/freedesktop/ModemManager1/SMS/(\d+)', result.stdout)
+        add_log(f"mmcli create output: {create_result.stdout} {create_result.stderr}", "DEBUG")
+
+        sms_match = re.search(r'/org/freedesktop/ModemManager1/SMS/(\d+)', create_result.stdout)
         if sms_match:
             sms_id = sms_match.group(1)
-            subprocess.run(['mmcli', '-s', sms_id, '--send'], capture_output=True)
-            add_log(f"SMS sent to {phone_number}", "INFO")
-            return True
+            send_result = subprocess.run(
+                ['mmcli', '-s', sms_id, '--send'],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            if send_result.returncode == 0:
+                add_log(f"SMS sent to {phone_number}", "INFO")
+                return True
+            else:
+                add_log(f"SMS send failed: {send_result.stderr}", "ERROR")
+                return False
 
-        add_log(f"Failed to create SMS for {phone_number}", "ERROR")
+        add_log(f"Failed to create SMS for {phone_number}: {create_result.stderr}", "ERROR")
         return False
     except Exception as e:
         add_log(f"SMS error: {str(e)}", "ERROR")
         return False
 
 
-def alert_target_found(device):
+# Track last SMS alert time per target
+target_last_sms_alert = {}
+
+def alert_target_found(device, is_new=True):
     """Send alerts when a target is detected."""
-    global sms_numbers
+    global sms_numbers, target_last_sms_alert
 
     bd_addr = device['bd_address']
     name = device.get('device_name', 'Unknown')
+    rssi = device.get('rssi', 'N/A')
+    now = time.time()
 
-    # Build alert message
-    msg = f"BlueK9 ALERT: Target {bd_addr}"
-    if name != 'Unknown':
+    # Build alert message with system info
+    system_id = CONFIG.get('SYSTEM_ID', 'BK9-001')
+    system_name = CONFIG.get('SYSTEM_NAME', 'BlueK9')
+
+    msg = f"[{system_id}] TARGET ALERT\n"
+    msg += f"Device: {bd_addr}"
+    if name and name != 'Unknown':
         msg += f" ({name})"
-    msg += f" detected!"
+    msg += f"\nRSSI: {rssi} dBm" if rssi != 'N/A' else ""
 
     if current_location['lat'] and current_location['lon']:
-        msg += f"\nSystem Location: {current_location['lat']:.6f}, {current_location['lon']:.6f}"
+        msg += f"\nLoc: {current_location['lat']:.6f}, {current_location['lon']:.6f}"
+        # Add Google Maps link
+        msg += f"\nhttps://maps.google.com/?q={current_location['lat']:.6f},{current_location['lon']:.6f}"
 
-    if 'first_seen' in device:
-        msg += f"\nFirst seen: {device['first_seen']}"
-    if 'last_seen' in device:
-        msg += f"\nLast seen: {device['last_seen']}"
+    msg += f"\nTime: {datetime.now().strftime('%H:%M:%S')}"
 
-    # Send to all configured numbers
-    conn = get_db()
-    c = conn.cursor()
-    c.execute('SELECT phone_number FROM sms_numbers WHERE active = 1')
-    numbers = [row[0] for row in c.fetchall()]
-    conn.close()
+    # Check if we should send SMS (new target or interval elapsed)
+    should_send_sms = False
+    last_sms_time = target_last_sms_alert.get(bd_addr, 0)
+    sms_interval = CONFIG.get('SMS_ALERT_INTERVAL', 60)
 
-    for number in numbers:
-        send_sms_alert(number, msg)
+    if is_new or (now - last_sms_time) >= sms_interval:
+        should_send_sms = True
+        target_last_sms_alert[bd_addr] = now
 
-    # Emit visual/audio alert
+    # Send SMS to all configured numbers
+    if should_send_sms:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT phone_number FROM sms_numbers WHERE active = 1')
+        numbers = [row[0] for row in c.fetchall()]
+        conn.close()
+
+        for number in numbers:
+            send_sms_alert(number, msg)
+
+    # Always emit visual/audio alert
     socketio.emit('target_alert', {
         'device': device,
-        'message': msg
+        'message': msg,
+        'system_id': system_id,
+        'system_name': system_name,
+        'location': current_location if current_location['lat'] else None
     })
 
-    add_log(f"TARGET ALERT: {bd_addr} detected!", "WARNING")
+    add_log(f"TARGET ALERT: {bd_addr} detected! (RSSI: {rssi})", "WARNING")
 
 
 # ==================== SCANNING THREAD ====================
@@ -1382,6 +1474,157 @@ def device_info(bd_address):
     interface = request.args.get('interface', 'hci0')
     info = get_device_info(bd_address, interface)
     return jsonify(info)
+
+
+@app.route('/api/device/<bd_address>/name')
+@login_required
+def device_name(bd_address):
+    """Get device name using bluetoothctl/hcitool."""
+    try:
+        # Try bluetoothctl info first
+        result = subprocess.run(
+            ['bluetoothctl', 'info', bd_address],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        name_match = re.search(r'Name:\s*(.+)', result.stdout)
+        if name_match:
+            name = name_match.group(1).strip()
+            add_log(f"Got name for {bd_address}: {name}", "INFO")
+            return jsonify({'name': name, 'bd_address': bd_address})
+
+        # Try hcitool name as fallback
+        result = subprocess.run(
+            ['hcitool', 'name', bd_address],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        if result.stdout.strip():
+            name = result.stdout.strip()
+            add_log(f"Got name for {bd_address}: {name}", "INFO")
+            return jsonify({'name': name, 'bd_address': bd_address})
+
+        return jsonify({'name': None, 'bd_address': bd_address, 'error': 'Could not retrieve name'})
+    except Exception as e:
+        add_log(f"Error getting name for {bd_address}: {e}", "ERROR")
+        return jsonify({'name': None, 'bd_address': bd_address, 'error': str(e)})
+
+
+@app.route('/api/device/<bd_address>/locate', methods=['POST'])
+@login_required
+def device_locate(bd_address):
+    """Calculate device geolocation from RSSI history."""
+    bd_address = bd_address.upper()
+
+    # Get RSSI history from database
+    conn = get_db()
+    c = conn.cursor()
+    c.execute('''
+        SELECT system_lat, system_lon, rssi, timestamp
+        FROM device_log
+        WHERE bd_address = ? AND system_lat IS NOT NULL AND rssi IS NOT NULL
+        ORDER BY timestamp DESC
+        LIMIT 50
+    ''', (bd_address,))
+    observations = c.fetchall()
+    conn.close()
+
+    if len(observations) < 3:
+        return jsonify({
+            'location': None,
+            'message': f'Insufficient data: need at least 3 observations, have {len(observations)}'
+        })
+
+    # Calculate geolocation using weighted centroid algorithm
+    location = calculate_geolocation(observations)
+
+    if location:
+        # Update device in memory
+        if bd_address in devices:
+            devices[bd_address]['emitter_lat'] = location['lat']
+            devices[bd_address]['emitter_lon'] = location['lon']
+            devices[bd_address]['emitter_accuracy'] = location['cep']
+            socketio.emit('device_update', devices[bd_address])
+
+        return jsonify({'location': location, 'observations': len(observations)})
+    else:
+        return jsonify({'location': None, 'message': 'Could not calculate location'})
+
+
+def calculate_geolocation(observations):
+    """
+    Calculate emitter geolocation using RSSI-weighted centroid algorithm.
+
+    Algorithm:
+    1. Convert RSSI to estimated distance using path loss model
+    2. Weight each observation inversely by distance (closer = more weight)
+    3. Calculate weighted centroid of all system positions
+    4. Estimate CEP (Circular Error Probable) at 95% confidence
+
+    Path Loss Model: RSSI = TxPower - 10 * n * log10(d)
+    Where: TxPower ~ -59 dBm at 1m, n ~ 2-4 depending on environment
+    """
+    import math
+
+    # Path loss parameters (can be tuned)
+    TX_POWER = -59  # RSSI at 1 meter (typical for BT)
+    PATH_LOSS_EXP = 2.5  # Path loss exponent (2=free space, 3-4=indoor)
+
+    weighted_lat = 0
+    weighted_lon = 0
+    total_weight = 0
+    distances = []
+
+    for obs in observations:
+        lat, lon, rssi, _ = obs
+
+        # Convert RSSI to distance estimate
+        # d = 10 ^ ((TxPower - RSSI) / (10 * n))
+        try:
+            distance = math.pow(10, (TX_POWER - rssi) / (10 * PATH_LOSS_EXP))
+            distance = max(1, min(distance, 500))  # Clamp to 1-500m
+        except:
+            distance = 50  # Default fallback
+
+        distances.append(distance)
+
+        # Weight inversely by distance squared (closer observations matter more)
+        weight = 1.0 / (distance * distance)
+
+        weighted_lat += lat * weight
+        weighted_lon += lon * weight
+        total_weight += weight
+
+    if total_weight == 0:
+        return None
+
+    # Calculate weighted centroid
+    est_lat = weighted_lat / total_weight
+    est_lon = weighted_lon / total_weight
+
+    # Calculate CEP (Circular Error Probable) at 95% confidence
+    # Use RMS of distances as proxy for uncertainty
+    avg_distance = sum(distances) / len(distances)
+    variance = sum((d - avg_distance) ** 2 for d in distances) / len(distances)
+    std_dev = math.sqrt(variance)
+
+    # CEP95 ~ 2.45 * standard deviation for 2D normal distribution
+    # Scale by average distance and observation count
+    cep = max(5, min(avg_distance * 0.5 + std_dev * 2.0, 200))
+
+    # Reduce CEP with more observations (better confidence)
+    cep = cep * math.sqrt(10 / len(observations))
+
+    return {
+        'lat': est_lat,
+        'lon': est_lon,
+        'cep': round(cep, 1),
+        'confidence': min(95, 50 + len(observations) * 3),
+        'method': 'rssi_weighted_centroid',
+        'observations': len(observations)
+    }
 
 
 @app.route('/api/targets', methods=['GET', 'POST'])
