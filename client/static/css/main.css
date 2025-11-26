@@ -456,6 +456,37 @@ body {
     color: var(--text-secondary);
 }
 
+/* ==================== GPS CONFIGURATION ==================== */
+
+.gps-status {
+    margin-left: auto;
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: var(--text-muted);
+    color: var(--bg-primary);
+}
+
+.gps-status.connected {
+    background: var(--accent-success);
+}
+
+.gps-status.error {
+    background: var(--accent-danger);
+}
+
+.gps-settings {
+    margin-bottom: 10px;
+}
+
+.gps-settings.hidden {
+    display: none;
+}
+
+.hidden {
+    display: none !important;
+}
+
 /* ==================== SURVEY TABLE ==================== */
 
 .table-container {

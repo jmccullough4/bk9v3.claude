@@ -52,6 +52,7 @@ function initApp() {
     loadSmsNumbers();
     loadRadios();
     loadLogs();
+    loadGpsConfig();
 
     // Update time display
     setInterval(updateTime, 1000);
@@ -803,6 +804,121 @@ function toggleRadio(iface, type, currentStatus) {
 function refreshRadios() {
     loadRadios();
     addLogEntry('Radio list refreshed', 'INFO');
+}
+
+// ==================== GPS CONFIGURATION ====================
+
+function loadGpsConfig() {
+    fetch('/api/gps/config')
+        .then(response => response.json())
+        .then(config => {
+            // Set source dropdown
+            document.getElementById('gpsSource').value = config.source;
+
+            // Set NMEA settings
+            document.getElementById('nmeaHost').value = config.nmea_host;
+            document.getElementById('nmeaPort').value = config.nmea_port;
+
+            // Set GPSD settings
+            document.getElementById('gpsdHost').value = config.gpsd_host;
+            document.getElementById('gpsdPort').value = config.gpsd_port;
+
+            // Set Serial settings
+            document.getElementById('serialPort').value = config.serial_port;
+            document.getElementById('serialBaud').value = config.serial_baud;
+
+            // Show correct settings panel
+            updateGpsFields();
+
+            // Update GPS status
+            updateGpsStatus(config.current_location);
+        })
+        .catch(error => {
+            addLogEntry('Failed to load GPS config: ' + error, 'ERROR');
+        });
+}
+
+function updateGpsFields() {
+    const source = document.getElementById('gpsSource').value;
+
+    // Hide all settings panels
+    document.getElementById('nmeaSettings').classList.add('hidden');
+    document.getElementById('gpsdSettings').classList.add('hidden');
+    document.getElementById('serialSettings').classList.add('hidden');
+
+    // Show the selected one
+    if (source === 'nmea_tcp') {
+        document.getElementById('nmeaSettings').classList.remove('hidden');
+    } else if (source === 'gpsd') {
+        document.getElementById('gpsdSettings').classList.remove('hidden');
+    } else if (source === 'serial') {
+        document.getElementById('serialSettings').classList.remove('hidden');
+    }
+}
+
+function saveGpsConfig() {
+    const source = document.getElementById('gpsSource').value;
+
+    const config = {
+        source: source,
+        nmea_host: document.getElementById('nmeaHost').value,
+        nmea_port: parseInt(document.getElementById('nmeaPort').value),
+        gpsd_host: document.getElementById('gpsdHost').value,
+        gpsd_port: parseInt(document.getElementById('gpsdPort').value),
+        serial_port: document.getElementById('serialPort').value,
+        serial_baud: parseInt(document.getElementById('serialBaud').value)
+    };
+
+    fetch('/api/gps/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config)
+    })
+        .then(response => response.json())
+        .then(data => {
+            addLogEntry(`GPS config saved: ${source}`, 'INFO');
+        })
+        .catch(error => {
+            addLogEntry('Failed to save GPS config: ' + error, 'ERROR');
+        });
+}
+
+function testGpsConnection() {
+    const statusEl = document.getElementById('gpsStatus');
+    statusEl.textContent = 'TESTING...';
+    statusEl.className = 'gps-status';
+
+    addLogEntry('Testing GPS connection...', 'INFO');
+
+    fetch('/api/gps/test', { method: 'POST' })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'success') {
+                statusEl.textContent = 'OK';
+                statusEl.className = 'gps-status connected';
+                addLogEntry(`GPS test OK: ${data.location.lat.toFixed(6)}, ${data.location.lon.toFixed(6)}`, 'INFO');
+            } else {
+                statusEl.textContent = 'FAIL';
+                statusEl.className = 'gps-status error';
+                addLogEntry(`GPS test failed: ${data.error}`, 'WARNING');
+            }
+        })
+        .catch(error => {
+            statusEl.textContent = 'ERROR';
+            statusEl.className = 'gps-status error';
+            addLogEntry('GPS test error: ' + error, 'ERROR');
+        });
+}
+
+function updateGpsStatus(location) {
+    const statusEl = document.getElementById('gpsStatus');
+    if (location && location.lat && location.lat !== 0) {
+        statusEl.textContent = 'OK';
+        statusEl.className = 'gps-status connected';
+    } else {
+        statusEl.textContent = 'NO FIX';
+        statusEl.className = 'gps-status';
+    }
 }
 
 // ==================== DEVICE INFO ====================

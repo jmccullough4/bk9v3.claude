@@ -1,0 +1,8 @@
+2025-11-26 21:43:48,928 - INFO - Database initialized
+2025-11-26 21:43:48,929 - INFO - BlueK9 Client starting...
+2025-11-26 21:43:48,929 - WARNING - Werkzeug appears to be used in a production deployment. Consider switching to a production web server instead.
+2025-11-26 21:43:48,938 - INFO - [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://21.0.0.62:5000
+2025-11-26 21:43:48,938 - INFO - [33mPress CTRL+C to quit[0m
