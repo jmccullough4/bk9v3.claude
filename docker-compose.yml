@@ -1,0 +1,77 @@
+# BlueK9 Client - Docker Compose Configuration
+# Bluetooth Surveillance System
+
+version: '3.8'
+
+services:
+  bluek9-client:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bluek9-client
+    hostname: bluek9
+    restart: unless-stopped
+
+    # Network mode host for Bluetooth and GPS access
+    network_mode: host
+
+    # Privileged mode for hardware access
+    privileged: true
+
+    # Required capabilities for Bluetooth and networking
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_ADMIN
+
+    # Volume mounts
+    volumes:
+      # Persist database and logs
+      - ./data:/app/client/data
+      - ./logs:/app/logs
+
+      # Access to Bluetooth devices
+      - /var/run/dbus:/var/run/dbus
+      - /dev/bus/usb:/dev/bus/usb
+
+      # Access to GPS devices
+      - /dev:/dev
+
+      # D-Bus socket for BlueZ
+      - /run/dbus/system_bus_socket:/run/dbus/system_bus_socket
+
+    # Environment variables
+    environment:
+      - FLASK_ENV=production
+      - PYTHONUNBUFFERED=1
+      - DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket
+
+    # Device access
+    devices:
+      - /dev/bus/usb:/dev/bus/usb
+
+    # Port mapping (when not using host network)
+    # ports:
+    #   - "5000:5000"
+
+    # Healthcheck
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/login"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# Volumes for persistent data
+volumes:
+  bluek9_data:
+    driver: local
+  bluek9_logs:
+    driver: local

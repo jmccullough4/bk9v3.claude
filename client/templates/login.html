@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BlueK9 - Login</title>
+    <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Rajdhani', sans-serif;
+            background: linear-gradient(135deg, #0a0a0a 0%, #1a1a2e 50%, #16213e 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden;
+        }
+
+        /* Animated background grid */
+        .grid-bg {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-image:
+                linear-gradient(rgba(0, 212, 255, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 212, 255, 0.03) 1px, transparent 1px);
+            background-size: 50px 50px;
+            animation: gridMove 20s linear infinite;
+        }
+
+        @keyframes gridMove {
+            0% { transform: translateY(0); }
+            100% { transform: translateY(50px); }
+        }
+
+        /* Scan line effect */
+        .scanline {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 3px;
+            background: linear-gradient(90deg, transparent, #00d4ff, transparent);
+            animation: scanline 4s linear infinite;
+            opacity: 0.5;
+        }
+
+        @keyframes scanline {
+            0% { top: -3px; }
+            100% { top: 100%; }
+        }
+
+        .login-container {
+            position: relative;
+            z-index: 10;
+            width: 100%;
+            max-width: 420px;
+            padding: 20px;
+        }
+
+        .login-box {
+            background: rgba(10, 15, 25, 0.95);
+            border: 1px solid rgba(0, 212, 255, 0.3);
+            border-radius: 4px;
+            padding: 40px;
+            box-shadow:
+                0 0 40px rgba(0, 212, 255, 0.1),
+                inset 0 0 60px rgba(0, 0, 0, 0.5);
+        }
+
+        .logo-section {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+
+        .logo-icon {
+            font-size: 64px;
+            margin-bottom: 10px;
+            animation: pulse 2s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 0.8; }
+            50% { opacity: 1; }
+        }
+
+        .logo-text {
+            font-size: 36px;
+            font-weight: 700;
+            letter-spacing: 8px;
+            color: #00d4ff;
+            text-shadow: 0 0 20px rgba(0, 212, 255, 0.5);
+        }
+
+        .logo-subtitle {
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 11px;
+            color: #4a5568;
+            letter-spacing: 3px;
+            margin-top: 5px;
+        }
+
+        .form-group {
+            margin-bottom: 25px;
+        }
+
+        .form-label {
+            display: block;
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 11px;
+            color: #00d4ff;
+            letter-spacing: 2px;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+        }
+
+        .form-input {
+            width: 100%;
+            padding: 14px 16px;
+            background: rgba(0, 0, 0, 0.5);
+            border: 1px solid rgba(0, 212, 255, 0.2);
+            border-radius: 2px;
+            color: #e0e0e0;
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 14px;
+            transition: all 0.3s ease;
+        }
+
+        .form-input:focus {
+            outline: none;
+            border-color: #00d4ff;
+            box-shadow: 0 0 15px rgba(0, 212, 255, 0.2);
+        }
+
+        .form-input::placeholder {
+            color: #4a5568;
+        }
+
+        .login-btn {
+            width: 100%;
+            padding: 14px;
+            background: linear-gradient(135deg, #00d4ff 0%, #0099cc 100%);
+            border: none;
+            border-radius: 2px;
+            color: #0a0a0a;
+            font-family: 'Rajdhani', sans-serif;
+            font-size: 14px;
+            font-weight: 700;
+            letter-spacing: 3px;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .login-btn:hover {
+            background: linear-gradient(135deg, #00e5ff 0%, #00b8e6 100%);
+            box-shadow: 0 0 30px rgba(0, 212, 255, 0.4);
+            transform: translateY(-2px);
+        }
+
+        .login-btn:active {
+            transform: translateY(0);
+        }
+
+        .error-message {
+            background: rgba(255, 59, 48, 0.1);
+            border: 1px solid rgba(255, 59, 48, 0.3);
+            color: #ff3b30;
+            padding: 12px;
+            border-radius: 2px;
+            margin-bottom: 20px;
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 12px;
+            text-align: center;
+        }
+
+        .security-notice {
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid rgba(0, 212, 255, 0.1);
+            text-align: center;
+        }
+
+        .security-notice p {
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 10px;
+            color: #4a5568;
+            letter-spacing: 1px;
+        }
+
+        .corner-accent {
+            position: absolute;
+            width: 20px;
+            height: 20px;
+            border-color: rgba(0, 212, 255, 0.5);
+            border-style: solid;
+        }
+
+        .corner-tl { top: 0; left: 0; border-width: 2px 0 0 2px; }
+        .corner-tr { top: 0; right: 0; border-width: 2px 2px 0 0; }
+        .corner-bl { bottom: 0; left: 0; border-width: 0 0 2px 2px; }
+        .corner-br { bottom: 0; right: 0; border-width: 0 2px 2px 0; }
+    </style>
+</head>
+<body>
+    <div class="grid-bg"></div>
+    <div class="scanline"></div>
+
+    <div class="login-container">
+        <div class="login-box">
+            <div class="corner-accent corner-tl"></div>
+            <div class="corner-accent corner-tr"></div>
+            <div class="corner-accent corner-bl"></div>
+            <div class="corner-accent corner-br"></div>
+
+            <div class="logo-section">
+                <div class="logo-icon">&#128021;</div>
+                <div class="logo-text">BLUEK9</div>
+                <div class="logo-subtitle">BLUETOOTH SURVEILLANCE SYSTEM</div>
+            </div>
+
+            {% if error %}
+            <div class="error-message">
+                &#9888; {{ error }}
+            </div>
+            {% endif %}
+
+            <form method="post" action="{{ url_for('login') }}">
+                <div class="form-group">
+                    <label class="form-label">Operator ID</label>
+                    <input type="text" name="username" class="form-input" placeholder="Enter username" required autofocus>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Access Code</label>
+                    <input type="password" name="password" class="form-input" placeholder="Enter password" required>
+                </div>
+
+                <button type="submit" class="login-btn">Authenticate</button>
+            </form>
+
+            <div class="security-notice">
+                <p>AUTHORIZED PERSONNEL ONLY</p>
+                <p>ALL ACCESS ATTEMPTS ARE LOGGED</p>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
