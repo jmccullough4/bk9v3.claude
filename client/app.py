@@ -1423,6 +1423,69 @@ def set_gps_follow():
     return jsonify({'follow': follow_gps})
 
 
+@app.route('/api/gps/config', methods=['GET', 'POST'])
+@login_required
+def gps_config():
+    """Get or set GPS configuration."""
+    if request.method == 'POST':
+        data = request.json
+
+        if 'source' in data:
+            CONFIG['GPS_SOURCE'] = data['source']
+        if 'nmea_host' in data:
+            CONFIG['NMEA_TCP_HOST'] = data['nmea_host']
+        if 'nmea_port' in data:
+            CONFIG['NMEA_TCP_PORT'] = int(data['nmea_port'])
+        if 'gpsd_host' in data:
+            CONFIG['GPSD_HOST'] = data['gpsd_host']
+        if 'gpsd_port' in data:
+            CONFIG['GPSD_PORT'] = int(data['gpsd_port'])
+        if 'serial_port' in data:
+            CONFIG['GPS_SERIAL_PORT'] = data['serial_port']
+        if 'serial_baud' in data:
+            CONFIG['GPS_SERIAL_BAUD'] = int(data['serial_baud'])
+
+        add_log(f"GPS config updated: source={CONFIG['GPS_SOURCE']}", "INFO")
+        return jsonify({'status': 'updated'})
+
+    # GET - return current config
+    return jsonify({
+        'source': CONFIG.get('GPS_SOURCE', 'nmea_tcp'),
+        'nmea_host': CONFIG.get('NMEA_TCP_HOST', '127.0.0.1'),
+        'nmea_port': CONFIG.get('NMEA_TCP_PORT', 10110),
+        'gpsd_host': CONFIG.get('GPSD_HOST', '127.0.0.1'),
+        'gpsd_port': CONFIG.get('GPSD_PORT', 2947),
+        'serial_port': CONFIG.get('GPS_SERIAL_PORT', '/dev/ttyUSB0'),
+        'serial_baud': CONFIG.get('GPS_SERIAL_BAUD', 9600),
+        'current_location': current_location
+    })
+
+
+@app.route('/api/gps/test', methods=['POST'])
+@login_required
+def test_gps():
+    """Test GPS connection with current settings."""
+    source = CONFIG.get('GPS_SOURCE', 'nmea_tcp')
+
+    add_log(f"Testing GPS source: {source}", "INFO")
+
+    if source == 'nmea_tcp':
+        result = get_gps_from_nmea_tcp()
+    elif source == 'gpsd':
+        result = get_gps_from_gpsd()
+    elif source == 'serial':
+        result = get_gps_from_serial()
+    else:
+        result = None
+
+    if result:
+        add_log(f"GPS test successful: {result['lat']:.6f}, {result['lon']:.6f}", "INFO")
+        return jsonify({'status': 'success', 'location': result})
+    else:
+        add_log(f"GPS test failed for source: {source}", "WARNING")
+        return jsonify({'status': 'failed', 'error': f'Could not connect to {source}'})
+
+
 @app.route('/api/logs')
 @login_required
 def get_logs():

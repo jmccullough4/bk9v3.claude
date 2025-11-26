@@ -148,6 +148,65 @@
                     </div>
                 </div>
 
+                <!-- GPS Configuration -->
+                <div class="panel-section">
+                    <div class="section-header">
+                        <span class="section-icon">&#128225;</span>
+                        <span>GPS SOURCE</span>
+                        <span class="gps-status" id="gpsStatus">--</span>
+                    </div>
+                    <div class="section-content">
+                        <div class="input-group">
+                            <select id="gpsSource" class="input" onchange="updateGpsFields()">
+                                <option value="nmea_tcp">NMEA TCP</option>
+                                <option value="gpsd">GPSD</option>
+                                <option value="serial">Serial</option>
+                            </select>
+                        </div>
+
+                        <!-- NMEA TCP Settings -->
+                        <div id="nmeaSettings" class="gps-settings">
+                            <div class="input-group">
+                                <input type="text" id="nmeaHost" class="input" placeholder="Host" value="127.0.0.1">
+                            </div>
+                            <div class="input-group">
+                                <input type="number" id="nmeaPort" class="input" placeholder="Port" value="10110">
+                            </div>
+                        </div>
+
+                        <!-- GPSD Settings -->
+                        <div id="gpsdSettings" class="gps-settings hidden">
+                            <div class="input-group">
+                                <input type="text" id="gpsdHost" class="input" placeholder="Host" value="127.0.0.1">
+                            </div>
+                            <div class="input-group">
+                                <input type="number" id="gpsdPort" class="input" placeholder="Port" value="2947">
+                            </div>
+                        </div>
+
+                        <!-- Serial Settings -->
+                        <div id="serialSettings" class="gps-settings hidden">
+                            <div class="input-group">
+                                <input type="text" id="serialPort" class="input" placeholder="Device" value="/dev/ttyUSB0">
+                            </div>
+                            <div class="input-group">
+                                <select id="serialBaud" class="input">
+                                    <option value="4800">4800</option>
+                                    <option value="9600" selected>9600</option>
+                                    <option value="19200">19200</option>
+                                    <option value="38400">38400</option>
+                                    <option value="115200">115200</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="btn-group mt-10">
+                            <button class="btn btn-primary" onclick="saveGpsConfig()">SAVE</button>
+                            <button class="btn btn-secondary" onclick="testGpsConnection()">TEST</button>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Target Management -->
                 <div class="panel-section">
                     <div class="section-header">
