@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BlueK9 - Tactical Bluetooth Surveillance</title>
+    <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+    <script src="https://api.mapbox.com/mapbox-gl-js/v3.0.1/mapbox-gl.js"></script>
+    <link href="https://api.mapbox.com/mapbox-gl-js/v3.0.1/mapbox-gl.css" rel="stylesheet">
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+</head>
+<body>
+    <!-- Alert Audio -->
+    <audio id="alertSound" preload="auto">
+        <source src="{{ url_for('static', filename='sounds/alert.mp3') }}" type="audio/mpeg">
+        <source src="{{ url_for('static', filename='sounds/alert.wav') }}" type="audio/wav">
+    </audio>
+
+    <!-- Target Alert Modal -->
+    <div id="targetAlertModal" class="modal hidden">
+        <div class="modal-content alert-modal">
+            <div class="alert-header">
+                <span class="alert-icon">&#9888;</span>
+                <span class="alert-title">TARGET DETECTED</span>
+            </div>
+            <div class="alert-body">
+                <div class="alert-device-info">
+                    <span id="alertBdAddress">--:--:--:--:--:--</span>
+                    <span id="alertDeviceName">Unknown Device</span>
+                </div>
+                <div class="alert-details" id="alertDetails"></div>
+            </div>
+            <button class="btn btn-primary" onclick="closeAlertModal()">ACKNOWLEDGE</button>
+        </div>
+    </div>
+
+    <!-- Device Info Modal -->
+    <div id="deviceInfoModal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span>DEVICE INFORMATION</span>
+                <button class="modal-close" onclick="closeDeviceInfoModal()">&times;</button>
+            </div>
+            <div class="modal-body" id="deviceInfoContent">
+                <!-- Device info will be populated here -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Layout -->
+    <div class="app-container">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-left">
+                <span class="logo-icon">&#128021;</span>
+                <span class="logo-text">BLUEK9</span>
+                <span class="header-divider">|</span>
+                <span class="status-indicator" id="statusIndicator">
+                    <span class="status-dot"></span>
+                    <span class="status-text">STANDBY</span>
+                </span>
+            </div>
+            <div class="header-center">
+                <div class="system-info">
+                    <span class="info-label">SYS LOC:</span>
+                    <span class="info-value" id="sysLocation">---, ---</span>
+                </div>
+                <div class="system-info">
+                    <span class="info-label">TIME:</span>
+                    <span class="info-value" id="sysTime">--:--:--</span>
+                </div>
+                <div class="system-info">
+                    <span class="info-label">DEVICES:</span>
+                    <span class="info-value" id="deviceCount">0</span>
+                </div>
+                <div class="system-info">
+                    <span class="info-label">TARGETS:</span>
+                    <span class="info-value target-count" id="targetCount">0</span>
+                </div>
+            </div>
+            <div class="header-right">
+                <span class="operator-info">OP: {{ username }}</span>
+                <a href="{{ url_for('logout') }}" class="logout-btn">LOGOUT</a>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <div class="main-content">
+            <!-- Left Panel - Controls -->
+            <aside class="panel panel-left">
+                <!-- Scan Controls -->
+                <div class="panel-section">
+                    <div class="section-header">
+                        <span class="section-icon">&#128225;</span>
+                        <span>SCAN CONTROL</span>
+                    </div>
+                    <div class="section-content">
+                        <div class="btn-group">
+                            <button class="btn btn-success" id="btnStartScan" onclick="startScan()">
+                                <span>&#9654;</span> START
+                            </button>
+                            <button class="btn btn-danger" id="btnStopScan" onclick="stopScan()" disabled>
+                                <span>&#9632;</span> STOP
+                            </button>
+                        </div>
+                        <div class="btn-group mt-10">
+                            <button class="btn btn-secondary" onclick="stimulateScan('classic')">
+                                STIM CLASSIC
+                            </button>
+                            <button class="btn btn-secondary" onclick="stimulateScan('ble')">
+                                STIM BLE
+                            </button>
+                        </div>
+                        <button class="btn btn-warning btn-full mt-10" onclick="clearResults()">
+                            CLEAR RESULTS
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Map Controls -->
+                <div class="panel-section">
+                    <div class="section-header">
+                        <span class="section-icon">&#127758;</span>
+                        <span>MAP CONTROL</span>
+                    </div>
+                    <div class="section-content">
+                        <div class="map-style-btns">
+                            <button class="btn btn-map active" data-style="dark" onclick="setMapStyle('dark')">DARK</button>
+                            <button class="btn btn-map" data-style="streets" onclick="setMapStyle('streets')">STREETS</button>
+                            <button class="btn btn-map" data-style="satellite" onclick="setMapStyle('satellite')">SAT</button>
+                        </div>
+                        <div class="toggle-group mt-10">
+                            <label class="toggle">
+                                <input type="checkbox" id="toggleFollowGps" checked onchange="toggleFollowGps()">
+                                <span class="toggle-slider"></span>
+                                <span class="toggle-label">Follow GPS</span>
+                            </label>
+                        </div>
+                        <div class="toggle-group">
+                            <label class="toggle">
+                                <input type="checkbox" id="toggleShowCep" checked onchange="toggleShowCep()">
+                                <span class="toggle-slider"></span>
+                                <span class="toggle-label">Show CEP</span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Target Management -->
+                <div class="panel-section">
+                    <div class="section-header">
+                        <span class="section-icon">&#127919;</span>
+                        <span>TARGETS</span>
+                    </div>
+                    <div class="section-content">
+                        <div class="input-group">
+                            <input type="text" id="targetBdAddress" class="input" placeholder="BD Address (XX:XX:XX:XX:XX:XX)">
+                        </div>
+                        <div class="input-group">
+                            <input type="text" id="targetAlias" class="input" placeholder="Alias (optional)">
+                        </div>
+                        <button class="btn btn-primary btn-full" onclick="addTarget()">
+                            ADD TARGET
+                        </button>
+                        <div class="target-list mt-10" id="targetList">
+                            <!-- Targets will be populated here -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- SMS Alerts -->
+                <div class="panel-section">
+                    <div class="section-header">
+                        <span class="section-icon">&#128241;</span>
+                        <span>SMS ALERTS</span>
+                    </div>
+                    <div class="section-content">
+                        <div class="input-group">
+                            <input type="tel" id="smsNumber" class="input" placeholder="Phone number">
+                            <button class="btn btn-sm btn-primary" onclick="addSmsNumber()">+</button>
+                        </div>
+                        <div class="sms-list" id="smsList">
+                            <!-- SMS numbers will be populated here -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Radio Management -->
+                <div class="panel-section">
+                    <div class="section-header">
+                        <span class="section-icon">&#128246;</span>
+                        <span>RADIOS</span>
+                    </div>
+                    <div class="section-content">
+                        <div class="radio-list" id="radioList">
+                            <!-- Radios will be populated here -->
+                        </div>
+                        <button class="btn btn-secondary btn-full mt-10" onclick="refreshRadios()">
+                            REFRESH RADIOS
+                        </button>
+                    </div>
+                </div>
+            </aside>
+
+            <!-- Center - Map -->
+            <main class="map-container">
+                <div id="map"></div>
+                <div class="map-overlay-info" id="mapOverlayInfo">
+                    <div class="overlay-item">
+                        <span class="overlay-label">SELECTED:</span>
+                        <span class="overlay-value" id="selectedDevice">NONE</span>
+                    </div>
+                </div>
+            </main>
+
+            <!-- Right Panel - Survey & Logs -->
+            <aside class="panel panel-right">
+                <!-- Survey Table -->
+                <div class="panel-section survey-section">
+                    <div class="section-header">
+                        <span class="section-icon">&#128200;</span>
+                        <span>BLUETOOTH SURVEY</span>
+                        <span class="device-counter" id="surveyCount">0</span>
+                    </div>
+                    <div class="section-content table-container">
+                        <table class="survey-table" id="surveyTable">
+                            <thead>
+                                <tr>
+                                    <th>BD ADDRESS</th>
+                                    <th>NAME</th>
+                                    <th>MFR</th>
+                                    <th>RSSI</th>
+                                    <th>LOC</th>
+                                    <th>LAST SEEN</th>
+                                    <th>ACT</th>
+                                </tr>
+                            </thead>
+                            <tbody id="surveyTableBody">
+                                <!-- Devices will be populated here -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Stats Charts -->
+                <div class="panel-section chart-section">
+                    <div class="section-header">
+                        <span class="section-icon">&#128202;</span>
+                        <span>STATISTICS</span>
+                    </div>
+                    <div class="section-content chart-container">
+                        <canvas id="deviceTypeChart"></canvas>
+                    </div>
+                </div>
+
+                <!-- Live Logs -->
+                <div class="panel-section log-section">
+                    <div class="section-header">
+                        <span class="section-icon">&#128196;</span>
+                        <span>LIVE LOG</span>
+                    </div>
+                    <div class="section-content log-container" id="logContainer">
+                        <!-- Logs will be populated here -->
+                    </div>
+                </div>
+            </aside>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+    <script>
+        // Initialize with Mapbox token
+        const MAPBOX_TOKEN = '{{ mapbox_token }}';
+        initApp();
+    </script>
+</body>
+</html>
