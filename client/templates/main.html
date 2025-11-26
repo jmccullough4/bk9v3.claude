@@ -334,11 +334,18 @@
                             <label class="toggle">
                                 <input type="checkbox" id="toggleBreadcrumbs" onchange="toggleBreadcrumbs()">
                                 <span class="toggle-slider"></span>
-                                <span class="toggle-label">Show Heatmap</span>
+                                <span class="toggle-label">Target Heatmap</span>
+                            </label>
+                        </div>
+                        <div class="toggle-group">
+                            <label class="toggle">
+                                <input type="checkbox" id="toggleSystemTrail" onchange="toggleSystemTrail()">
+                                <span class="toggle-slider"></span>
+                                <span class="toggle-label">System Trail</span>
                             </label>
                         </div>
                         <div class="btn-group mt-10">
-                            <button class="btn btn-secondary btn-sm" onclick="resetBreadcrumbs()">RESET HEATMAP</button>
+                            <button class="btn btn-secondary btn-sm" onclick="resetBreadcrumbs()">RESET ALL</button>
                             <button class="btn btn-secondary btn-sm" onclick="resetAllGeo()">RESET GEO</button>
                         </div>
                     </div>

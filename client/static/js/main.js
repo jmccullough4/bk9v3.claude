@@ -591,6 +591,7 @@ function toggleShowCep() {
 
 // ==================== BREADCRUMB / HEATMAP ====================
 
+// Target Heatmap - RSSI readings for targets only
 function toggleBreadcrumbs() {
     showBreadcrumbs = document.getElementById('toggleBreadcrumbs').checked;
 
@@ -607,20 +608,20 @@ function loadBreadcrumbs() {
         .then(points => {
             clearBreadcrumbs();
 
-            // Group points by proximity for heatmap effect
+            // Target heatmap - show RSSI readings in RED (targets only)
             points.forEach((point, index) => {
                 if (!point.lat || !point.lon) return;
 
-                // Create small dot marker
                 const el = document.createElement('div');
-                el.className = 'breadcrumb-marker';
+                el.className = 'breadcrumb-marker target-heatmap';
 
-                // Color based on RSSI (stronger = more red)
+                // Color based on RSSI - RED for targets (stronger = brighter)
                 const rssi = point.rssi || -70;
                 const intensity = Math.min(1, Math.max(0, (rssi + 100) / 50));
-                el.style.backgroundColor = `rgba(0, 212, 255, ${0.3 + intensity * 0.5})`;
-                el.style.width = `${4 + intensity * 4}px`;
-                el.style.height = `${4 + intensity * 4}px`;
+                el.style.backgroundColor = `rgba(255, 59, 48, ${0.3 + intensity * 0.6})`;
+                el.style.width = `${5 + intensity * 6}px`;
+                el.style.height = `${5 + intensity * 6}px`;
+                el.title = `${point.bd_address}\nRSSI: ${rssi} dBm`;
 
                 const marker = new mapboxgl.Marker(el)
                     .setLngLat([point.lon, point.lat])
@@ -629,9 +630,9 @@ function loadBreadcrumbs() {
                 breadcrumbMarkers.push(marker);
             });
 
-            addLogEntry(`Loaded ${points.length} breadcrumb points`, 'INFO');
+            addLogEntry(`Loaded ${points.length} target heatmap points`, 'INFO');
         })
-        .catch(e => addLogEntry(`Failed to load breadcrumbs: ${e}`, 'ERROR'));
+        .catch(e => addLogEntry(`Failed to load heatmap: ${e}`, 'ERROR'));
 }
 
 function clearBreadcrumbs() {
@@ -640,15 +641,78 @@ function clearBreadcrumbs() {
 }
 
 function resetBreadcrumbs() {
-    if (!confirm('Reset all breadcrumb/heatmap data? This will clear all RSSI history.')) return;
+    if (!confirm('Reset all heatmap data? This will clear all RSSI history.')) return;
 
     fetch('/api/breadcrumbs/reset', { method: 'POST' })
         .then(r => r.json())
         .then(data => {
             clearBreadcrumbs();
-            addLogEntry(`Breadcrumbs reset: ${data.cleared} points cleared`, 'INFO');
+            clearSystemTrail();
+            addLogEntry(`Heatmap reset: ${data.cleared} points cleared`, 'INFO');
         })
-        .catch(e => addLogEntry(`Failed to reset breadcrumbs: ${e}`, 'ERROR'));
+        .catch(e => addLogEntry(`Failed to reset heatmap: ${e}`, 'ERROR'));
+}
+
+// System Trail - where the system has been
+let showSystemTrail = false;
+let systemTrailMarkers = [];
+
+function toggleSystemTrail() {
+    showSystemTrail = document.getElementById('toggleSystemTrail').checked;
+
+    if (showSystemTrail) {
+        loadSystemTrail();
+    } else {
+        clearSystemTrail();
+    }
+}
+
+function loadSystemTrail() {
+    fetch('/api/system_trail')
+        .then(r => r.json())
+        .then(points => {
+            clearSystemTrail();
+
+            // System trail - show in CYAN (where system has been)
+            points.forEach((point, index) => {
+                if (!point.lat || !point.lon) return;
+
+                const el = document.createElement('div');
+                el.className = 'breadcrumb-marker system-trail';
+
+                // Fade older points
+                const opacity = Math.max(0.2, 1 - (index / points.length) * 0.8);
+                el.style.backgroundColor = `rgba(0, 212, 255, ${opacity})`;
+                el.style.width = '6px';
+                el.style.height = '6px';
+
+                const marker = new mapboxgl.Marker(el)
+                    .setLngLat([point.lon, point.lat])
+                    .addTo(map);
+
+                systemTrailMarkers.push(marker);
+            });
+
+            addLogEntry(`Loaded ${points.length} system trail points`, 'INFO');
+        })
+        .catch(e => addLogEntry(`Failed to load system trail: ${e}`, 'ERROR'));
+}
+
+function clearSystemTrail() {
+    systemTrailMarkers.forEach(m => m.remove());
+    systemTrailMarkers = [];
+}
+
+function resetSystemTrail() {
+    if (!confirm('Reset system trail? This will clear all position history.')) return;
+
+    fetch('/api/system_trail/reset', { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+            clearSystemTrail();
+            addLogEntry(`System trail reset`, 'INFO');
+        })
+        .catch(e => addLogEntry(`Failed to reset trail: ${e}`, 'ERROR'));
 }
 
 // ==================== GEO RESET ====================
@@ -1176,7 +1240,19 @@ function updateGpsStatus(location) {
 // ==================== DEVICE INFO ====================
 
 function getDeviceInfo(bdAddress) {
-    addLogEntry(`Getting info for ${bdAddress}...`, 'INFO');
+    addLogEntry(`Querying hcitool info for ${bdAddress}...`, 'INFO');
+
+    // Show modal with loading spinner
+    const content = document.getElementById('deviceInfoContent');
+    content.innerHTML = `
+        <div class="loading-container">
+            <div class="loading-spinner"></div>
+            <div class="loading-text">Running hcitool info ${bdAddress}...</div>
+            <div class="loading-subtext">This may take a few seconds</div>
+        </div>
+    `;
+    document.getElementById('deviceInfoModal').classList.remove('hidden');
+
     socket.emit('request_device_info', { bd_address: bdAddress });
 }
 
@@ -1186,7 +1262,23 @@ function showDeviceInfo(info) {
 
     let html = '<div class="device-info-content">';
 
-    // Add all available info
+    // Show hcitool raw output prominently at top
+    if (info.raw_info && info.raw_info.trim()) {
+        html += `
+            <div class="info-section-header">HCITOOL INFO OUTPUT</div>
+            <pre class="hcitool-output">${info.raw_info}</pre>
+            <div class="info-section-header" style="margin-top: 15px;">DEVICE SUMMARY</div>
+        `;
+    } else {
+        html += `
+            <div class="info-section-header">HCITOOL INFO OUTPUT</div>
+            <pre class="hcitool-output hcitool-empty">No response from device.
+Device may be out of range or not responding.</pre>
+            <div class="info-section-header" style="margin-top: 15px;">CACHED DATA</div>
+        `;
+    }
+
+    // Add summary info
     const fields = [
         ['BD Address', info.bd_address],
         ['Device Name', info.device_name || device.device_name || 'Unknown'],
@@ -1196,8 +1288,6 @@ function showDeviceInfo(info) {
         ['RSSI', device.rssi ? `${device.rssi} dBm` : 'N/A'],
         ['First Seen', device.first_seen || 'N/A'],
         ['Last Seen', device.last_seen || 'N/A'],
-        ['System Location', device.system_lat && device.system_lon ?
-            `${device.system_lat.toFixed(6)}, ${device.system_lon.toFixed(6)}` : 'N/A'],
         ['Emitter Location', device.emitter_lat && device.emitter_lon ?
             `${device.emitter_lat.toFixed(6)}, ${device.emitter_lon.toFixed(6)}` : 'N/A'],
         ['CEP Radius', device.emitter_accuracy ? `${device.emitter_accuracy.toFixed(1)} m` : 'N/A'],
@@ -1213,22 +1303,9 @@ function showDeviceInfo(info) {
         `;
     });
 
-    // Add raw info if available
-    if (info.raw_info) {
-        html += `
-            <div class="info-row">
-                <span class="info-label-modal">Raw Info:</span>
-            </div>
-            <pre style="font-size: 10px; color: #8b949e; white-space: pre-wrap; word-break: break-all;">
-${info.raw_info}
-            </pre>
-        `;
-    }
-
     html += '</div>';
     content.innerHTML = html;
 
-    document.getElementById('deviceInfoModal').classList.remove('hidden');
     addLogEntry(`Device info loaded for ${info.bd_address}`, 'INFO');
 }
 

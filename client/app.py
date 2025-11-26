@@ -1883,17 +1883,19 @@ def reset_all_geo():
 @app.route('/api/breadcrumbs')
 @login_required
 def get_breadcrumbs():
-    """Get all GPS breadcrumb positions for heatmap."""
+    """Get RSSI breadcrumb positions for TARGETS ONLY (heatmap)."""
     conn = get_db()
     c = conn.cursor()
+    # Only get breadcrumbs for devices that are targets
     c.execute('''
-        SELECT DISTINCT system_lat, system_lon, rssi, timestamp
-        FROM rssi_history
-        WHERE system_lat IS NOT NULL AND system_lon IS NOT NULL
-        ORDER BY timestamp DESC
+        SELECT r.bd_address, r.system_lat, r.system_lon, r.rssi, r.timestamp
+        FROM rssi_history r
+        INNER JOIN targets t ON r.bd_address = t.bd_address
+        WHERE r.system_lat IS NOT NULL AND r.system_lon IS NOT NULL AND r.rssi IS NOT NULL
+        ORDER BY r.timestamp DESC
         LIMIT 1000
     ''')
-    points = [{'lat': row[0], 'lon': row[1], 'rssi': row[2], 'time': row[3]} for row in c.fetchall()]
+    points = [{'bd_address': row[0], 'lat': row[1], 'lon': row[2], 'rssi': row[3], 'time': row[4]} for row in c.fetchall()]
     conn.close()
     return jsonify(points)
 
@@ -1911,6 +1913,33 @@ def reset_breadcrumbs():
 
     add_log(f"Breadcrumbs reset: {deleted} points cleared", "INFO")
     return jsonify({'status': 'reset', 'cleared': deleted})
+
+
+@app.route('/api/system_trail')
+@login_required
+def get_system_trail():
+    """Get system GPS position trail (where the system has been)."""
+    conn = get_db()
+    c = conn.cursor()
+    # Get unique system positions
+    c.execute('''
+        SELECT DISTINCT system_lat, system_lon, MAX(timestamp) as last_time
+        FROM rssi_history
+        WHERE system_lat IS NOT NULL AND system_lon IS NOT NULL
+        GROUP BY ROUND(system_lat, 5), ROUND(system_lon, 5)
+        ORDER BY last_time DESC
+        LIMIT 500
+    ''')
+    points = [{'lat': row[0], 'lon': row[1], 'time': row[2]} for row in c.fetchall()]
+    conn.close()
+    return jsonify(points)
+
+
+@app.route('/api/system_trail/reset', methods=['POST'])
+@login_required
+def reset_system_trail():
+    """Clear system trail data (same as breadcrumbs reset)."""
+    return reset_breadcrumbs()
 
 
 def calculate_geolocation(observations):
