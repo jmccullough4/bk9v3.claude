@@ -337,66 +337,69 @@ def scan_classic_bluetooth(interface='hci0'):
     try:
         add_log(f"Starting Classic BT scan on {interface}", "INFO")
 
-        # Select the controller
+        # Select the controller and power on
         subprocess.run(['bluetoothctl', 'select', interface], capture_output=True, timeout=5)
-
-        # Power on the adapter
         subprocess.run(['bluetoothctl', 'power', 'on'], capture_output=True, timeout=5)
 
-        # Start scan with timeout - capture output in real-time
+        # Run scan using timeout command for reliability
+        # Use stdbuf for line-buffered output
         proc = subprocess.Popen(
-            ['bluetoothctl', '--timeout', '10', 'scan', 'on'],
+            ['stdbuf', '-oL', 'timeout', '8', 'bluetoothctl', 'scan', 'on'],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            text=True
+            text=True,
+            bufsize=1  # Line buffered
         )
 
-        # Read output for scan duration
-        start_time = time.time()
-        while time.time() - start_time < 12:
-            line = proc.stdout.readline()
-            if not line:
-                break
+        # Read output in real-time
+        try:
+            for line in iter(proc.stdout.readline, ''):
+                if not line:
+                    break
+                line = line.strip()
+                if not line:
+                    continue
 
-            line = line.strip()
+                # Parse [NEW] Device XX:XX:XX:XX:XX:XX Name
+                new_match = re.search(r'\[NEW\]\s+Device\s+([0-9A-Fa-f:]{17})\s*(.*)', line)
+                if new_match:
+                    bd_addr = new_match.group(1).upper()
+                    name = new_match.group(2).strip() or 'Unknown'
+                    if bd_addr not in [d['bd_address'] for d in devices_found]:
+                        devices_found.append({
+                            'bd_address': bd_addr,
+                            'device_name': name,
+                            'device_type': 'classic',
+                            'manufacturer': get_manufacturer(bd_addr),
+                            'rssi': device_rssi.get(bd_addr)
+                        })
+                        add_log(f"Found device: {bd_addr} ({name})", "DEBUG")
 
-            # Parse [NEW] Device XX:XX:XX:XX:XX:XX Name
-            new_match = re.search(r'\[NEW\]\s+Device\s+([0-9A-Fa-f:]{17})\s*(.*)', line)
-            if new_match:
-                bd_addr = new_match.group(1).upper()
-                name = new_match.group(2).strip() or 'Unknown'
-                if bd_addr not in [d['bd_address'] for d in devices_found]:
-                    devices_found.append({
-                        'bd_address': bd_addr,
-                        'device_name': name,
-                        'device_type': 'classic',
-                        'manufacturer': get_manufacturer(bd_addr),
-                        'rssi': device_rssi.get(bd_addr)
-                    })
+                # Parse [CHG] Device XX:XX:XX:XX:XX:XX RSSI: -XX
+                rssi_match = re.search(r'\[CHG\]\s+Device\s+([0-9A-Fa-f:]{17})\s+RSSI:\s*(-?\d+)', line)
+                if rssi_match:
+                    bd_addr = rssi_match.group(1).upper()
+                    rssi = int(rssi_match.group(2))
+                    device_rssi[bd_addr] = rssi
+                    for dev in devices_found:
+                        if dev['bd_address'] == bd_addr:
+                            dev['rssi'] = rssi
 
-            # Parse [CHG] Device XX:XX:XX:XX:XX:XX RSSI: -XX
-            rssi_match = re.search(r'\[CHG\]\s+Device\s+([0-9A-Fa-f:]{17})\s+RSSI:\s*(-?\d+)', line)
-            if rssi_match:
-                bd_addr = rssi_match.group(1).upper()
-                rssi = int(rssi_match.group(2))
-                device_rssi[bd_addr] = rssi
-                # Update existing device
-                for dev in devices_found:
-                    if dev['bd_address'] == bd_addr:
-                        dev['rssi'] = rssi
+                # Parse [CHG] Device XX:XX:XX:XX:XX:XX Name: XXX
+                name_match = re.search(r'\[CHG\]\s+Device\s+([0-9A-Fa-f:]{17})\s+Name:\s*(.*)', line)
+                if name_match:
+                    bd_addr = name_match.group(1).upper()
+                    name = name_match.group(2).strip()
+                    for dev in devices_found:
+                        if dev['bd_address'] == bd_addr and name:
+                            dev['device_name'] = name
+        except Exception as read_err:
+            add_log(f"Error reading scan output: {read_err}", "WARNING")
+        finally:
+            proc.terminate()
+            proc.wait()
 
-            # Parse [CHG] Device XX:XX:XX:XX:XX:XX Name: XXX
-            name_match = re.search(r'\[CHG\]\s+Device\s+([0-9A-Fa-f:]{17})\s+Name:\s*(.*)', line)
-            if name_match:
-                bd_addr = name_match.group(1).upper()
-                name = name_match.group(2).strip()
-                for dev in devices_found:
-                    if dev['bd_address'] == bd_addr and name:
-                        dev['device_name'] = name
-
-        proc.terminate()
-
-        # Also get list of all devices found
+        # Also get list of cached devices from bluetoothctl
         result = subprocess.run(
             ['bluetoothctl', 'devices'],
             capture_output=True,
@@ -446,67 +449,66 @@ def scan_ble_devices(interface='hci0'):
     try:
         add_log(f"Starting BLE scan on {interface}", "INFO")
 
-        # Select the controller
+        # Select the controller and power on
         subprocess.run(['bluetoothctl', 'select', interface], capture_output=True, timeout=5)
-
-        # Power on
         subprocess.run(['bluetoothctl', 'power', 'on'], capture_output=True, timeout=5)
 
-        # Set scan filter for LE only and clear duplicates filter to get RSSI updates
-        # Enter scan submenu, set filter, then scan
-        scan_commands = """
-menu scan
-clear
-transport le
-back
-scan on
-"""
+        # Run BLE scan using timeout command for reliability
         proc = subprocess.Popen(
-            ['bluetoothctl', '--timeout', '8'],
-            stdin=subprocess.PIPE,
+            ['stdbuf', '-oL', 'timeout', '6', 'bluetoothctl', 'scan', 'on'],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            text=True
+            text=True,
+            bufsize=1
         )
 
-        stdout, _ = proc.communicate(input=scan_commands, timeout=12)
+        # Read output in real-time
+        try:
+            for line in iter(proc.stdout.readline, ''):
+                if not line:
+                    break
+                line = line.strip()
+                if not line:
+                    continue
 
-        # Parse output
-        for line in stdout.split('\n'):
-            line = line.strip()
+                # Parse [NEW] Device
+                new_match = re.search(r'\[NEW\]\s+Device\s+([0-9A-Fa-f:]{17})\s*(.*)', line)
+                if new_match:
+                    bd_addr = new_match.group(1).upper()
+                    name = new_match.group(2).strip() or 'BLE Device'
+                    if bd_addr not in [d['bd_address'] for d in devices_found]:
+                        devices_found.append({
+                            'bd_address': bd_addr,
+                            'device_name': name,
+                            'device_type': 'ble',
+                            'manufacturer': get_manufacturer(bd_addr),
+                            'rssi': device_rssi.get(bd_addr)
+                        })
+                        add_log(f"Found BLE device: {bd_addr} ({name})", "DEBUG")
 
-            # Parse [NEW] Device
-            new_match = re.search(r'\[NEW\]\s+Device\s+([0-9A-Fa-f:]{17})\s*(.*)', line)
-            if new_match:
-                bd_addr = new_match.group(1).upper()
-                name = new_match.group(2).strip() or 'BLE Device'
-                if bd_addr not in [d['bd_address'] for d in devices_found]:
-                    devices_found.append({
-                        'bd_address': bd_addr,
-                        'device_name': name,
-                        'device_type': 'ble',
-                        'manufacturer': get_manufacturer(bd_addr),
-                        'rssi': device_rssi.get(bd_addr)
-                    })
+                # Parse RSSI
+                rssi_match = re.search(r'\[CHG\]\s+Device\s+([0-9A-Fa-f:]{17})\s+RSSI:\s*(-?\d+)', line)
+                if rssi_match:
+                    bd_addr = rssi_match.group(1).upper()
+                    rssi = int(rssi_match.group(2))
+                    device_rssi[bd_addr] = rssi
+                    for dev in devices_found:
+                        if dev['bd_address'] == bd_addr:
+                            dev['rssi'] = rssi
 
-            # Parse RSSI
-            rssi_match = re.search(r'\[CHG\]\s+Device\s+([0-9A-Fa-f:]{17})\s+RSSI:\s*(-?\d+)', line)
-            if rssi_match:
-                bd_addr = rssi_match.group(1).upper()
-                rssi = int(rssi_match.group(2))
-                device_rssi[bd_addr] = rssi
-                for dev in devices_found:
-                    if dev['bd_address'] == bd_addr:
-                        dev['rssi'] = rssi
-
-            # Parse Name changes
-            name_match = re.search(r'\[CHG\]\s+Device\s+([0-9A-Fa-f:]{17})\s+Name:\s*(.*)', line)
-            if name_match:
-                bd_addr = name_match.group(1).upper()
-                name = name_match.group(2).strip()
-                for dev in devices_found:
-                    if dev['bd_address'] == bd_addr and name:
-                        dev['device_name'] = name
+                # Parse Name changes
+                name_match = re.search(r'\[CHG\]\s+Device\s+([0-9A-Fa-f:]{17})\s+Name:\s*(.*)', line)
+                if name_match:
+                    bd_addr = name_match.group(1).upper()
+                    name = name_match.group(2).strip()
+                    for dev in devices_found:
+                        if dev['bd_address'] == bd_addr and name:
+                            dev['device_name'] = name
+        except Exception as read_err:
+            add_log(f"Error reading BLE scan output: {read_err}", "WARNING")
+        finally:
+            proc.terminate()
+            proc.wait()
 
         # Update RSSI for devices that didn't have it inline
         for dev in devices_found:
@@ -1149,8 +1151,10 @@ def scan_loop():
 
     while scanning_active:
         try:
-            # Get active Bluetooth interfaces
-            bt_interfaces = active_radios.get('bluetooth', ['hci0'])
+            # Get active Bluetooth interfaces (default to hci0 if none configured)
+            bt_interfaces = active_radios.get('bluetooth', [])
+            if not bt_interfaces:
+                bt_interfaces = ['hci0']  # Default fallback
 
             for iface in bt_interfaces:
                 if not scanning_active:
