@@ -873,10 +873,50 @@ body {
     background: rgba(0, 0, 0, 0.3);
     padding: 15px;
     margin-top: 15px;
+    white-space: pre-wrap;
+}
+
+.alert-system-location {
+    margin-top: 15px;
+    padding: 10px;
+    background: rgba(0, 212, 255, 0.1);
+    border: 1px solid var(--accent-primary);
+    border-radius: 4px;
+}
+
+.alert-system-location .location-label {
+    font-size: 12px;
+    color: var(--accent-primary);
+    display: block;
+    margin-bottom: 5px;
+}
+
+.alert-system-location #alertSystemLocation {
+    font-family: var(--font-mono);
+    font-size: 14px;
+    color: var(--text-primary);
+}
+
+.alert-system-location .map-link {
+    margin-left: 10px;
+    color: var(--accent-primary);
+    font-size: 12px;
+}
+
+.alert-buttons {
+    display: flex;
+    justify-content: center;
+    gap: 15px;
+    padding: 20px;
+}
+
+.alert-buttons .btn {
+    padding: 12px 30px;
+    min-width: 140px;
 }
 
 .alert-modal .btn {
-    margin: 20px;
+    margin: 0;
     padding: 15px 40px;
 }
 
@@ -1232,52 +1272,70 @@ body {
 .panel-left,
 .panel-right {
     position: relative;
+    flex-shrink: 0;
 }
 
 .panel-left {
-    resize: horizontal;
-    overflow: auto;
     min-width: 200px;
     max-width: 500px;
 }
 
 .panel-right {
-    resize: horizontal;
-    overflow: auto;
     min-width: 300px;
-    max-width: 600px;
-    direction: rtl; /* Makes resize handle on left side */
+    max-width: 700px;
 }
 
-.panel-right > * {
-    direction: ltr;
+/* Draggable Resize Handles */
+.resize-handle {
+    width: 6px;
+    background: var(--border-color);
+    cursor: col-resize;
+    flex-shrink: 0;
+    position: relative;
+    z-index: 100;
+    transition: background 0.2s;
 }
 
-/* Resize handle visual indicator */
-.panel-left::after,
-.panel-right::before {
+.resize-handle:hover,
+.resize-handle.dragging {
+    background: var(--accent-primary);
+}
+
+.resize-handle::before {
     content: '';
     position: absolute;
     top: 50%;
-    width: 4px;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 2px;
     height: 40px;
-    background: var(--border-color);
-    transform: translateY(-50%);
-    opacity: 0.5;
+    background: rgba(255, 255, 255, 0.3);
+    border-radius: 1px;
+}
+
+.resize-handle:hover::before,
+.resize-handle.dragging::before {
+    background: rgba(255, 255, 255, 0.6);
+}
+
+/* Prevent text selection while dragging */
+body.resizing {
+    cursor: col-resize !important;
+    user-select: none;
+}
+
+body.resizing * {
+    cursor: col-resize !important;
+}
+
+/* Breadcrumb markers */
+.breadcrumb-marker {
+    border-radius: 50%;
+    border: 1px solid rgba(0, 212, 255, 0.5);
+    opacity: 0.7;
     transition: opacity 0.2s;
-    pointer-events: none;
 }
 
-.panel-left::after {
-    right: 2px;
-}
-
-.panel-right::before {
-    left: 2px;
-}
-
-.panel-left:hover::after,
-.panel-right:hover::before {
+.breadcrumb-marker:hover {
     opacity: 1;
-    background: var(--accent-primary);
 }

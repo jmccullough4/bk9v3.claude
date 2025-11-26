@@ -67,6 +67,8 @@ logger = logging.getLogger('BlueK9')
 scanning_active = False
 scan_thread = None
 gps_thread = None
+btmon_thread = None
+btmon_process = None
 current_location = {'lat': 0.0, 'lon': 0.0, 'accuracy': 0.0}
 devices = {}  # BD Address -> device info
 targets = {}  # BD Address -> target info
@@ -74,6 +76,7 @@ active_radios = {'bluetooth': [], 'wifi': []}
 sms_numbers = []
 follow_gps = True
 log_messages = []
+btmon_rssi_cache = {}  # BD Address -> latest RSSI from btmon
 
 
 def init_database():
@@ -716,6 +719,118 @@ def get_rssi_from_bluetoothctl(bd_address):
     return None
 
 
+# ==================== BTMON RSSI MONITORING ====================
+
+def parse_btmon_line(line):
+    """Parse a single btmon output line for RSSI and BD Address."""
+    global btmon_rssi_cache
+
+    # Pattern for HCI Event with Address and RSSI
+    # Example: "        Address: 00:11:22:33:44:55 (Public)"
+    # Example: "        RSSI: -65 dBm (0xbf)"
+
+    # We need to track current address being reported
+    if not hasattr(parse_btmon_line, 'current_addr'):
+        parse_btmon_line.current_addr = None
+
+    line = line.strip()
+
+    # Look for BD Address
+    addr_match = re.search(r'Address:\s*([0-9A-Fa-f:]{17})', line)
+    if addr_match:
+        parse_btmon_line.current_addr = addr_match.group(1).upper()
+
+    # Look for RSSI
+    rssi_match = re.search(r'RSSI:\s*(-?\d+)\s*dBm', line)
+    if rssi_match and parse_btmon_line.current_addr:
+        rssi = int(rssi_match.group(1))
+        bd_addr = parse_btmon_line.current_addr
+        btmon_rssi_cache[bd_addr] = {
+            'rssi': rssi,
+            'timestamp': time.time()
+        }
+
+        # Update device if it exists
+        if bd_addr in devices:
+            devices[bd_addr]['rssi'] = rssi
+            # Emit update to UI
+            socketio.emit('device_update', devices[bd_addr])
+
+        return bd_addr, rssi
+
+    return None, None
+
+
+def btmon_monitor_loop():
+    """Background thread to monitor btmon output for RSSI."""
+    global btmon_process, scanning_active
+
+    add_log("Starting btmon RSSI monitor...", "INFO")
+
+    try:
+        # Start btmon process
+        btmon_process = subprocess.Popen(
+            ['btmon', '-T'],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1
+        )
+
+        while scanning_active and btmon_process.poll() is None:
+            try:
+                line = btmon_process.stdout.readline()
+                if line:
+                    parse_btmon_line(line)
+            except Exception as e:
+                if scanning_active:
+                    add_log(f"btmon read error: {e}", "WARNING")
+                break
+
+    except Exception as e:
+        add_log(f"btmon monitor error: {e}", "ERROR")
+    finally:
+        stop_btmon()
+
+
+def start_btmon():
+    """Start btmon monitoring thread."""
+    global btmon_thread
+
+    if btmon_thread and btmon_thread.is_alive():
+        return
+
+    btmon_thread = threading.Thread(target=btmon_monitor_loop, daemon=True)
+    btmon_thread.start()
+    add_log("btmon RSSI monitor started", "INFO")
+
+
+def stop_btmon():
+    """Stop btmon monitoring."""
+    global btmon_process
+
+    if btmon_process:
+        try:
+            btmon_process.terminate()
+            btmon_process.wait(timeout=2)
+        except:
+            try:
+                btmon_process.kill()
+            except:
+                pass
+        btmon_process = None
+        add_log("btmon RSSI monitor stopped", "INFO")
+
+
+def get_btmon_rssi(bd_address):
+    """Get cached RSSI from btmon for a device."""
+    bd_address = bd_address.upper()
+    cached = btmon_rssi_cache.get(bd_address)
+    if cached and (time.time() - cached['timestamp']) < 30:  # Cache valid for 30 seconds
+        return cached['rssi']
+    return None
+
+
 def stimulate_bluetooth_classic(interface='hci0'):
     """
     Stimulate Classic Bluetooth devices to respond.
@@ -1265,7 +1380,7 @@ def alert_target_found(device, is_new=True):
 
         # Log recurring SMS alerts
         if not is_new:
-            add_log(f"Recurring SMS alert sent for target {bd_addr} (RSSI: {rssi})", "INFO")
+            add_log(f"[{system_id}] Recurring SMS sent for {bd_addr} (RSSI: {rssi})", "INFO")
 
     # Only emit visual/audio alert for new targets (avoid constant beeping)
     if is_new:
@@ -1276,7 +1391,10 @@ def alert_target_found(device, is_new=True):
             'system_name': system_name,
             'location': current_location if current_location['lat'] else None
         })
-        add_log(f"TARGET ALERT: {bd_addr} detected! (RSSI: {rssi})", "WARNING")
+        loc_str = ""
+        if current_location['lat'] and current_location['lon']:
+            loc_str = f" @ {current_location['lat']:.6f},{current_location['lon']:.6f}"
+        add_log(f"[{system_id}] TARGET ALERT: {bd_addr} detected! RSSI: {rssi}{loc_str}", "WARNING")
 
 
 # ==================== SCANNING THREAD ====================
@@ -1313,19 +1431,23 @@ def process_found_device(device_info):
     # Get RSSI - try multiple methods
     rssi = device_info.get('rssi')
 
-    # If no RSSI from scan, try to get it actively (for Classic BT)
-    if rssi is None and device_info.get('device_type') != 'ble':
-        # Try bluetoothctl first (faster)
+    # Priority 1: Check btmon cache (most reliable real-time RSSI)
+    if rssi is None:
+        rssi = get_btmon_rssi(bd_addr)
+        if rssi:
+            add_log(f"btmon RSSI for {bd_addr}: {rssi} dBm", "DEBUG")
+
+    # Priority 2: Try bluetoothctl info
+    if rssi is None:
         rssi = get_rssi_from_bluetoothctl(bd_addr)
 
-        # If still no RSSI, try hcitool with connection
-        if rssi is None:
-            rssi = get_device_rssi(bd_addr)
+    # Priority 3: Try active connection methods (Classic BT only)
+    if rssi is None and device_info.get('device_type') != 'ble':
+        rssi = get_device_rssi(bd_addr)
 
-        if rssi:
-            device_info['rssi'] = rssi
-            devices[bd_addr]['rssi'] = rssi
-            add_log(f"Active RSSI capture for {bd_addr}: {rssi} dBm", "DEBUG")
+    if rssi:
+        device_info['rssi'] = rssi
+        devices[bd_addr]['rssi'] = rssi
 
     # Update location estimate if we have RSSI
     emitter_loc = None
@@ -1568,6 +1690,9 @@ def start_scan():
 
     if not scanning_active:
         scanning_active = True
+        # Start btmon for RSSI monitoring
+        start_btmon()
+        # Start scan loop
         scan_thread = threading.Thread(target=scan_loop, daemon=True)
         scan_thread.start()
         return jsonify({'status': 'started'})
@@ -1580,6 +1705,8 @@ def stop_scan():
     """Stop scanning."""
     global scanning_active
     scanning_active = False
+    # Stop btmon
+    stop_btmon()
     return jsonify({'status': 'stopped'})
 
 
@@ -1705,6 +1832,85 @@ def device_locate(bd_address):
         return jsonify({'location': location, 'observations': len(observations)})
     else:
         return jsonify({'location': None, 'message': 'Could not calculate location'})
+
+
+@app.route('/api/device/<bd_address>/geo/reset', methods=['POST'])
+@login_required
+def reset_device_geo(bd_address):
+    """Reset RSSI history for a device to restart geolocation."""
+    bd_address = bd_address.upper()
+
+    conn = get_db()
+    c = conn.cursor()
+    c.execute('DELETE FROM rssi_history WHERE bd_address = ?', (bd_address,))
+    deleted = c.rowcount
+    conn.commit()
+    conn.close()
+
+    # Clear geo data from device
+    if bd_address in devices:
+        devices[bd_address]['emitter_lat'] = None
+        devices[bd_address]['emitter_lon'] = None
+        devices[bd_address]['emitter_accuracy'] = None
+        socketio.emit('device_update', devices[bd_address])
+
+    add_log(f"Geo reset for {bd_address}: {deleted} observations cleared", "INFO")
+    return jsonify({'status': 'reset', 'cleared': deleted})
+
+
+@app.route('/api/geo/reset_all', methods=['POST'])
+@login_required
+def reset_all_geo():
+    """Reset all RSSI history for all devices."""
+    conn = get_db()
+    c = conn.cursor()
+    c.execute('DELETE FROM rssi_history')
+    deleted = c.rowcount
+    conn.commit()
+    conn.close()
+
+    # Clear geo data from all devices
+    for bd_addr in devices:
+        devices[bd_addr]['emitter_lat'] = None
+        devices[bd_addr]['emitter_lon'] = None
+        devices[bd_addr]['emitter_accuracy'] = None
+        socketio.emit('device_update', devices[bd_addr])
+
+    add_log(f"All geo data reset: {deleted} observations cleared", "INFO")
+    return jsonify({'status': 'reset', 'cleared': deleted})
+
+
+@app.route('/api/breadcrumbs')
+@login_required
+def get_breadcrumbs():
+    """Get all GPS breadcrumb positions for heatmap."""
+    conn = get_db()
+    c = conn.cursor()
+    c.execute('''
+        SELECT DISTINCT system_lat, system_lon, rssi, timestamp
+        FROM rssi_history
+        WHERE system_lat IS NOT NULL AND system_lon IS NOT NULL
+        ORDER BY timestamp DESC
+        LIMIT 1000
+    ''')
+    points = [{'lat': row[0], 'lon': row[1], 'rssi': row[2], 'time': row[3]} for row in c.fetchall()]
+    conn.close()
+    return jsonify(points)
+
+
+@app.route('/api/breadcrumbs/reset', methods=['POST'])
+@login_required
+def reset_breadcrumbs():
+    """Clear all breadcrumb data."""
+    conn = get_db()
+    c = conn.cursor()
+    c.execute('DELETE FROM rssi_history')
+    deleted = c.rowcount
+    conn.commit()
+    conn.close()
+
+    add_log(f"Breadcrumbs reset: {deleted} points cleared", "INFO")
+    return jsonify({'status': 'reset', 'cleared': deleted})
 
 
 def calculate_geolocation(observations):
