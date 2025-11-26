@@ -31,8 +31,16 @@
                     <span id="alertDeviceName">Unknown Device</span>
                 </div>
                 <div class="alert-details" id="alertDetails"></div>
+                <div class="alert-system-location">
+                    <span class="location-label">System Location:</span>
+                    <span id="alertSystemLocation">--</span>
+                    <a id="alertMapLink" href="#" target="_blank" class="map-link">View Map</a>
+                </div>
             </div>
-            <button class="btn btn-primary" onclick="closeAlertModal()">ACKNOWLEDGE</button>
+            <div class="alert-buttons">
+                <button class="btn btn-secondary" onclick="copyAlertDetails()">COPY DETAILS</button>
+                <button class="btn btn-primary" onclick="closeAlertModal()">ACKNOWLEDGE</button>
+            </div>
         </div>
     </div>
 
@@ -322,6 +330,17 @@
                                 <span class="toggle-label">Show CEP</span>
                             </label>
                         </div>
+                        <div class="toggle-group">
+                            <label class="toggle">
+                                <input type="checkbox" id="toggleBreadcrumbs" onchange="toggleBreadcrumbs()">
+                                <span class="toggle-slider"></span>
+                                <span class="toggle-label">Show Heatmap</span>
+                            </label>
+                        </div>
+                        <div class="btn-group mt-10">
+                            <button class="btn btn-secondary btn-sm" onclick="resetBreadcrumbs()">RESET HEATMAP</button>
+                            <button class="btn btn-secondary btn-sm" onclick="resetAllGeo()">RESET GEO</button>
+                        </div>
                     </div>
                 </div>
 
@@ -440,6 +459,9 @@
                 </div>
             </aside>
 
+            <!-- Left Resize Handle -->
+            <div class="resize-handle resize-handle-left" id="resizeHandleLeft"></div>
+
             <!-- Center - Map -->
             <main class="map-container">
                 <div id="map"></div>
@@ -450,6 +472,9 @@
                     </div>
                 </div>
             </main>
+
+            <!-- Right Resize Handle -->
+            <div class="resize-handle resize-handle-right" id="resizeHandleRight"></div>
 
             <!-- Right Panel - Survey & Logs -->
             <aside class="panel panel-right">
@@ -468,8 +493,9 @@
                                     <th>NAME</th>
                                     <th>MFR</th>
                                     <th>RSSI</th>
+                                    <th>CEP</th>
                                     <th>LOC</th>
-                                    <th>LAST SEEN</th>
+                                    <th>LAST</th>
                                     <th>ACT</th>
                                 </tr>
                             </thead>

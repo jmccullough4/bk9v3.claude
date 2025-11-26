@@ -82,14 +82,21 @@
         }
 
         .logo-icon {
-            font-size: 64px;
-            margin-bottom: 10px;
+            width: 120px;
+            height: 120px;
+            margin: 0 auto 20px;
             animation: pulse 2s ease-in-out infinite;
         }
 
+        .logo-icon svg {
+            width: 100%;
+            height: 100%;
+            filter: drop-shadow(0 0 10px rgba(0, 212, 255, 0.5));
+        }
+
         @keyframes pulse {
-            0%, 100% { opacity: 0.8; }
-            50% { opacity: 1; }
+            0%, 100% { opacity: 0.8; transform: scale(1); }
+            50% { opacity: 1; transform: scale(1.02); }
         }
 
         .logo-text {
@@ -222,7 +229,65 @@
             <div class="corner-accent corner-br"></div>
 
             <div class="logo-section">
-                <div class="logo-icon">&#128021;</div>
+                <div class="logo-icon">
+                    <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+                        <!-- Aggressive K9 Wolf Head -->
+                        <defs>
+                            <linearGradient id="wolfGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                                <stop offset="0%" style="stop-color:#00d4ff;stop-opacity:1" />
+                                <stop offset="100%" style="stop-color:#0099cc;stop-opacity:1" />
+                            </linearGradient>
+                            <filter id="glow">
+                                <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
+                                <feMerge>
+                                    <feMergeNode in="coloredBlur"/>
+                                    <feMergeNode in="SourceGraphic"/>
+                                </feMerge>
+                            </filter>
+                        </defs>
+                        <!-- Outer head shape -->
+                        <path fill="url(#wolfGradient)" filter="url(#glow)" d="
+                            M50 5
+                            L30 15 L20 35 L15 55 L20 70 L35 85 L50 90 L65 85 L80 70 L85 55 L80 35 L70 15 Z
+                        "/>
+                        <!-- Left ear -->
+                        <path fill="#0a0a0a" stroke="url(#wolfGradient)" stroke-width="2" d="
+                            M25 25 L15 5 L35 20 Z
+                        "/>
+                        <!-- Right ear -->
+                        <path fill="#0a0a0a" stroke="url(#wolfGradient)" stroke-width="2" d="
+                            M75 25 L85 5 L65 20 Z
+                        "/>
+                        <!-- Face details - dark center -->
+                        <path fill="#0a0a0a" d="
+                            M50 25 L35 35 L30 50 L35 65 L50 75 L65 65 L70 50 L65 35 Z
+                        "/>
+                        <!-- Left eye - menacing -->
+                        <ellipse cx="38" cy="42" rx="6" ry="4" fill="#ff3b30" opacity="0.9"/>
+                        <ellipse cx="38" cy="42" rx="2" ry="2" fill="#ffffff"/>
+                        <!-- Right eye - menacing -->
+                        <ellipse cx="62" cy="42" rx="6" ry="4" fill="#ff3b30" opacity="0.9"/>
+                        <ellipse cx="62" cy="42" rx="2" ry="2" fill="#ffffff"/>
+                        <!-- Snout -->
+                        <path fill="url(#wolfGradient)" d="
+                            M50 50 L40 55 L38 65 L50 72 L62 65 L60 55 Z
+                        "/>
+                        <!-- Nose -->
+                        <ellipse cx="50" cy="58" rx="5" ry="4" fill="#0a0a0a"/>
+                        <!-- Snarling mouth -->
+                        <path fill="none" stroke="#ff3b30" stroke-width="1.5" d="
+                            M38 68 Q50 72 62 68
+                        "/>
+                        <!-- Fangs left -->
+                        <path fill="#ffffff" d="M42 68 L40 75 L44 68 Z"/>
+                        <!-- Fangs right -->
+                        <path fill="#ffffff" d="M58 68 L60 75 L56 68 Z"/>
+                        <!-- Brow furrow left -->
+                        <path fill="none" stroke="url(#wolfGradient)" stroke-width="1" d="M30 38 Q35 35 40 38"/>
+                        <!-- Brow furrow right -->
+                        <path fill="none" stroke="url(#wolfGradient)" stroke-width="1" d="M70 38 Q65 35 60 38"/>
+                    </svg>
+                </div>
                 <div class="logo-text">BLUEK9</div>
                 <div class="logo-subtitle">BLUETOOTH SURVEILLANCE SYSTEM</div>
             </div>

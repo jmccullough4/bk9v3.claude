@@ -13,9 +13,11 @@ let cepCircles = {};
 let systemMarker = null;
 let followGps = true;
 let showCep = true;
+let showBreadcrumbs = false;
 let scanning = false;
 let deviceTypeChart = null;
 let currentMapStyle = 'dark';
+let breadcrumbMarkers = [];
 
 // Map styles
 const MAP_STYLES = {
@@ -101,7 +103,7 @@ function initWebSocket() {
     });
 
     socket.on('target_alert', (data) => {
-        showTargetAlert(data.device);
+        showTargetAlert(data);
     });
 
     socket.on('device_info', (info) => {
@@ -200,6 +202,10 @@ function updateSurveyTable() {
             ? `${device.emitter_lat.toFixed(4)}, ${device.emitter_lon.toFixed(4)}`
             : '--';
 
+        const cep = device.emitter_accuracy
+            ? `${device.emitter_accuracy.toFixed(0)}m`
+            : '--';
+
         const lastSeen = device.last_seen
             ? new Date(device.last_seen).toLocaleTimeString()
             : '--';
@@ -209,7 +215,8 @@ function updateSurveyTable() {
             <td title="${device.device_name || 'Unknown'}">${truncate(device.device_name || 'Unknown', 12)}</td>
             <td title="${device.manufacturer || 'Unknown'}">${truncate(device.manufacturer || '?', 8)}</td>
             <td>${device.rssi || '--'}</td>
-            <td>${emitterLoc}</td>
+            <td class="cep-cell">${cep}</td>
+            <td title="${emitterLoc}">${emitterLoc !== '--' ? emitterLoc.split(',')[0] + '...' : '--'}</td>
             <td>${lastSeen}</td>
             <td>
                 <button class="action-btn" onclick="getDeviceInfo('${device.bd_address}')" title="Get Info">i</button>
@@ -582,6 +589,113 @@ function toggleShowCep() {
     }
 }
 
+// ==================== BREADCRUMB / HEATMAP ====================
+
+function toggleBreadcrumbs() {
+    showBreadcrumbs = document.getElementById('toggleBreadcrumbs').checked;
+
+    if (showBreadcrumbs) {
+        loadBreadcrumbs();
+    } else {
+        clearBreadcrumbs();
+    }
+}
+
+function loadBreadcrumbs() {
+    fetch('/api/breadcrumbs')
+        .then(r => r.json())
+        .then(points => {
+            clearBreadcrumbs();
+
+            // Group points by proximity for heatmap effect
+            points.forEach((point, index) => {
+                if (!point.lat || !point.lon) return;
+
+                // Create small dot marker
+                const el = document.createElement('div');
+                el.className = 'breadcrumb-marker';
+
+                // Color based on RSSI (stronger = more red)
+                const rssi = point.rssi || -70;
+                const intensity = Math.min(1, Math.max(0, (rssi + 100) / 50));
+                el.style.backgroundColor = `rgba(0, 212, 255, ${0.3 + intensity * 0.5})`;
+                el.style.width = `${4 + intensity * 4}px`;
+                el.style.height = `${4 + intensity * 4}px`;
+
+                const marker = new mapboxgl.Marker(el)
+                    .setLngLat([point.lon, point.lat])
+                    .addTo(map);
+
+                breadcrumbMarkers.push(marker);
+            });
+
+            addLogEntry(`Loaded ${points.length} breadcrumb points`, 'INFO');
+        })
+        .catch(e => addLogEntry(`Failed to load breadcrumbs: ${e}`, 'ERROR'));
+}
+
+function clearBreadcrumbs() {
+    breadcrumbMarkers.forEach(m => m.remove());
+    breadcrumbMarkers = [];
+}
+
+function resetBreadcrumbs() {
+    if (!confirm('Reset all breadcrumb/heatmap data? This will clear all RSSI history.')) return;
+
+    fetch('/api/breadcrumbs/reset', { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+            clearBreadcrumbs();
+            addLogEntry(`Breadcrumbs reset: ${data.cleared} points cleared`, 'INFO');
+        })
+        .catch(e => addLogEntry(`Failed to reset breadcrumbs: ${e}`, 'ERROR'));
+}
+
+// ==================== GEO RESET ====================
+
+function resetAllGeo() {
+    if (!confirm('Reset all geolocation data? This will clear all RSSI history and emitter estimates.')) return;
+
+    fetch('/api/geo/reset_all', { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+            addLogEntry(`All geo data reset: ${data.cleared} observations cleared`, 'INFO');
+            // Clear all CEP circles
+            Object.keys(cepCircles).forEach(bdAddr => {
+                const sourceId = `cep-${bdAddr}`;
+                if (map.getLayer(sourceId)) map.removeLayer(sourceId);
+                if (map.getSource(sourceId)) map.removeSource(sourceId);
+            });
+            cepCircles = {};
+            // Remove device markers with geo
+            Object.keys(markers).forEach(bdAddr => {
+                markers[bdAddr].remove();
+                delete markers[bdAddr];
+            });
+        })
+        .catch(e => addLogEntry(`Failed to reset geo: ${e}`, 'ERROR'));
+}
+
+function resetDeviceGeo(bdAddress) {
+    fetch(`/api/device/${bdAddress}/geo/reset`, { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+            addLogEntry(`Geo reset for ${bdAddress}: ${data.cleared} observations cleared`, 'INFO');
+            // Remove marker and CEP
+            if (markers[bdAddress]) {
+                markers[bdAddress].remove();
+                delete markers[bdAddress];
+            }
+            if (cepCircles[bdAddress]) {
+                const sourceId = `cep-${bdAddress}`;
+                if (map.getLayer(sourceId)) map.removeLayer(sourceId);
+                if (map.getSource(sourceId)) map.removeSource(sourceId);
+                delete cepCircles[bdAddress];
+            }
+        })
+        .catch(e => addLogEntry(`Failed to reset geo for ${bdAddress}: ${e}`, 'ERROR'));
+}
+
 // ==================== TARGET MANAGEMENT ====================
 
 function loadTargets() {
@@ -603,15 +717,148 @@ function updateTargetList() {
     Object.values(targets).forEach(target => {
         const item = document.createElement('div');
         item.className = 'target-item';
+
+        // Check if target is in detected devices
+        const detected = devices[target.bd_address];
+        const statusClass = detected ? 'target-detected' : 'target-not-detected';
+
         item.innerHTML = `
             <div class="item-info">
-                <span class="item-primary">${target.bd_address}</span>
+                <span class="item-primary ${statusClass}">${target.bd_address}</span>
                 <span class="item-secondary">${target.alias || 'No alias'}</span>
             </div>
             <button class="item-delete" onclick="deleteTarget('${target.bd_address}')">&times;</button>
         `;
+
+        // Right-click context menu for targets
+        item.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            showTargetContextMenu(e, target.bd_address);
+        });
+
         list.appendChild(item);
     });
+}
+
+function showTargetContextMenu(event, bdAddress) {
+    contextMenuTarget = bdAddress;
+
+    let menu = document.getElementById('targetContextMenu');
+    if (!menu) {
+        menu = createTargetContextMenu();
+    }
+
+    // Position menu at click location
+    menu.style.left = event.pageX + 'px';
+    menu.style.top = event.pageY + 'px';
+    menu.classList.remove('hidden');
+
+    event.preventDefault();
+}
+
+function createTargetContextMenu() {
+    const existing = document.getElementById('targetContextMenu');
+    if (existing) existing.remove();
+
+    const menu = document.createElement('div');
+    menu.id = 'targetContextMenu';
+    menu.className = 'context-menu hidden';
+    menu.innerHTML = `
+        <div class="context-menu-item" onclick="targetContextAction('info')">
+            <i>ℹ</i> Get Device Info
+        </div>
+        <div class="context-menu-item" onclick="targetContextAction('name')">
+            <i>📝</i> Get Device Name
+        </div>
+        <div class="context-menu-item" onclick="targetContextAction('stimulate')">
+            <i>📡</i> Stimulate (BT Classic)
+        </div>
+        <div class="context-menu-divider"></div>
+        <div class="context-menu-item" onclick="targetContextAction('locate')">
+            <i>📍</i> Geolocate Device
+        </div>
+        <div class="context-menu-item" onclick="targetContextAction('georeset')">
+            <i>🔄</i> Reset Device Geo
+        </div>
+        <div class="context-menu-divider"></div>
+        <div class="context-menu-item" onclick="targetContextAction('copy')">
+            <i>📋</i> Copy BD Address
+        </div>
+        <div class="context-menu-item" onclick="targetContextAction('zoom')">
+            <i>🗺</i> Zoom to Location
+        </div>
+        <div class="context-menu-divider"></div>
+        <div class="context-menu-item target-remove" onclick="targetContextAction('remove')">
+            <i>🗑</i> Remove Target
+        </div>
+    `;
+    document.body.appendChild(menu);
+    return menu;
+}
+
+function targetContextAction(action) {
+    if (!contextMenuTarget) return;
+
+    const bdAddress = contextMenuTarget;
+    const device = devices[bdAddress];
+
+    switch (action) {
+        case 'info':
+            getDeviceInfo(bdAddress);
+            break;
+        case 'name':
+            requestDeviceName(bdAddress);
+            break;
+        case 'stimulate':
+            stimulateForDevice(bdAddress);
+            break;
+        case 'locate':
+            requestGeolocation(bdAddress);
+            break;
+        case 'georeset':
+            resetDeviceGeo(bdAddress);
+            break;
+        case 'copy':
+            navigator.clipboard.writeText(bdAddress).then(() => {
+                addLogEntry(`Copied ${bdAddress} to clipboard`, 'INFO');
+            });
+            break;
+        case 'zoom':
+            if (device && device.emitter_lat && device.emitter_lon) {
+                map.flyTo({
+                    center: [device.emitter_lon, device.emitter_lat],
+                    zoom: 18
+                });
+            } else {
+                addLogEntry('No location data for this target', 'WARNING');
+            }
+            break;
+        case 'remove':
+            deleteTarget(bdAddress);
+            break;
+    }
+
+    hideTargetContextMenu();
+}
+
+function hideTargetContextMenu() {
+    const menu = document.getElementById('targetContextMenu');
+    if (menu) menu.classList.add('hidden');
+    contextMenuTarget = null;
+}
+
+function stimulateForDevice(bdAddress) {
+    addLogEntry(`Stimulating to find ${bdAddress}...`, 'INFO');
+    fetch('/api/scan/stimulate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'classic' })
+    })
+        .then(r => r.json())
+        .then(data => {
+            addLogEntry(`Stimulation complete. Found ${data.devices_found || 0} devices.`, 'INFO');
+        })
+        .catch(e => addLogEntry(`Stimulation failed: ${e}`, 'ERROR'));
 }
 
 function addTarget() {
@@ -991,7 +1238,15 @@ function closeDeviceInfoModal() {
 
 // ==================== ALERTS ====================
 
-function showTargetAlert(device) {
+// Store current alert data for copy function
+let currentAlertData = null;
+
+function showTargetAlert(data) {
+    const device = data.device || data;
+    const location = data.location || currentLocation;
+    const systemId = data.system_id || 'Unknown';
+    const systemName = data.system_name || 'BlueK9';
+
     // Play alert sound
     const audio = document.getElementById('alertSound');
     audio.currentTime = 0;
@@ -1002,23 +1257,90 @@ function showTargetAlert(device) {
     document.getElementById('alertDeviceName').textContent = device.device_name || 'Unknown Device';
 
     let details = '';
+    details += `System: ${systemId} (${systemName})\n`;
+    details += `Time: ${new Date().toLocaleString()}\n`;
     if (device.first_seen) details += `First Seen: ${device.first_seen}\n`;
     if (device.last_seen) details += `Last Seen: ${device.last_seen}\n`;
     if (device.rssi) details += `RSSI: ${device.rssi} dBm\n`;
+    if (device.device_type) details += `Type: ${device.device_type}\n`;
+    if (device.manufacturer) details += `Manufacturer: ${device.manufacturer}\n`;
     if (device.emitter_lat && device.emitter_lon) {
-        details += `Emitter Location: ${device.emitter_lat.toFixed(6)}, ${device.emitter_lon.toFixed(6)}\n`;
+        details += `Emitter Est: ${device.emitter_lat.toFixed(6)}, ${device.emitter_lon.toFixed(6)}\n`;
+        if (device.emitter_accuracy) details += `CEP: ${device.emitter_accuracy.toFixed(1)}m\n`;
     }
 
     document.getElementById('alertDetails').textContent = details;
 
+    // System location
+    const sysLocSpan = document.getElementById('alertSystemLocation');
+    const mapLink = document.getElementById('alertMapLink');
+    if (location && location.lat && location.lon) {
+        sysLocSpan.textContent = `${location.lat.toFixed(6)}, ${location.lon.toFixed(6)}`;
+        mapLink.href = `https://maps.google.com/?q=${location.lat.toFixed(6)},${location.lon.toFixed(6)}`;
+        mapLink.style.display = 'inline';
+    } else {
+        sysLocSpan.textContent = 'No GPS Fix';
+        mapLink.style.display = 'none';
+    }
+
+    // Store for copy
+    currentAlertData = {
+        device: device,
+        location: location,
+        systemId: systemId,
+        systemName: systemName,
+        timestamp: new Date().toISOString()
+    };
+
     // Show modal
     document.getElementById('targetAlertModal').classList.remove('hidden');
+}
+
+function copyAlertDetails() {
+    if (!currentAlertData) return;
+
+    const d = currentAlertData.device;
+    const loc = currentAlertData.location;
+
+    let text = `=== TARGET ALERT ===\n`;
+    text += `System: ${currentAlertData.systemId} (${currentAlertData.systemName})\n`;
+    text += `Time: ${currentAlertData.timestamp}\n`;
+    text += `\n--- Device ---\n`;
+    text += `BD Address: ${d.bd_address}\n`;
+    text += `Name: ${d.device_name || 'Unknown'}\n`;
+    if (d.rssi) text += `RSSI: ${d.rssi} dBm\n`;
+    if (d.device_type) text += `Type: ${d.device_type}\n`;
+    if (d.manufacturer) text += `Manufacturer: ${d.manufacturer}\n`;
+    if (d.first_seen) text += `First Seen: ${d.first_seen}\n`;
+    if (d.last_seen) text += `Last Seen: ${d.last_seen}\n`;
+
+    if (loc && loc.lat) {
+        text += `\n--- System Location ---\n`;
+        text += `Lat: ${loc.lat.toFixed(6)}\n`;
+        text += `Lon: ${loc.lon.toFixed(6)}\n`;
+        text += `Google Maps: https://maps.google.com/?q=${loc.lat.toFixed(6)},${loc.lon.toFixed(6)}\n`;
+    }
+
+    if (d.emitter_lat && d.emitter_lon) {
+        text += `\n--- Estimated Emitter Location ---\n`;
+        text += `Lat: ${d.emitter_lat.toFixed(6)}\n`;
+        text += `Lon: ${d.emitter_lon.toFixed(6)}\n`;
+        if (d.emitter_accuracy) text += `CEP: ${d.emitter_accuracy.toFixed(1)}m\n`;
+        text += `Google Maps: https://maps.google.com/?q=${d.emitter_lat.toFixed(6)},${d.emitter_lon.toFixed(6)}\n`;
+    }
+
+    navigator.clipboard.writeText(text).then(() => {
+        addLogEntry('Alert details copied to clipboard', 'INFO');
+    }).catch(err => {
+        addLogEntry('Failed to copy: ' + err, 'ERROR');
+    });
 }
 
 function closeAlertModal() {
     document.getElementById('targetAlertModal').classList.add('hidden');
     const audio = document.getElementById('alertSound');
     audio.pause();
+    currentAlertData = null;
 }
 
 // ==================== LOGS ====================
@@ -1127,6 +1449,9 @@ function createContextMenu() {
         <div class="context-menu-item" onclick="contextMenuAction('locate')">
             <i>📍</i> Geolocate Device
         </div>
+        <div class="context-menu-item" onclick="contextMenuAction('georeset')">
+            <i>🔄</i> Reset Device Geo
+        </div>
         <div class="context-menu-divider"></div>
         <div class="context-menu-item" onclick="contextMenuAction('target')">
             <i>🎯</i> Add as Target
@@ -1200,6 +1525,9 @@ function contextMenuAction(action) {
         case 'locate':
             requestGeolocation(bdAddress);
             break;
+        case 'georeset':
+            resetDeviceGeo(bdAddress);
+            break;
         case 'target':
             if (device && device.is_target) {
                 removeTarget(bdAddress);
@@ -1266,10 +1594,11 @@ function requestGeolocation(bdAddress) {
         .catch(e => addLogEntry(`Geolocation failed: ${e}`, 'ERROR'));
 }
 
-// Click anywhere to close context menu
+// Click anywhere to close context menus
 document.addEventListener('click', (e) => {
     if (!e.target.closest('.context-menu')) {
         hideContextMenu();
+        hideTargetContextMenu();
     }
 });
 
@@ -1575,34 +1904,138 @@ function resetLayout() {
     document.getElementById('settingLeftPanelWidth').value = 280;
     document.getElementById('settingRightPanelWidth').value = 420;
 
+    // Save to localStorage
+    saveLayoutToLocalStorage();
+
     addLogEntry('Layout reset to default', 'INFO');
 }
 
-// Save layout on panel resize
-const observeResize = () => {
+// ==================== DRAGGABLE PANEL RESIZERS ====================
+
+function saveLayoutToLocalStorage() {
     const leftPanel = document.querySelector('.panel-left');
     const rightPanel = document.querySelector('.panel-right');
 
-    if (leftPanel && rightPanel) {
-        new ResizeObserver(() => {
-            // Debounce save
-            clearTimeout(window.layoutSaveTimeout);
-            window.layoutSaveTimeout = setTimeout(() => {
-                const config = {
-                    left_panel_width: leftPanel.offsetWidth,
-                    right_panel_width: rightPanel.offsetWidth
-                };
-                fetch('/api/config/layout', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(config)
-                }).catch(() => {});
-            }, 500);
-        }).observe(leftPanel);
+    const layout = {
+        leftPanelWidth: leftPanel ? leftPanel.offsetWidth : 280,
+        rightPanelWidth: rightPanel ? rightPanel.offsetWidth : 420,
+        savedAt: new Date().toISOString()
+    };
+
+    localStorage.setItem('bluek9_layout', JSON.stringify(layout));
+
+    // Also update settings inputs if they exist
+    const leftInput = document.getElementById('settingLeftPanelWidth');
+    const rightInput = document.getElementById('settingRightPanelWidth');
+    if (leftInput) leftInput.value = layout.leftPanelWidth;
+    if (rightInput) rightInput.value = layout.rightPanelWidth;
+}
+
+function loadLayoutFromLocalStorage() {
+    const saved = localStorage.getItem('bluek9_layout');
+    if (!saved) return;
+
+    try {
+        const layout = JSON.parse(saved);
+        const leftPanel = document.querySelector('.panel-left');
+        const rightPanel = document.querySelector('.panel-right');
+
+        if (leftPanel && layout.leftPanelWidth) {
+            leftPanel.style.width = layout.leftPanelWidth + 'px';
+        }
+        if (rightPanel && layout.rightPanelWidth) {
+            rightPanel.style.width = layout.rightPanelWidth + 'px';
+        }
+
+        addLogEntry('Layout loaded from local storage', 'INFO');
+    } catch (e) {
+        console.error('Failed to load layout:', e);
     }
-};
+}
+
+function initPanelResizers() {
+    const leftPanel = document.querySelector('.panel-left');
+    const rightPanel = document.querySelector('.panel-right');
+    const leftHandle = document.getElementById('resizeHandleLeft');
+    const rightHandle = document.getElementById('resizeHandleRight');
+
+    if (!leftHandle || !rightHandle) return;
+
+    let isResizing = false;
+    let currentHandle = null;
+    let startX = 0;
+    let startWidth = 0;
+
+    // Left handle - resizes left panel
+    leftHandle.addEventListener('mousedown', (e) => {
+        isResizing = true;
+        currentHandle = 'left';
+        startX = e.clientX;
+        startWidth = leftPanel.offsetWidth;
+        leftHandle.classList.add('dragging');
+        document.body.classList.add('resizing');
+        e.preventDefault();
+    });
+
+    // Right handle - resizes right panel
+    rightHandle.addEventListener('mousedown', (e) => {
+        isResizing = true;
+        currentHandle = 'right';
+        startX = e.clientX;
+        startWidth = rightPanel.offsetWidth;
+        rightHandle.classList.add('dragging');
+        document.body.classList.add('resizing');
+        e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', (e) => {
+        if (!isResizing) return;
+
+        const diff = e.clientX - startX;
+
+        if (currentHandle === 'left') {
+            const newWidth = Math.max(200, Math.min(500, startWidth + diff));
+            leftPanel.style.width = newWidth + 'px';
+        } else if (currentHandle === 'right') {
+            // Right panel: dragging left = bigger, dragging right = smaller
+            const newWidth = Math.max(300, Math.min(700, startWidth - diff));
+            rightPanel.style.width = newWidth + 'px';
+        }
+
+        // Trigger map resize
+        if (window.map) {
+            window.map.resize();
+        }
+    });
+
+    document.addEventListener('mouseup', () => {
+        if (isResizing) {
+            isResizing = false;
+            leftHandle.classList.remove('dragging');
+            rightHandle.classList.remove('dragging');
+            document.body.classList.remove('resizing');
+
+            // Save layout
+            saveLayoutToLocalStorage();
+
+            // Also save to server for cross-device sync
+            const config = {
+                left_panel_width: leftPanel.offsetWidth,
+                right_panel_width: rightPanel.offsetWidth
+            };
+            fetch('/api/config/layout', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(config)
+            }).catch(() => {});
+        }
+    });
+
+    // Load saved layout
+    loadLayoutFromLocalStorage();
+}
 
 // Call after DOM ready
 document.addEventListener('DOMContentLoaded', () => {
-    setTimeout(observeResize, 1000);
+    setTimeout(initPanelResizers, 500);
 });
