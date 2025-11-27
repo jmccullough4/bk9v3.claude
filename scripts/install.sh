@@ -216,17 +216,15 @@ configure_modem() {
 install_python_deps() {
     log_step "Installing Python dependencies..."
 
-    cd "$CLIENT_DIR"
-
     # Create virtual environment
-    python3 -m venv venv
-    source venv/bin/activate
+    python3 -m venv "$CLIENT_DIR/venv"
+    source "$CLIENT_DIR/venv/bin/activate"
 
     # Upgrade pip
     pip install --upgrade pip
 
-    # Install requirements
-    pip install -r requirements.txt
+    # Install requirements (use absolute path)
+    pip install -r "$CLIENT_DIR/requirements.txt"
 
     deactivate
 
