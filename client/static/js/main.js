@@ -109,6 +109,29 @@ function initWebSocket() {
     socket.on('device_info', (info) => {
         showDeviceInfo(info);
     });
+
+    socket.on('name_result', (data) => {
+        handleNameResult(data);
+    });
+}
+
+function handleNameResult(data) {
+    const bdAddress = data.bd_address;
+    const attempt = data.attempt;
+
+    if (data.status === 'found' && data.name) {
+        addLogEntry(`[Attempt ${attempt}] Got name for ${bdAddress}: ${data.name}`, 'INFO');
+        if (devices[bdAddress]) {
+            devices[bdAddress].device_name = data.name;
+            updateSurveyTable();
+        }
+    } else if (data.status === 'no_response') {
+        addLogEntry(`[Attempt ${attempt}] No name response from ${bdAddress}`, 'DEBUG');
+    } else if (data.status === 'timeout') {
+        addLogEntry(`[Attempt ${attempt}] Name query timeout for ${bdAddress}`, 'DEBUG');
+    } else if (data.status === 'error') {
+        addLogEntry(`[Attempt ${attempt}] Name query error for ${bdAddress}: ${data.error}`, 'WARNING');
+    }
 }
 
 /**
@@ -1755,22 +1778,50 @@ function contextMenuAction(action) {
     hideContextMenu();
 }
 
+// Track continuous name retrieval state
+const nameRetrievalActive = {};
+
 function requestDeviceName(bdAddress) {
-    addLogEntry(`Requesting name for ${bdAddress}...`, 'INFO');
-    fetch(`/api/device/${bdAddress}/name`, { method: 'GET' })
+    // Start continuous name retrieval
+    if (nameRetrievalActive[bdAddress]) {
+        // Stop if already running
+        stopNameRetrieval(bdAddress);
+    } else {
+        startNameRetrieval(bdAddress);
+    }
+}
+
+function startNameRetrieval(bdAddress) {
+    addLogEntry(`Starting continuous name query for ${bdAddress}...`, 'INFO');
+    nameRetrievalActive[bdAddress] = true;
+
+    fetch(`/api/device/${bdAddress}/name/start`, { method: 'POST' })
         .then(r => r.json())
         .then(data => {
-            if (data.name) {
-                addLogEntry(`Device name: ${data.name}`, 'INFO');
-                if (devices[bdAddress]) {
-                    devices[bdAddress].device_name = data.name;
-                    updateSurveyTable();
-                }
-            } else {
-                addLogEntry(`Could not get name for ${bdAddress}`, 'WARNING');
+            if (data.status === 'started') {
+                addLogEntry(`Name retrieval started for ${bdAddress}`, 'INFO');
+            } else if (data.status === 'already_running') {
+                addLogEntry(`Name retrieval already running for ${bdAddress}`, 'WARNING');
             }
         })
-        .catch(e => addLogEntry(`Name request failed: ${e}`, 'ERROR'));
+        .catch(e => {
+            addLogEntry(`Failed to start name retrieval: ${e}`, 'ERROR');
+            nameRetrievalActive[bdAddress] = false;
+        });
+}
+
+function stopNameRetrieval(bdAddress) {
+    addLogEntry(`Stopping name query for ${bdAddress}...`, 'INFO');
+
+    fetch(`/api/device/${bdAddress}/name/stop`, { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+            nameRetrievalActive[bdAddress] = false;
+            addLogEntry(`Name retrieval stopped for ${bdAddress}`, 'INFO');
+        })
+        .catch(e => {
+            addLogEntry(`Failed to stop name retrieval: ${e}`, 'ERROR');
+        });
 }
 
 function requestGeolocation(bdAddress) {
