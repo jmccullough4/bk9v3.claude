@@ -187,7 +187,7 @@ configure_gps() {
 # Default settings for gpsd
 START_DAEMON="true"
 GPSD_OPTIONS="-n"
-DEVICES="/dev/ttyUSB0 /dev/ttyACM0"
+DEVICES="/dev/ttyUSB1 /dev/ttyACM0"
 USBAUTO="true"
 EOF
 

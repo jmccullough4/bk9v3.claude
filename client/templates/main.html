@@ -70,6 +70,8 @@
                 <div class="settings-tabs">
                     <button class="settings-tab active" onclick="showSettingsTab('general')">General</button>
                     <button class="settings-tab" onclick="showSettingsTab('gps')">GPS</button>
+                    <button class="settings-tab" onclick="showSettingsTab('sms')">SMS</button>
+                    <button class="settings-tab" onclick="showSettingsTab('radios')">Radios</button>
                     <button class="settings-tab" onclick="showSettingsTab('users')">Users</button>
                     <button class="settings-tab" onclick="showSettingsTab('ui')">UI Layout</button>
                 </div>
@@ -173,6 +175,33 @@
                             </div>
                         </div>
                         <button class="btn btn-secondary" onclick="testGpsSettings()">Test Connection</button>
+                    </div>
+                </div>
+
+                <!-- SMS Settings Tab -->
+                <div id="settingsSms" class="settings-content">
+                    <div class="settings-group">
+                        <h3>SMS Alert Numbers</h3>
+                        <p class="settings-hint">Add phone numbers to receive target alerts via SMS. Requires SIMCOM7600 modem.</p>
+                        <div class="form-row">
+                            <input type="tel" id="settingSmsNumber" class="input" placeholder="+1 555 123 4567" style="flex: 1;">
+                            <button class="btn btn-primary btn-sm" onclick="addSmsNumberFromSettings()">Add</button>
+                        </div>
+                        <div class="sms-list-settings" id="smsListSettings">
+                            <!-- SMS numbers will be populated here -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Radios Settings Tab -->
+                <div id="settingsRadios" class="settings-content">
+                    <div class="settings-group">
+                        <h3>Radio Management</h3>
+                        <p class="settings-hint">Manage Bluetooth and WiFi adapters.</p>
+                        <div class="radio-list-settings" id="radioListSettings">
+                            <!-- Radios will be populated here -->
+                        </div>
+                        <button class="btn btn-secondary mt-10" onclick="refreshRadiosInSettings()">Refresh Radios</button>
                     </div>
                 </div>
 
@@ -449,65 +478,6 @@
                     </div>
                 </div>
 
-                <!-- GPS Configuration -->
-                <div class="panel-section">
-                    <div class="section-header">
-                        <span class="section-icon">&#128225;</span>
-                        <span>GPS SOURCE</span>
-                        <span class="gps-status" id="gpsStatus">--</span>
-                    </div>
-                    <div class="section-content">
-                        <div class="input-group">
-                            <select id="gpsSource" class="input" onchange="updateGpsFields()">
-                                <option value="nmea_tcp">NMEA TCP</option>
-                                <option value="gpsd">GPSD</option>
-                                <option value="serial">Serial</option>
-                            </select>
-                        </div>
-
-                        <!-- NMEA TCP Settings -->
-                        <div id="nmeaSettings" class="gps-settings">
-                            <div class="input-group">
-                                <input type="text" id="nmeaHost" class="input" placeholder="Host" value="127.0.0.1">
-                            </div>
-                            <div class="input-group">
-                                <input type="number" id="nmeaPort" class="input" placeholder="Port" value="10110">
-                            </div>
-                        </div>
-
-                        <!-- GPSD Settings -->
-                        <div id="gpsdSettings" class="gps-settings hidden">
-                            <div class="input-group">
-                                <input type="text" id="gpsdHost" class="input" placeholder="Host" value="127.0.0.1">
-                            </div>
-                            <div class="input-group">
-                                <input type="number" id="gpsdPort" class="input" placeholder="Port" value="2947">
-                            </div>
-                        </div>
-
-                        <!-- Serial Settings -->
-                        <div id="serialSettings" class="gps-settings hidden">
-                            <div class="input-group">
-                                <input type="text" id="serialPort" class="input" placeholder="Device" value="/dev/ttyUSB0">
-                            </div>
-                            <div class="input-group">
-                                <select id="serialBaud" class="input">
-                                    <option value="4800">4800</option>
-                                    <option value="9600" selected>9600</option>
-                                    <option value="19200">19200</option>
-                                    <option value="38400">38400</option>
-                                    <option value="115200">115200</option>
-                                </select>
-                            </div>
-                        </div>
-
-                        <div class="btn-group mt-10">
-                            <button class="btn btn-primary" onclick="saveGpsConfig()">SAVE</button>
-                            <button class="btn btn-secondary" onclick="testGpsConnection()">TEST</button>
-                        </div>
-                    </div>
-                </div>
-
                 <!-- Target Management -->
                 <div class="panel-section">
                     <div class="section-header">
@@ -530,38 +500,6 @@
                     </div>
                 </div>
 
-                <!-- SMS Alerts -->
-                <div class="panel-section">
-                    <div class="section-header">
-                        <span class="section-icon">&#128241;</span>
-                        <span>SMS ALERTS</span>
-                    </div>
-                    <div class="section-content">
-                        <div class="input-group">
-                            <input type="tel" id="smsNumber" class="input" placeholder="Phone number">
-                            <button class="btn btn-sm btn-primary" onclick="addSmsNumber()">+</button>
-                        </div>
-                        <div class="sms-list" id="smsList">
-                            <!-- SMS numbers will be populated here -->
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Radio Management -->
-                <div class="panel-section">
-                    <div class="section-header">
-                        <span class="section-icon">&#128246;</span>
-                        <span>RADIOS</span>
-                    </div>
-                    <div class="section-content">
-                        <div class="radio-list" id="radioList">
-                            <!-- Radios will be populated here -->
-                        </div>
-                        <button class="btn btn-secondary btn-full mt-10" onclick="refreshRadios()">
-                            REFRESH RADIOS
-                        </button>
-                    </div>
-                </div>
             </aside>
 
             <!-- Left Resize Handle -->
@@ -589,6 +527,7 @@
                     </span>
                     <div class="panel-header-controls">
                         <button class="panel-control-btn collapse-btn" onclick="togglePanelCollapse('panelRight')" title="Collapse">&#8722;</button>
+                        <button class="panel-control-btn dock-bottom-btn" onclick="toggleBottomDock()" title="Dock to Bottom">&#8615;</button>
                         <button class="panel-control-btn" onclick="swapPanels()" title="Swap Sides">&#8644;</button>
                     </div>
                 </div>
@@ -661,7 +600,7 @@
 
     <!-- Version Footer -->
     <div class="version-footer">
-        <span class="version-text">BlueK9 v3.0.25</span>
+        <span class="version-text">BlueK9 v3.0.26</span>
         <span class="version-divider">|</span>
         <span class="version-id" id="systemIdFooter">--</span>
     </div>

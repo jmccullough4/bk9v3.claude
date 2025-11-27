@@ -1361,11 +1361,13 @@ function loadSmsNumbers() {
         .then(response => response.json())
         .then(data => {
             updateSmsList(data);
+            updateSmsListSettings(data);
         });
 }
 
 function updateSmsList(numbers) {
     const list = document.getElementById('smsList');
+    if (!list) return;
     list.innerHTML = '';
 
     numbers.forEach(num => {
@@ -1381,8 +1383,33 @@ function updateSmsList(numbers) {
     });
 }
 
+function updateSmsListSettings(numbers) {
+    const list = document.getElementById('smsListSettings');
+    if (!list) return;
+    list.innerHTML = '';
+
+    if (numbers.length === 0) {
+        list.innerHTML = '<div class="settings-hint">No SMS numbers configured</div>';
+        return;
+    }
+
+    numbers.forEach(num => {
+        const item = document.createElement('div');
+        item.className = 'sms-item';
+        item.innerHTML = `
+            <div class="item-info">
+                <span class="item-primary">${num.phone_number}</span>
+            </div>
+            <button class="item-delete" onclick="deleteSmsNumber(${num.id})">&times;</button>
+        `;
+        list.appendChild(item);
+    });
+}
+
 function addSmsNumber() {
-    const phone = document.getElementById('smsNumber').value.trim();
+    const input = document.getElementById('smsNumber');
+    if (!input) return;
+    const phone = input.value.trim();
     if (!phone) return;
 
     fetch('/api/sms/numbers', {
@@ -1396,7 +1423,33 @@ function addSmsNumber() {
                 addLogEntry(data.error, 'ERROR');
             } else {
                 loadSmsNumbers();
-                document.getElementById('smsNumber').value = '';
+                input.value = '';
+                addLogEntry(`SMS number added: ${phone}`, 'INFO');
+            }
+        })
+        .catch(error => {
+            addLogEntry('Failed to add SMS number: ' + error, 'ERROR');
+        });
+}
+
+function addSmsNumberFromSettings() {
+    const input = document.getElementById('settingSmsNumber');
+    if (!input) return;
+    const phone = input.value.trim();
+    if (!phone) return;
+
+    fetch('/api/sms/numbers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone_number: phone })
+    })
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) {
+                addLogEntry(data.error, 'ERROR');
+            } else {
+                loadSmsNumbers();
+                input.value = '';
                 addLogEntry(`SMS number added: ${phone}`, 'INFO');
             }
         })
@@ -1424,11 +1477,13 @@ function loadRadios() {
         .then(response => response.json())
         .then(data => {
             updateRadioList(data);
+            updateRadioListSettings(data);
         });
 }
 
 function updateRadioList(radios) {
     const list = document.getElementById('radioList');
+    if (!list) return;
     list.innerHTML = '';
 
     // Bluetooth radios
@@ -1482,6 +1537,56 @@ function toggleRadio(iface, type, currentStatus) {
 }
 
 function refreshRadios() {
+    loadRadios();
+    addLogEntry('Radio list refreshed', 'INFO');
+}
+
+function updateRadioListSettings(radios) {
+    const list = document.getElementById('radioListSettings');
+    if (!list) return;
+    list.innerHTML = '';
+
+    if (radios.bluetooth.length === 0 && radios.wifi.length === 0) {
+        list.innerHTML = '<div class="settings-hint">No radios detected</div>';
+        return;
+    }
+
+    // Bluetooth radios
+    radios.bluetooth.forEach(radio => {
+        const item = document.createElement('div');
+        item.className = `radio-item ${radio.status === 'up' ? '' : 'inactive'}`;
+        item.innerHTML = `
+            <div class="item-info">
+                <span class="item-primary">${radio.interface} (Bluetooth)</span>
+                <span class="item-secondary">${radio.bd_address}</span>
+                <span class="item-status ${radio.status === 'up' ? 'status-up' : 'status-down'}">${radio.status.toUpperCase()}</span>
+            </div>
+            <button class="btn btn-sm ${radio.status === 'up' ? 'btn-danger' : 'btn-success'}" onclick="toggleRadio('${radio.interface}', 'bluetooth', '${radio.status}')">
+                ${radio.status === 'up' ? 'Disable' : 'Enable'}
+            </button>
+        `;
+        list.appendChild(item);
+    });
+
+    // WiFi radios
+    radios.wifi.forEach(radio => {
+        const item = document.createElement('div');
+        item.className = `radio-item ${radio.status === 'up' ? '' : 'inactive'}`;
+        item.innerHTML = `
+            <div class="item-info">
+                <span class="item-primary">${radio.interface} (WiFi)</span>
+                <span class="item-secondary">${radio.mac_address}</span>
+                <span class="item-status ${radio.status === 'up' ? 'status-up' : 'status-down'}">${radio.status.toUpperCase()}</span>
+            </div>
+            <button class="btn btn-sm ${radio.status === 'up' ? 'btn-danger' : 'btn-success'}" onclick="toggleRadio('${radio.interface}', 'wifi', '${radio.status}')">
+                ${radio.status === 'up' ? 'Disable' : 'Enable'}
+            </button>
+        `;
+        list.appendChild(item);
+    });
+}
+
+function refreshRadiosInSettings() {
     loadRadios();
     addLogEntry('Radio list refreshed', 'INFO');
 }
@@ -2188,6 +2293,8 @@ document.addEventListener('click', (e) => {
 function openSettingsModal() {
     loadSettings();
     loadUsers();
+    loadSmsNumbers();
+    loadRadios();
     document.getElementById('settingsModal').classList.remove('hidden');
 }
 
@@ -2775,7 +2882,8 @@ let panelLayout = {
     leftPanel: 'left',
     rightPanel: 'right',
     leftCollapsed: false,
-    rightCollapsed: false
+    rightCollapsed: false,
+    rightDock: 'right' // 'right' or 'bottom'
 };
 
 /**
@@ -3030,13 +3138,73 @@ function savePanelLayout() {
 }
 
 /**
+ * Toggle right panel between right side and bottom dock
+ */
+function toggleBottomDock() {
+    const rightPanel = document.getElementById('panelRight');
+    const mainContent = document.querySelector('.main-content');
+    const resizeHandle = document.getElementById('resizeHandleRight');
+
+    if (!rightPanel || !mainContent) return;
+
+    if (panelLayout.rightDock === 'right') {
+        // Move to bottom
+        panelLayout.rightDock = 'bottom';
+        rightPanel.classList.add('docked-bottom');
+        rightPanel.classList.remove('panel-right');
+        if (resizeHandle) resizeHandle.classList.add('hidden');
+
+        // Move panel to after main-content
+        const appContainer = document.querySelector('.app-container');
+        if (appContainer) {
+            appContainer.appendChild(rightPanel);
+        }
+
+        // Reset width and set height
+        rightPanel.style.width = '100%';
+        rightPanel.style.height = '300px';
+
+        addLogEntry('Survey panel docked to bottom', 'INFO');
+    } else {
+        // Move to right
+        panelLayout.rightDock = 'right';
+        rightPanel.classList.remove('docked-bottom');
+        rightPanel.classList.add('panel-right');
+        if (resizeHandle) resizeHandle.classList.remove('hidden');
+
+        // Move panel back into main-content
+        mainContent.appendChild(rightPanel);
+
+        // Reset height and set width
+        rightPanel.style.width = '420px';
+        rightPanel.style.height = '';
+
+        addLogEntry('Survey panel docked to right', 'INFO');
+    }
+
+    // Update button icon
+    const dockBtn = rightPanel.querySelector('.dock-bottom-btn');
+    if (dockBtn) {
+        dockBtn.innerHTML = panelLayout.rightDock === 'right' ? '&#8615;' : '&#8614;';
+        dockBtn.title = panelLayout.rightDock === 'right' ? 'Dock to Bottom' : 'Dock to Right';
+    }
+
+    // Resize map
+    if (window.map) {
+        setTimeout(() => window.map.resize(), 100);
+    }
+
+    savePanelLayout();
+}
+
+/**
  * Load panel layout from local storage
  */
 function loadPanelLayout() {
     const saved = localStorage.getItem('bluek9_panel_layout');
     if (saved) {
         try {
-            panelLayout = JSON.parse(saved);
+            panelLayout = { ...panelLayout, ...JSON.parse(saved) };
 
             const leftPanel = document.getElementById('panelLeft');
             const rightPanel = document.getElementById('panelRight');
@@ -3055,6 +3223,13 @@ function loadPanelLayout() {
 
             if (panelLayout.leftPanel === 'right') {
                 swapPanels();
+            }
+
+            // Apply bottom dock if saved
+            if (panelLayout.rightDock === 'bottom') {
+                // Need to toggle from default 'right' to 'bottom'
+                panelLayout.rightDock = 'right'; // Reset so toggle works
+                toggleBottomDock();
             }
         } catch (e) {
             console.error('Failed to load panel layout:', e);
