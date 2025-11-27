@@ -100,6 +100,28 @@
                             <input type="number" id="settingSmsInterval" min="30" max="600" value="60">
                         </div>
                     </div>
+                    <div class="settings-group">
+                        <h3>Display Settings</h3>
+                        <div class="form-row">
+                            <label>Timezone:</label>
+                            <select id="settingTimezone">
+                                <option value="UTC">UTC</option>
+                                <option value="America/New_York">Eastern (ET)</option>
+                                <option value="America/Chicago">Central (CT)</option>
+                                <option value="America/Denver">Mountain (MT)</option>
+                                <option value="America/Los_Angeles">Pacific (PT)</option>
+                                <option value="America/Anchorage">Alaska (AKT)</option>
+                                <option value="Pacific/Honolulu">Hawaii (HST)</option>
+                                <option value="Europe/London">London (GMT/BST)</option>
+                                <option value="Europe/Paris">Central Europe (CET)</option>
+                                <option value="Europe/Berlin">Berlin (CET)</option>
+                                <option value="Asia/Tokyo">Tokyo (JST)</option>
+                                <option value="Asia/Shanghai">China (CST)</option>
+                                <option value="Asia/Dubai">Dubai (GST)</option>
+                                <option value="Australia/Sydney">Sydney (AEST)</option>
+                            </select>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- GPS Settings Tab -->
@@ -291,7 +313,16 @@
         <!-- Main Content -->
         <div class="main-content">
             <!-- Left Panel - Controls -->
-            <aside class="panel panel-left">
+            <aside class="panel panel-left" id="panelLeft" data-dock="left">
+                <div class="panel-header" onmousedown="startPanelDrag(event, 'panelLeft')">
+                    <span class="panel-header-title">
+                        <span>&#9776;</span> CONTROLS
+                    </span>
+                    <div class="panel-header-controls">
+                        <button class="panel-control-btn collapse-btn" onclick="togglePanelCollapse('panelLeft')" title="Collapse">&#8722;</button>
+                        <button class="panel-control-btn" onclick="swapPanels()" title="Swap Sides">&#8644;</button>
+                    </div>
+                </div>
                 <!-- Scan Controls -->
                 <div class="panel-section">
                     <div class="section-header">
@@ -501,7 +532,16 @@
             <div class="resize-handle resize-handle-right" id="resizeHandleRight"></div>
 
             <!-- Right Panel - Survey & Logs -->
-            <aside class="panel panel-right">
+            <aside class="panel panel-right" id="panelRight" data-dock="right">
+                <div class="panel-header" onmousedown="startPanelDrag(event, 'panelRight')">
+                    <span class="panel-header-title">
+                        <span>&#9776;</span> SURVEY & DATA
+                    </span>
+                    <div class="panel-header-controls">
+                        <button class="panel-control-btn collapse-btn" onclick="togglePanelCollapse('panelRight')" title="Collapse">&#8722;</button>
+                        <button class="panel-control-btn" onclick="swapPanels()" title="Swap Sides">&#8644;</button>
+                    </div>
+                </div>
                 <!-- Survey Table -->
                 <div class="panel-section survey-section" id="surveySection">
                     <div class="section-header">
@@ -567,7 +607,7 @@
 
     <!-- Version Footer -->
     <div class="version-footer">
-        <span class="version-text">BlueK9 v3.0.18</span>
+        <span class="version-text">BlueK9 v3.0.19</span>
         <span class="version-divider">|</span>
         <span class="version-id" id="systemIdFooter">--</span>
     </div>

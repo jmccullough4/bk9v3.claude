@@ -18,6 +18,7 @@ let scanning = false;
 let deviceTypeChart = null;
 let currentMapStyle = 'dark';
 let breadcrumbMarkers = [];
+let currentTimezone = 'UTC';
 
 // Map styles
 const MAP_STYLES = {
@@ -1716,7 +1717,34 @@ function addLogEntry(message, level = 'INFO', scroll = true) {
 
 function updateTime() {
     const now = new Date();
-    document.getElementById('sysTime').textContent = now.toLocaleTimeString();
+    const options = {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+        timeZone: currentTimezone
+    };
+    try {
+        document.getElementById('sysTime').textContent = now.toLocaleTimeString('en-US', options);
+    } catch (e) {
+        // Fallback if timezone is invalid
+        document.getElementById('sysTime').textContent = now.toLocaleTimeString();
+    }
+}
+
+function formatTimeInTimezone(date) {
+    const options = {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+        timeZone: currentTimezone
+    };
+    try {
+        return new Date(date).toLocaleTimeString('en-US', options);
+    } catch (e) {
+        return new Date(date).toLocaleTimeString();
+    }
 }
 
 // ==================== HARDWARE MONITORING ====================
@@ -2060,6 +2088,10 @@ function loadSettings() {
             document.getElementById('settingScanInterval').value = data.scan_interval || 2;
             document.getElementById('settingSmsInterval').value = data.sms_alert_interval || 60;
 
+            // Display settings
+            document.getElementById('settingTimezone').value = data.timezone || 'UTC';
+            currentTimezone = data.timezone || 'UTC';
+
             // GPS settings
             document.getElementById('settingGpsSource').value = data.gps_source || 'nmea_tcp';
             document.getElementById('settingNmeaHost').value = data.nmea_tcp_host || '127.0.0.1';
@@ -2084,6 +2116,7 @@ function saveAllSettings() {
         system_name: document.getElementById('settingSystemName').value,
         scan_interval: parseInt(document.getElementById('settingScanInterval').value),
         sms_alert_interval: parseInt(document.getElementById('settingSmsInterval').value),
+        timezone: document.getElementById('settingTimezone').value,
         gps_source: document.getElementById('settingGpsSource').value,
         nmea_tcp_host: document.getElementById('settingNmeaHost').value,
         nmea_tcp_port: parseInt(document.getElementById('settingNmeaPort').value),
@@ -2094,6 +2127,9 @@ function saveAllSettings() {
         left_panel_width: parseInt(document.getElementById('settingLeftPanelWidth').value),
         right_panel_width: parseInt(document.getElementById('settingRightPanelWidth').value)
     };
+
+    // Update global timezone
+    currentTimezone = settings.timezone;
 
     fetch('/api/settings', {
         method: 'POST',
@@ -2587,5 +2623,300 @@ document.addEventListener('DOMContentLoaded', () => {
     setTimeout(() => {
         initPanelResizers();
         initVerticalResizers();
+        loadPanelLayout();
     }, 500);
 });
+
+// ==================== DOCKABLE PANELS ====================
+
+let panelDragState = null;
+let panelLayout = {
+    leftPanel: 'left',
+    rightPanel: 'right',
+    leftCollapsed: false,
+    rightCollapsed: false
+};
+
+/**
+ * Start dragging a panel
+ */
+function startPanelDrag(event, panelId) {
+    // Only start drag on left mouse button
+    if (event.button !== 0) return;
+
+    const panel = document.getElementById(panelId);
+    if (!panel) return;
+
+    // Prevent text selection during drag
+    event.preventDefault();
+
+    panelDragState = {
+        panelId: panelId,
+        panel: panel,
+        startX: event.clientX,
+        startY: event.clientY,
+        isDragging: false
+    };
+
+    document.addEventListener('mousemove', handlePanelDrag);
+    document.addEventListener('mouseup', endPanelDrag);
+}
+
+/**
+ * Handle panel drag movement
+ */
+function handlePanelDrag(event) {
+    if (!panelDragState) return;
+
+    const dx = Math.abs(event.clientX - panelDragState.startX);
+    const dy = Math.abs(event.clientY - panelDragState.startY);
+
+    // Start actual drag after moving 10px
+    if (!panelDragState.isDragging && (dx > 10 || dy > 10)) {
+        panelDragState.isDragging = true;
+        panelDragState.panel.classList.add('dragging');
+        showDockZones();
+    }
+
+    if (panelDragState.isDragging) {
+        highlightDockZone(event.clientX, event.clientY);
+    }
+}
+
+/**
+ * End panel drag
+ */
+function endPanelDrag(event) {
+    if (!panelDragState) return;
+
+    document.removeEventListener('mousemove', handlePanelDrag);
+    document.removeEventListener('mouseup', endPanelDrag);
+
+    if (panelDragState.isDragging) {
+        panelDragState.panel.classList.remove('dragging');
+        hideDockZones();
+
+        // Check if we should dock to a new position
+        const dockZone = getDockZoneAtPosition(event.clientX, event.clientY);
+        if (dockZone) {
+            dockPanelTo(panelDragState.panelId, dockZone);
+        }
+    }
+
+    panelDragState = null;
+}
+
+/**
+ * Show dock zone indicators
+ */
+function showDockZones() {
+    let indicator = document.getElementById('dockIndicator');
+    if (!indicator) {
+        indicator = document.createElement('div');
+        indicator.id = 'dockIndicator';
+        indicator.className = 'dock-indicator';
+        indicator.innerHTML = `
+            <div class="dock-highlight dock-left" data-zone="left"></div>
+            <div class="dock-highlight dock-right" data-zone="right"></div>
+        `;
+        document.body.appendChild(indicator);
+    }
+    indicator.classList.add('active');
+
+    const mainContent = document.querySelector('.main-content');
+    if (mainContent) {
+        const rect = mainContent.getBoundingClientRect();
+        const leftHighlight = indicator.querySelector('.dock-left');
+        const rightHighlight = indicator.querySelector('.dock-right');
+
+        leftHighlight.style.cssText = `
+            left: ${rect.left}px;
+            top: ${rect.top}px;
+            width: 100px;
+            height: ${rect.height}px;
+            opacity: 0;
+        `;
+        rightHighlight.style.cssText = `
+            left: ${rect.right - 100}px;
+            top: ${rect.top}px;
+            width: 100px;
+            height: ${rect.height}px;
+            opacity: 0;
+        `;
+    }
+}
+
+/**
+ * Hide dock zone indicators
+ */
+function hideDockZones() {
+    const indicator = document.getElementById('dockIndicator');
+    if (indicator) {
+        indicator.classList.remove('active');
+    }
+}
+
+/**
+ * Highlight the dock zone at cursor position
+ */
+function highlightDockZone(x, y) {
+    const indicator = document.getElementById('dockIndicator');
+    if (!indicator) return;
+
+    const leftHighlight = indicator.querySelector('.dock-left');
+    const rightHighlight = indicator.querySelector('.dock-right');
+
+    const mainContent = document.querySelector('.main-content');
+    if (!mainContent) return;
+
+    const rect = mainContent.getBoundingClientRect();
+
+    if (x < rect.left + 150) {
+        leftHighlight.style.opacity = '1';
+        rightHighlight.style.opacity = '0';
+    } else if (x > rect.right - 150) {
+        leftHighlight.style.opacity = '0';
+        rightHighlight.style.opacity = '1';
+    } else {
+        leftHighlight.style.opacity = '0';
+        rightHighlight.style.opacity = '0';
+    }
+}
+
+/**
+ * Get dock zone at cursor position
+ */
+function getDockZoneAtPosition(x, y) {
+    const mainContent = document.querySelector('.main-content');
+    if (!mainContent) return null;
+
+    const rect = mainContent.getBoundingClientRect();
+
+    if (x < rect.left + 150) return 'left';
+    if (x > rect.right - 150) return 'right';
+    return null;
+}
+
+/**
+ * Dock a panel to a new position
+ */
+function dockPanelTo(panelId, position) {
+    const panel = document.getElementById(panelId);
+    if (!panel) return;
+
+    const leftPanel = document.getElementById('panelLeft');
+    const rightPanel = document.getElementById('panelRight');
+
+    const panelIsLeft = panel === leftPanel;
+    const targetIsLeft = position === 'left';
+
+    if ((panelIsLeft && !targetIsLeft) || (!panelIsLeft && targetIsLeft)) {
+        swapPanels();
+    }
+
+    savePanelLayout();
+}
+
+/**
+ * Swap left and right panels
+ */
+function swapPanels() {
+    const leftPanel = document.getElementById('panelLeft');
+    const rightPanel = document.getElementById('panelRight');
+    const mainContent = document.querySelector('.main-content');
+    const leftHandle = document.getElementById('resizeHandleLeft');
+    const rightHandle = document.getElementById('resizeHandleRight');
+
+    if (!leftPanel || !rightPanel || !mainContent) return;
+
+    // Toggle classes
+    leftPanel.classList.toggle('panel-left');
+    leftPanel.classList.toggle('panel-right');
+    rightPanel.classList.toggle('panel-left');
+    rightPanel.classList.toggle('panel-right');
+
+    // Swap widths
+    const leftWidth = leftPanel.style.width;
+    const rightWidth = rightPanel.style.width;
+    leftPanel.style.width = rightWidth || '420px';
+    rightPanel.style.width = leftWidth || '280px';
+
+    // Reorder elements in DOM
+    if (leftPanel.classList.contains('panel-right')) {
+        mainContent.insertBefore(rightPanel, leftHandle);
+        mainContent.appendChild(leftPanel);
+    } else {
+        mainContent.insertBefore(leftPanel, leftHandle);
+        mainContent.appendChild(rightPanel);
+    }
+
+    // Update layout state
+    panelLayout.leftPanel = leftPanel.classList.contains('panel-left') ? 'left' : 'right';
+    panelLayout.rightPanel = rightPanel.classList.contains('panel-left') ? 'left' : 'right';
+
+    savePanelLayout();
+    addLogEntry('Panel layout swapped', 'INFO');
+}
+
+/**
+ * Toggle panel collapse state
+ */
+function togglePanelCollapse(panelId) {
+    const panel = document.getElementById(panelId);
+    if (!panel) return;
+
+    panel.classList.toggle('collapsed');
+
+    const btn = panel.querySelector('.collapse-btn');
+    if (btn) {
+        btn.innerHTML = panel.classList.contains('collapsed') ? '+' : '&#8722;';
+    }
+
+    if (panelId === 'panelLeft') {
+        panelLayout.leftCollapsed = panel.classList.contains('collapsed');
+    } else if (panelId === 'panelRight') {
+        panelLayout.rightCollapsed = panel.classList.contains('collapsed');
+    }
+
+    savePanelLayout();
+}
+
+/**
+ * Save panel layout to local storage
+ */
+function savePanelLayout() {
+    localStorage.setItem('bluek9_panel_layout', JSON.stringify(panelLayout));
+}
+
+/**
+ * Load panel layout from local storage
+ */
+function loadPanelLayout() {
+    const saved = localStorage.getItem('bluek9_panel_layout');
+    if (saved) {
+        try {
+            panelLayout = JSON.parse(saved);
+
+            const leftPanel = document.getElementById('panelLeft');
+            const rightPanel = document.getElementById('panelRight');
+
+            if (panelLayout.leftCollapsed && leftPanel) {
+                leftPanel.classList.add('collapsed');
+                const btn = leftPanel.querySelector('.collapse-btn');
+                if (btn) btn.innerHTML = '+';
+            }
+
+            if (panelLayout.rightCollapsed && rightPanel) {
+                rightPanel.classList.add('collapsed');
+                const btn = rightPanel.querySelector('.collapse-btn');
+                if (btn) btn.innerHTML = '+';
+            }
+
+            if (panelLayout.leftPanel === 'right') {
+                swapPanels();
+            }
+        } catch (e) {
+            console.error('Failed to load panel layout:', e);
+        }
+    }
+}
