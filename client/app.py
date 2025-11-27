@@ -1748,45 +1748,102 @@ def stimulate_bluetooth_classic(interface='hci0'):
 
 def stimulate_ble_devices(interface='hci0'):
     """
-    Stimulate BLE devices to respond.
-    Uses active scanning with scan requests.
+    Stimulate BLE devices to respond using active LE scanning.
+    Uses hcitool lescan which sends SCAN_REQ to get SCAN_RSP from devices.
     """
     try:
-        add_log("Stimulating BLE devices...", "INFO")
+        add_log("Stimulating BLE devices (active LE scan)...", "INFO")
         devices_found = []
+        seen_addresses = set()
 
-        # Enable LE scan with active mode (sends SCAN_REQ)
+        # Ensure interface is up
         subprocess.run(['hciconfig', interface, 'up'], capture_output=True)
+        subprocess.run(['hciconfig', interface, 'noscan'], capture_output=True)
 
-        # Set scan parameters for active scanning
-        # LE_Set_Scan_Parameters: active scan, 100ms interval, 100ms window
-        subprocess.run([
-            'hcitool', '-i', interface, 'cmd', '0x08', '0x000B',
-            '01',  # Active scanning
-            '60', '00',  # Scan interval (96 * 0.625ms = 60ms)
-            '30', '00',  # Scan window (48 * 0.625ms = 30ms)
-            '00',  # Public address
-            '00'   # Accept all
-        ], capture_output=True)
+        # Method 1: Use hcitool lescan with timeout
+        # lescan performs active scanning which solicits SCAN_RSP from devices
+        try:
+            result = subprocess.run(
+                ['timeout', '8', 'hcitool', '-i', interface, 'lescan'],
+                capture_output=True,
+                text=True
+            )
 
-        # Run scan
-        result = subprocess.run(
-            ['timeout', '10', 'btmgmt', '-i', interface, 'find', '-l', '-b'],
-            capture_output=True,
-            text=True
-        )
+            # Parse lescan output: "AA:BB:CC:DD:EE:FF DeviceName" or "AA:BB:CC:DD:EE:FF (unknown)"
+            for line in result.stdout.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
 
-        pattern = r'dev_found:\s+([0-9A-Fa-f:]{17})\s+type\s+(\w+)\s+rssi\s+(-?\d+)'
-        for match in re.finditer(pattern, result.stdout):
-            bd_addr = match.group(1).upper()
-            rssi = int(match.group(3))
-            devices_found.append({
-                'bd_address': bd_addr,
-                'device_name': 'BLE Device',
-                'device_type': 'ble',
-                'rssi': rssi,
-                'manufacturer': get_manufacturer(bd_addr)
-            })
+                # Match BD address at start of line
+                match = re.match(r'([0-9A-Fa-f:]{17})\s*(.*)', line)
+                if match:
+                    bd_addr = match.group(1).upper()
+                    name_part = match.group(2).strip()
+
+                    if bd_addr in seen_addresses:
+                        continue
+                    seen_addresses.add(bd_addr)
+
+                    # Determine name
+                    if name_part and name_part != '(unknown)':
+                        device_name = name_part
+                    else:
+                        device_name = 'BLE Device'
+
+                    devices_found.append({
+                        'bd_address': bd_addr,
+                        'device_name': device_name,
+                        'device_type': 'ble',
+                        'rssi': None,  # lescan doesn't provide RSSI
+                        'manufacturer': get_manufacturer(bd_addr)
+                    })
+
+        except Exception as e:
+            add_log(f"hcitool lescan failed: {e}", "WARNING")
+
+        # Method 2: Also try bluetoothctl for additional devices
+        if len(devices_found) < 3:
+            try:
+                # Use bluetoothctl scan for 6 seconds
+                proc = subprocess.Popen(
+                    ['bluetoothctl'],
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True
+                )
+                commands = "scan on\n"
+                time.sleep(0.5)
+                proc.stdin.write(commands)
+                proc.stdin.flush()
+                time.sleep(6)
+                proc.stdin.write("scan off\nexit\n")
+                proc.stdin.flush()
+                stdout, _ = proc.communicate(timeout=3)
+
+                # Parse bluetoothctl output for NEW devices
+                # Format: [NEW] Device AA:BB:CC:DD:EE:FF DeviceName
+                for line in stdout.splitlines():
+                    match = re.search(r'\[NEW\]\s+Device\s+([0-9A-Fa-f:]{17})\s*(.*)', line)
+                    if match:
+                        bd_addr = match.group(1).upper()
+                        name_part = match.group(2).strip()
+
+                        if bd_addr in seen_addresses:
+                            continue
+                        seen_addresses.add(bd_addr)
+
+                        devices_found.append({
+                            'bd_address': bd_addr,
+                            'device_name': name_part if name_part else 'BLE Device',
+                            'device_type': 'ble',
+                            'rssi': None,
+                            'manufacturer': get_manufacturer(bd_addr)
+                        })
+
+            except Exception as e:
+                add_log(f"bluetoothctl scan failed: {e}", "WARNING")
 
         add_log(f"BLE stimulation found {len(devices_found)} devices", "INFO")
         return devices_found
@@ -1819,9 +1876,7 @@ def check_target_and_alert(bd_address, source='scan'):
 def get_device_info(bd_address, interface='hci0'):
     """Get detailed info about a specific device. Runs hcitool info for up to 10 seconds."""
     info = {'bd_address': bd_address}
-
-    # Check if target and alert
-    check_target_and_alert(bd_address, source='get_info')
+    device_responded = False
 
     try:
         # Run hcitool info with 10 second timeout
@@ -1838,18 +1893,26 @@ def get_device_info(bd_address, interface='hci0'):
         name_match = re.search(r'Device Name:\s*(.+)', result.stdout)
         if name_match:
             info['device_name'] = name_match.group(1).strip()
+            device_responded = True
 
         # Parse device class if available
         class_match = re.search(r'Class:\s*(0x[0-9A-Fa-f]+)', result.stdout)
         if class_match:
             info['device_class'] = class_match.group(1)
+            device_responded = True
 
         # Parse manufacturer
         mfr_match = re.search(r'Manufacturer:\s*(.+)', result.stdout)
         if mfr_match:
             info['manufacturer_info'] = mfr_match.group(1).strip()
+            device_responded = True
 
         add_log(f"hcitool info complete for {bd_address}", "INFO")
+
+        # Only alert on target if device actually responded with data
+        if device_responded:
+            check_target_and_alert(bd_address, source='get_info')
+
     except subprocess.TimeoutExpired:
         add_log(f"hcitool info timeout for {bd_address} (10s)", "WARNING")
         info['raw_info'] = "Timeout after 10 seconds - device not responding"
@@ -1871,9 +1934,7 @@ def continuous_name_retrieval(bd_address, interface='hci0'):
     add_log(f"Starting continuous name retrieval for {bd_address}", "INFO")
     name_retrieval_active[bd_address] = True
     attempt = 0
-
-    # Check if target on first attempt
-    check_target_and_alert(bd_address, source='get_name')
+    target_alerted = False  # Only alert once per session
 
     while name_retrieval_active.get(bd_address, False):
         attempt += 1
@@ -1888,6 +1949,11 @@ def continuous_name_retrieval(bd_address, interface='hci0'):
             if result.stdout.strip():
                 name = result.stdout.strip()
                 add_log(f"Got name for {bd_address}: {name} (attempt {attempt})", "INFO")
+
+                # Device actually responded - check if target (only once)
+                if not target_alerted:
+                    target_alerted = True
+                    check_target_and_alert(bd_address, source='get_name')
 
                 # Update device in memory
                 if bd_address in devices:
