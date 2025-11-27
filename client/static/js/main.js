@@ -409,6 +409,13 @@ function addCepCircle(device) {
     const bdAddr = device.bd_address;
     const radius = device.emitter_accuracy || 50; // meters
 
+    // Validate emitter location
+    if (!device.emitter_lat || !device.emitter_lon ||
+        device.emitter_lat === 0 || device.emitter_lon === 0 ||
+        isNaN(device.emitter_lat) || isNaN(device.emitter_lon)) {
+        return; // Don't add CEP if no valid location
+    }
+
     // Create circle GeoJSON
     const circle = createGeoJSONCircle(
         [device.emitter_lon, device.emitter_lat],
@@ -2044,6 +2051,12 @@ function loadSettings() {
             // General settings
             document.getElementById('settingSystemId').value = data.system_id || 'BK9-001';
             document.getElementById('settingSystemName').value = data.system_name || 'BlueK9 Unit 1';
+
+            // Update version footer with system ID
+            const footerIdEl = document.getElementById('systemIdFooter');
+            if (footerIdEl) {
+                footerIdEl.textContent = data.system_id || 'BK9-001';
+            }
             document.getElementById('settingScanInterval').value = data.scan_interval || 2;
             document.getElementById('settingSmsInterval').value = data.sms_alert_interval || 60;
 
@@ -2092,6 +2105,11 @@ function saveAllSettings() {
             if (data.status === 'saved') {
                 addLogEntry('Settings saved successfully', 'INFO');
                 applyLayoutSettings(settings);
+                // Update version footer with new system ID
+                const footerIdEl = document.getElementById('systemIdFooter');
+                if (footerIdEl && settings.system_id) {
+                    footerIdEl.textContent = settings.system_id;
+                }
                 closeSettingsModal();
             } else {
                 addLogEntry('Failed to save settings', 'ERROR');

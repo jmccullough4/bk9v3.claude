@@ -1710,3 +1710,36 @@ body.resizing-vertical * {
 .hcitool-output.hcitool-empty {
     color: var(--accent-warning);
 }
+
+/* ==================== VERSION FOOTER ==================== */
+
+.version-footer {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 24px;
+    background: var(--bg-secondary);
+    border-top: 1px solid var(--border-color);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-muted);
+    z-index: 1000;
+}
+
+.version-text {
+    color: var(--accent-primary);
+    letter-spacing: 1px;
+}
+
+.version-divider {
+    color: var(--border-color);
+}
+
+.version-id {
+    color: var(--text-secondary);
+}
