@@ -1211,21 +1211,30 @@ def get_manufacturer(bd_address):
 
 
 def get_device_type(bd_address):
-    """Determine if device is Classic or BLE using multiple methods."""
+    """
+    Determine if device is Classic or BLE using DEFINITIVE indicators only.
+    Returns 'unknown' if we cannot be certain - never guess.
+    False positives are unacceptable.
+    """
     bd_address = bd_address.upper()
 
-    # Method 1: Check address type pattern
-    # BLE random addresses have first nibble C-F (MSB bits 11xxxxxx)
-    first_byte = bd_address[:2]
-    try:
-        first_nibble = int(first_byte[0], 16)
-        # Random address check (first two bits = 11 means >= 0xC)
-        if first_nibble >= 0xC:
-            return 'ble'
-    except ValueError:
-        pass
+    # Method 1: Check btmon cache first - most reliable source from actual HCI events
+    btmon_info = btmon_device_cache.get(bd_address)
+    if btmon_info:
+        # If btmon saw it as BLE or Classic, trust that
+        if btmon_info.get('device_type') in ['ble', 'classic']:
+            return btmon_info['device_type']
 
-    # Method 2: Try bluetoothctl info
+        # These address types from btmon are DEFINITIVE BLE indicators
+        addr_type = btmon_info.get('addr_type', '').lower()
+        if addr_type in ['resolvable', 'static', 'non-resolvable', 'random']:
+            return 'ble'
+
+        # If btmon saw advertising data, it's BLE
+        if btmon_info.get('adv_type'):
+            return 'ble'
+
+    # Method 2: Try bluetoothctl info for DEFINITIVE indicators only
     try:
         result = subprocess.run(
             ['bluetoothctl', 'info', bd_address],
@@ -1235,45 +1244,49 @@ def get_device_type(bd_address):
         )
         output = result.stdout.lower()
 
-        # LE indicators
+        # DEFINITIVE BLE indicators
         if 'addresstype: random' in output:
             return 'ble'
-        if 'le only' in output or 'advertising' in output:
+        if 'le only' in output:
             return 'ble'
 
-        # Classic indicators - Class of Device is definitive for Classic
-        if 'class:' in output and '0x' in output:
-            return 'classic'
-        if 'icon: phone' in output or 'icon: audio' in output or 'icon: computer' in output:
+        # DEFINITIVE Classic indicator - Device Class is ONLY present for Classic BR/EDR
+        if 'class: 0x' in output:
             return 'classic'
 
-        # Check for specific UUIDs
-        if 'uuid: generic access' in output or 'uuid: generic attribute' in output:
-            return 'ble'
-        if 'uuid: handsfree' in output or 'uuid: a2dp' in output or 'uuid: hfp' in output:
-            return 'classic'
-        if 'uuid: headset' in output or 'uuid: audio' in output:
-            return 'classic'
+        # Classic-only service UUIDs (BR/EDR profiles)
+        classic_uuids = ['handsfree', 'a2dp', 'avrcp', 'hfp', 'headset',
+                        'serial port', 'obex', 'pbap', 'map ', 'hid']
+        for uuid in classic_uuids:
+            if f'uuid: {uuid}' in output:
+                return 'classic'
+
+        # BLE-only GATT service UUIDs
+        ble_uuids = ['generic access', 'generic attribute', 'battery service',
+                     'heart rate', 'health thermometer', 'device information']
+        for uuid in ble_uuids:
+            if f'uuid: {uuid}' in output:
+                return 'ble'
 
     except Exception:
         pass
 
-    # Method 3: Try hcitool for classic info (if responds, likely classic)
+    # Method 3: Check hcitool info for Device Class (Classic-only)
     try:
         result = subprocess.run(
             ['hcitool', 'info', bd_address],
             capture_output=True,
             text=True,
-            timeout=3
+            timeout=2
         )
-        if result.stdout.strip() and 'class:' in result.stdout.lower():
-            return 'classic'
-        # If hcitool info succeeded with any output, it's likely classic
-        if result.returncode == 0 and result.stdout.strip():
+        # Device Class is DEFINITIVE Classic indicator - BLE devices don't have this
+        if 'class:' in result.stdout.lower() and '0x' in result.stdout.lower():
             return 'classic'
     except Exception:
         pass
 
+    # If we can't be certain, return unknown
+    # NEVER GUESS - false positives are unacceptable
     return 'unknown'
 
 
@@ -2118,84 +2131,103 @@ def stimulate_bluetooth_classic(interface='hci0'):
 
 def stimulate_ble_devices(interface='hci0'):
     """
-    Stimulate BLE devices to respond using active LE scanning.
-    Uses hcitool lescan which sends SCAN_REQ to get SCAN_RSP from devices.
+    Stimulate BLE devices to respond using extended BLE scanning.
+    Uses bluetoothctl scan on with LE-only filter for aggressive device discovery.
     """
     try:
-        add_log("Stimulating BLE devices (active LE scan)...", "INFO")
+        add_log("Stimulating BLE devices (extended LE scan)...", "INFO")
         devices_found = []
         seen_addresses = set()
+        device_rssi = {}
 
-        # Ensure interface is up
-        subprocess.run(['hciconfig', interface, 'up'], capture_output=True)
-        subprocess.run(['hciconfig', interface, 'noscan'], capture_output=True)
+        # Ensure interface is up and ready
+        subprocess.run(['hciconfig', interface, 'up'], capture_output=True, timeout=5)
+        subprocess.run(['bluetoothctl', 'select', interface], capture_output=True, timeout=5)
+        subprocess.run(['bluetoothctl', 'power', 'on'], capture_output=True, timeout=5)
 
-        # Method 1: Use hcitool lescan with timeout
-        # lescan performs active scanning which solicits SCAN_RSP from devices
+        # Clear any cached devices first to ensure fresh discovery
         try:
-            result = subprocess.run(
-                ['timeout', '8', 'hcitool', '-i', interface, 'lescan'],
-                capture_output=True,
-                text=True
+            # Get list of known devices and remove them to force fresh discovery
+            result = subprocess.run(['bluetoothctl', 'devices'], capture_output=True, text=True, timeout=5)
+            for line in result.stdout.splitlines():
+                match = re.search(r'Device\s+([0-9A-Fa-f:]{17})', line)
+                if match:
+                    bd_addr = match.group(1)
+                    subprocess.run(['bluetoothctl', 'remove', bd_addr], capture_output=True, timeout=2)
+        except:
+            pass
+
+        # Method 1: Extended bluetoothctl scan with real-time parsing (12 seconds)
+        # bluetoothctl scan on finds both Classic and LE, we filter by device type after
+        add_log("Running extended BLE scan (12 seconds)...", "INFO")
+        try:
+            proc = subprocess.Popen(
+                ['stdbuf', '-oL', 'timeout', '12', 'bluetoothctl', 'scan', 'on'],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1
             )
 
-            # Parse lescan output: "AA:BB:CC:DD:EE:FF DeviceName" or "AA:BB:CC:DD:EE:FF (unknown)"
-            for line in result.stdout.splitlines():
+            # Read output in real-time
+            for line in iter(proc.stdout.readline, ''):
+                if not line:
+                    break
                 line = line.strip()
                 if not line:
                     continue
 
-                # Match BD address at start of line
-                match = re.match(r'([0-9A-Fa-f:]{17})\s*(.*)', line)
-                if match:
-                    bd_addr = match.group(1).upper()
-                    name_part = match.group(2).strip()
+                # Parse [NEW] Device XX:XX:XX:XX:XX:XX Name
+                new_match = re.search(r'\[NEW\]\s+Device\s+([0-9A-Fa-f:]{17})\s*(.*)', line)
+                if new_match:
+                    bd_addr = new_match.group(1).upper()
+                    name = new_match.group(2).strip() or 'BLE Device'
+                    if bd_addr not in seen_addresses:
+                        seen_addresses.add(bd_addr)
+                        # Default to BLE - will be refined by device type detection
+                        device_type = get_device_type(bd_addr)
+                        if device_type == 'unknown':
+                            device_type = 'ble'  # Assume BLE for stimulation results
+                        devices_found.append({
+                            'bd_address': bd_addr,
+                            'device_name': name,
+                            'device_type': device_type,
+                            'manufacturer': get_manufacturer(bd_addr),
+                            'rssi': device_rssi.get(bd_addr)
+                        })
 
-                    if bd_addr in seen_addresses:
-                        continue
-                    seen_addresses.add(bd_addr)
+                # Parse RSSI updates
+                rssi_match = re.search(r'\[CHG\]\s+Device\s+([0-9A-Fa-f:]{17})\s+RSSI:\s*(-?\d+)', line)
+                if rssi_match:
+                    bd_addr = rssi_match.group(1).upper()
+                    rssi = int(rssi_match.group(2))
+                    device_rssi[bd_addr] = rssi
+                    # Update existing device
+                    for dev in devices_found:
+                        if dev['bd_address'] == bd_addr:
+                            dev['rssi'] = rssi
+                            break
 
-                    # Determine name
-                    if name_part and name_part != '(unknown)':
-                        device_name = name_part
-                    else:
-                        device_name = 'BLE Device'
-
-                    devices_found.append({
-                        'bd_address': bd_addr,
-                        'device_name': device_name,
-                        'device_type': 'ble',
-                        'rssi': None,  # lescan doesn't provide RSSI
-                        'manufacturer': get_manufacturer(bd_addr)
-                    })
-
+            proc.wait(timeout=2)
         except Exception as e:
-            add_log(f"hcitool lescan failed: {e}", "WARNING")
+            add_log(f"Extended scan error: {e}", "WARNING")
 
-        # Method 2: Also try bluetoothctl for additional devices
-        if len(devices_found) < 3:
+        # Method 2: Try hcitool lescan for additional BLE-only devices (fallback)
+        if len(devices_found) < 5:
+            add_log("Running supplemental hcitool lescan...", "DEBUG")
             try:
-                # Use bluetoothctl scan for 6 seconds
-                proc = subprocess.Popen(
-                    ['bluetoothctl'],
-                    stdin=subprocess.PIPE,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
+                result = subprocess.run(
+                    ['timeout', '6', 'hcitool', '-i', interface, 'lescan'],
+                    capture_output=True,
                     text=True
                 )
-                commands = "scan on\n"
-                time.sleep(0.5)
-                proc.stdin.write(commands)
-                proc.stdin.flush()
-                time.sleep(6)
-                proc.stdin.write("scan off\nexit\n")
-                proc.stdin.flush()
-                stdout, _ = proc.communicate(timeout=3)
 
-                # Parse bluetoothctl output for NEW devices
-                # Format: [NEW] Device AA:BB:CC:DD:EE:FF DeviceName
-                for line in stdout.splitlines():
-                    match = re.search(r'\[NEW\]\s+Device\s+([0-9A-Fa-f:]{17})\s*(.*)', line)
+                for line in result.stdout.splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+
+                    match = re.match(r'([0-9A-Fa-f:]{17})\s*(.*)', line)
                     if match:
                         bd_addr = match.group(1).upper()
                         name_part = match.group(2).strip()
@@ -2204,16 +2236,18 @@ def stimulate_ble_devices(interface='hci0'):
                             continue
                         seen_addresses.add(bd_addr)
 
+                        device_name = name_part if name_part and name_part != '(unknown)' else 'BLE Device'
+
                         devices_found.append({
                             'bd_address': bd_addr,
-                            'device_name': name_part if name_part else 'BLE Device',
+                            'device_name': device_name,
                             'device_type': 'ble',
                             'rssi': None,
                             'manufacturer': get_manufacturer(bd_addr)
                         })
 
             except Exception as e:
-                add_log(f"bluetoothctl scan failed: {e}", "WARNING")
+                add_log(f"hcitool lescan fallback failed: {e}", "DEBUG")
 
         add_log(f"BLE stimulation found {len(devices_found)} devices", "INFO")
         return devices_found
@@ -3692,6 +3726,23 @@ def start_device_geo_track(bd_address):
     data = request.get_json(silent=True) or {}
     interface = data.get('interface', 'hci0')
     methods = data.get('methods', ['l2ping', 'rssi'])
+
+    # Check device type to determine compatible methods
+    device_type = get_device_type(bd_address)
+
+    # BLE devices don't support l2ping - it uses L2CAP which is Classic-only
+    if device_type == 'ble':
+        # Filter out l2ping for BLE devices
+        original_methods = methods.copy()
+        methods = [m for m in methods if m != 'l2ping']
+        if 'l2ping' in original_methods:
+            add_log(f"l2ping not supported for BLE device {bd_address} - using RSSI only", "WARNING")
+            socketio.emit('log_update', {
+                'message': f"Note: l2ping not available for BLE devices. Using RSSI-based tracking for {bd_address}",
+                'level': 'WARNING'
+            })
+        if not methods:
+            methods = ['rssi']  # Fallback to RSSI-only for BLE
 
     # Validate methods
     valid_methods = ['l2ping', 'rssi']

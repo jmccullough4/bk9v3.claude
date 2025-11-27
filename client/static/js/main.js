@@ -20,6 +20,76 @@ let currentMapStyle = 'dark';
 let breadcrumbMarkers = [];
 let currentTimezone = 'UTC';
 
+// Active operations tracking
+const activeOperations = new Map(); // id -> { type, label, bdAddress?, startTime, cancellable }
+
+// Operations management functions
+function addOperation(id, type, label, options = {}) {
+    activeOperations.set(id, {
+        type,
+        label,
+        bdAddress: options.bdAddress || null,
+        startTime: Date.now(),
+        cancellable: options.cancellable !== false,
+        cancelFn: options.cancelFn || null
+    });
+    updateOperationsBar();
+}
+
+function removeOperation(id) {
+    activeOperations.delete(id);
+    updateOperationsBar();
+}
+
+function updateOperationsBar() {
+    const opsList = document.getElementById('opsList');
+    if (!opsList) return;
+
+    if (activeOperations.size === 0) {
+        opsList.innerHTML = '<span class="ops-none">None</span>';
+        return;
+    }
+
+    opsList.innerHTML = '';
+    activeOperations.forEach((op, id) => {
+        const item = document.createElement('div');
+        item.className = 'ops-item';
+        item.dataset.opId = id;
+
+        const elapsed = Math.floor((Date.now() - op.startTime) / 1000);
+        const timeStr = elapsed < 60 ? `${elapsed}s` : `${Math.floor(elapsed/60)}m${elapsed%60}s`;
+
+        let labelHtml = `<span class="ops-type">${op.type}:</span> ${op.label}`;
+        if (op.bdAddress) {
+            labelHtml += ` <span class="ops-bd">${op.bdAddress.substring(0,8)}...</span>`;
+        }
+        labelHtml += ` <span class="ops-time">(${timeStr})</span>`;
+
+        item.innerHTML = labelHtml;
+
+        if (op.cancellable && op.cancelFn) {
+            const cancelBtn = document.createElement('button');
+            cancelBtn.className = 'ops-cancel';
+            cancelBtn.innerHTML = '✕';
+            cancelBtn.title = 'Cancel operation';
+            cancelBtn.onclick = (e) => {
+                e.stopPropagation();
+                op.cancelFn();
+            };
+            item.appendChild(cancelBtn);
+        }
+
+        opsList.appendChild(item);
+    });
+}
+
+// Update operation timers every second
+setInterval(() => {
+    if (activeOperations.size > 0) {
+        updateOperationsBar();
+    }
+}, 1000);
+
 // Map styles
 const MAP_STYLES = {
     dark: 'mapbox://styles/mapbox/dark-v11',
@@ -133,6 +203,9 @@ function syncSystemState() {
     fetch('/api/state')
         .then(r => r.json())
         .then(state => {
+            // Clear existing operations on reconnect
+            activeOperations.clear();
+
             // Sync scanning state
             updateScanStatus(state.scanning);
 
@@ -141,6 +214,13 @@ function syncSystemState() {
             state.active_geo_sessions.forEach(session => {
                 activeGeoSessions.add(session.bd_address);
                 updateGeoButtonState(session.bd_address, true);
+
+                // Add to operations bar
+                addOperation(`geo-${session.bd_address}`, 'GEO', 'Tracking', {
+                    bdAddress: session.bd_address,
+                    cancellable: true,
+                    cancelFn: () => stopActiveGeo(session.bd_address)
+                });
 
                 // If this is the manual tracking target, update panel
                 const select = document.getElementById('trackTargetSelect');
@@ -623,16 +703,74 @@ function updateStats() {
     let classic = 0;
     let ble = 0;
     let targetCount = 0;
+    let located = 0;
+    let totalRssi = 0;
+    let rssiCount = 0;
+    const manufacturerCounts = {};
 
     Object.values(devices).forEach(device => {
         if (device.is_target) targetCount++;
         if (device.device_type === 'classic') classic++;
         else if (device.device_type === 'ble') ble++;
+
+        // Count devices with location data
+        if (device.emitter_lat && device.emitter_lon) located++;
+
+        // Calculate average RSSI
+        if (device.rssi && device.rssi !== '--') {
+            totalRssi += parseInt(device.rssi);
+            rssiCount++;
+        }
+
+        // Count manufacturers
+        const mfr = device.bt_company || device.manufacturer || 'Unknown';
+        if (mfr && mfr !== 'Unknown') {
+            manufacturerCounts[mfr] = (manufacturerCounts[mfr] || 0) + 1;
+        }
     });
 
+    // Update chart
     deviceTypeChart.data.datasets[0].data = [classic, ble, targetCount];
     deviceTypeChart.update();
+
+    // Update stat boxes
+    const totalDevices = Object.keys(devices).length;
+    document.getElementById('statTotalDevices').textContent = totalDevices;
+    document.getElementById('statClassic').textContent = classic;
+    document.getElementById('statBLE').textContent = ble;
+    document.getElementById('statTargets').textContent = targetCount;
+    document.getElementById('statLocated').textContent = located;
+
+    // Average RSSI
+    const avgRssi = rssiCount > 0 ? Math.round(totalRssi / rssiCount) : '--';
+    document.getElementById('statAvgRSSI').textContent = avgRssi === '--' ? '--' : `${avgRssi}`;
+
+    // Top manufacturer
+    let topMfr = '--';
+    let topMfrCount = 0;
+    Object.entries(manufacturerCounts).forEach(([mfr, count]) => {
+        if (count > topMfrCount) {
+            topMfrCount = count;
+            topMfr = mfr.length > 15 ? mfr.substring(0, 12) + '...' : mfr;
+        }
+    });
+    document.getElementById('statTopManufacturer').textContent = topMfr;
 }
+
+// Session timer
+let sessionStartTime = Date.now();
+
+function updateSessionTime() {
+    const elapsed = Math.floor((Date.now() - sessionStartTime) / 1000);
+    const hours = Math.floor(elapsed / 3600).toString().padStart(2, '0');
+    const minutes = Math.floor((elapsed % 3600) / 60).toString().padStart(2, '0');
+    const seconds = (elapsed % 60).toString().padStart(2, '0');
+    const el = document.getElementById('statSessionTime');
+    if (el) el.textContent = `${hours}:${minutes}:${seconds}`;
+}
+
+// Update session time every second
+setInterval(updateSessionTime, 1000);
 
 /**
  * Clear all devices
@@ -688,6 +826,9 @@ function stopScan() {
 }
 
 function stimulateScan(type) {
+    const opId = `stim-${type}-${Date.now()}`;
+    const label = type === 'ble' ? 'BLE Stimulation' : 'Classic Stimulation';
+    addOperation(opId, 'STIM', label, { cancellable: false });
     addLogEntry(`Starting ${type} stimulation scan...`, 'INFO');
     fetch('/api/scan/stimulate', {
         method: 'POST',
@@ -696,9 +837,11 @@ function stimulateScan(type) {
     })
         .then(response => response.json())
         .then(data => {
+            removeOperation(opId);
             addLogEntry(`Stimulation complete: ${data.count} devices found`, 'INFO');
         })
         .catch(error => {
+            removeOperation(opId);
             addLogEntry('Stimulation failed: ' + error, 'ERROR');
         });
 }
@@ -731,6 +874,11 @@ function updateScanStatus(isScanning) {
         if (activityIndicator) {
             activityIndicator.classList.add('active');
         }
+        // Track in operations bar
+        addOperation('scan', 'SCAN', 'BT Scan Active', {
+            cancellable: true,
+            cancelFn: () => stopScan()
+        });
     } else {
         indicator.classList.remove('active');
         statusText.textContent = 'STANDBY';
@@ -740,6 +888,8 @@ function updateScanStatus(isScanning) {
         if (activityIndicator) {
             activityIndicator.classList.remove('active');
         }
+        // Remove from operations bar
+        removeOperation('scan');
     }
 }
 
@@ -1231,6 +1381,7 @@ function updateTargetList() {
 }
 
 function showTargetContextMenu(event, bdAddress) {
+    event.preventDefault();
     contextMenuTarget = bdAddress;
 
     let menu = document.getElementById('targetContextMenu');
@@ -1238,12 +1389,38 @@ function showTargetContextMenu(event, bdAddress) {
         menu = createTargetContextMenu();
     }
 
-    // Position menu at click location
-    menu.style.left = event.pageX + 'px';
-    menu.style.top = event.pageY + 'px';
-    menu.classList.remove('hidden');
+    // Update menu items based on device type
+    const device = devices[bdAddress];
+    const isBLE = device && device.device_type === 'ble';
 
-    event.preventDefault();
+    // Update stimulate option for BLE devices
+    const stimItem = menu.querySelector('[onclick*="stimulate"]');
+    if (stimItem) {
+        if (isBLE) {
+            stimItem.innerHTML = '<i>📡</i> Stimulate (not for BLE)';
+            stimItem.classList.add('disabled');
+            stimItem.title = 'Classic BT stimulation not available for BLE devices';
+        } else {
+            stimItem.innerHTML = '<i>📡</i> Stimulate (BT Classic)';
+            stimItem.classList.remove('disabled');
+            stimItem.title = '';
+        }
+    }
+
+    // Update locate option
+    const locateItem = menu.querySelector('[onclick*="locate"]');
+    if (locateItem) {
+        if (isBLE) {
+            locateItem.innerHTML = '<i>📍</i> Geolocate (RSSI only)';
+            locateItem.title = 'BLE devices use RSSI-based tracking only';
+        } else {
+            locateItem.innerHTML = '<i>📍</i> Geolocate Device';
+            locateItem.title = '';
+        }
+    }
+
+    // Position the menu with smart repositioning
+    positionContextMenu(menu, event.clientX, event.clientY);
 }
 
 function createTargetContextMenu() {
@@ -1291,6 +1468,7 @@ function targetContextAction(action) {
 
     const bdAddress = contextMenuTarget;
     const device = devices[bdAddress];
+    const isBLE = device && device.device_type === 'ble';
 
     switch (action) {
         case 'info':
@@ -1300,7 +1478,12 @@ function targetContextAction(action) {
             requestDeviceName(bdAddress);
             break;
         case 'stimulate':
-            stimulateForDevice(bdAddress);
+            // Block stimulate for BLE devices
+            if (isBLE) {
+                addLogEntry('Classic BT stimulation is not available for BLE devices', 'WARNING');
+            } else {
+                stimulateForDevice(bdAddress);
+            }
             break;
         case 'locate':
             requestGeolocation(bdAddress);
@@ -1780,6 +1963,12 @@ function updateGpsStatus(location) {
 function getDeviceInfo(bdAddress) {
     addLogEntry(`Querying hcitool info for ${bdAddress}...`, 'INFO');
 
+    // Track in operations bar
+    addOperation(`info-${bdAddress}`, 'INFO', 'Device Query', {
+        bdAddress,
+        cancellable: false
+    });
+
     // Show modal with loading spinner
     const content = document.getElementById('deviceInfoContent');
     content.innerHTML = `
@@ -1795,6 +1984,9 @@ function getDeviceInfo(bdAddress) {
 }
 
 function showDeviceInfo(info) {
+    // Remove from operations bar
+    removeOperation(`info-${info.bd_address}`);
+
     const content = document.getElementById('deviceInfoContent');
     const device = devices[info.bd_address] || {};
 
@@ -2239,19 +2431,72 @@ function showContextMenu(e, bdAddress) {
         targetItem.innerHTML = '<i>🎯</i> Add as Target';
     }
 
-    // Position the menu
-    menu.style.left = e.clientX + 'px';
-    menu.style.top = e.clientY + 'px';
+    // Update locate option based on device type
+    const locateItem = menu.querySelector('[onclick*="locate"]');
+    if (locateItem) {
+        if (device && device.device_type === 'ble') {
+            locateItem.innerHTML = '<i>📍</i> Geolocate (RSSI only)';
+            locateItem.title = 'BLE devices use RSSI-based tracking only';
+        } else {
+            locateItem.innerHTML = '<i>📍</i> Geolocate Device';
+            locateItem.title = '';
+        }
+    }
+
+    // Update info option based on device type
+    const infoItem = menu.querySelector('[onclick*="info"]');
+    if (infoItem) {
+        if (device && device.device_type === 'ble') {
+            infoItem.innerHTML = '<i>ℹ</i> Get Device Info (limited)';
+            infoItem.title = 'hcitool info has limited results for BLE devices';
+        } else {
+            infoItem.innerHTML = '<i>ℹ</i> Get Device Info';
+            infoItem.title = '';
+        }
+    }
+
+    // Position the menu with smart repositioning
+    positionContextMenu(menu, e.clientX, e.clientY);
+}
+
+/**
+ * Position context menu to stay within viewport bounds
+ */
+function positionContextMenu(menu, x, y) {
+    // Reset position to calculate natural size
+    menu.style.left = '0';
+    menu.style.top = '0';
     menu.classList.remove('hidden');
 
-    // Adjust position if menu goes off screen
     const rect = menu.getBoundingClientRect();
-    if (rect.right > window.innerWidth) {
-        menu.style.left = (window.innerWidth - rect.width - 10) + 'px';
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    const padding = 10; // Padding from edges
+
+    // Calculate best position
+    let finalX = x;
+    let finalY = y;
+
+    // Horizontal positioning
+    if (x + rect.width + padding > viewportWidth) {
+        // Menu would overflow right - position to left of cursor
+        finalX = Math.max(padding, x - rect.width);
     }
-    if (rect.bottom > window.innerHeight) {
-        menu.style.top = (window.innerHeight - rect.height - 10) + 'px';
+
+    // Vertical positioning
+    if (y + rect.height + padding > viewportHeight) {
+        // Menu would overflow bottom
+        if (rect.height > viewportHeight - 2 * padding) {
+            // Menu is taller than viewport - position at top with scroll
+            finalY = padding;
+        } else {
+            // Position above cursor
+            finalY = Math.max(padding, y - rect.height);
+        }
     }
+
+    menu.style.left = finalX + 'px';
+    menu.style.top = finalY + 'px';
 }
 
 function hideContextMenu() {
@@ -2330,6 +2575,12 @@ function startNameRetrieval(bdAddress) {
         .then(data => {
             if (data.status === 'started') {
                 addLogEntry(`Name retrieval started for ${bdAddress}`, 'INFO');
+                // Track in operations bar
+                addOperation(`name-${bdAddress}`, 'NAME', 'Name Query', {
+                    bdAddress,
+                    cancellable: true,
+                    cancelFn: () => stopNameRetrieval(bdAddress)
+                });
             } else if (data.status === 'already_running') {
                 addLogEntry(`Name retrieval already running for ${bdAddress}`, 'WARNING');
             }
@@ -2348,6 +2599,8 @@ function stopNameRetrieval(bdAddress) {
         .then(data => {
             nameRetrievalActive[bdAddress] = false;
             addLogEntry(`Name retrieval stopped for ${bdAddress}`, 'INFO');
+            // Remove from operations bar
+            removeOperation(`name-${bdAddress}`);
         })
         .catch(e => {
             addLogEntry(`Failed to stop name retrieval: ${e}`, 'ERROR');
@@ -2936,14 +3189,16 @@ function initVerticalResizers() {
             }
         } else if (currentHandle === 'stats-logs') {
             // Dragging down (positive diff) expands logs (below), shrinks stats (above)
-            const newHeight1 = Math.max(minHeight, startHeight1 - diff);
-            const newHeight2 = Math.max(minHeight, startHeight2 + diff);
+            const newStatsHeight = Math.max(minHeight, startHeight1 - diff);
 
-            if (newHeight1 >= minHeight && newHeight2 >= minHeight) {
-                statsSection.style.height = newHeight1 + 'px';
+            // Only set explicit height on stats section
+            // Logs section uses flex: 1 to fill remaining space (bottom-locked)
+            if (newStatsHeight >= minHeight) {
+                statsSection.style.height = newStatsHeight + 'px';
                 statsSection.style.flex = 'none';
-                logsSection.style.height = newHeight2 + 'px';
-                logsSection.style.flex = 'none';
+                // Let logs fill remaining space - removes bottom float issue
+                logsSection.style.height = 'auto';
+                logsSection.style.flex = '1';
             }
         }
     });
@@ -3341,15 +3596,40 @@ function loadPanelLayout() {
 function exportCollection(format = 'json') {
     addLogEntry(`Exporting collection data as ${format.toUpperCase()}...`, 'INFO');
 
-    // Create download link
-    const link = document.createElement('a');
-    link.href = `/api/logs/export?format=${format}`;
-    link.download = `bluek9_collection.${format}`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    // Track in operations bar
+    const opId = `export-${Date.now()}`;
+    addOperation(opId, 'EXPORT', `Collection (${format.toUpperCase()})`, { cancellable: false });
 
-    addLogEntry(`Collection export initiated`, 'INFO');
+    fetch(`/api/logs/export?format=${format}`, {
+        credentials: 'same-origin'
+    })
+    .then(response => {
+        if (!response.ok) {
+            throw new Error(`Export failed: ${response.status} ${response.statusText}`);
+        }
+        return response.blob();
+    })
+    .then(blob => {
+        removeOperation(opId);
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        const filename = `bluek9_collection_${timestamp}.${format}`;
+
+        // Create download link
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+
+        addLogEntry(`Collection exported: ${filename}`, 'INFO');
+    })
+    .catch(error => {
+        removeOperation(opId);
+        addLogEntry(`Export failed: ${error.message}`, 'ERROR');
+    });
 }
 
 // ==================== ACTIVE GEO TRACKING ====================
@@ -3383,6 +3663,12 @@ function startActiveGeo(bdAddress) {
             activeGeoSessions.add(bdAddress);
             updateGeoButtonState(bdAddress, true);
             addLogEntry(`Active geo tracking started for ${bdAddress}`, 'INFO');
+            // Track in operations bar
+            addOperation(`geo-${bdAddress}`, 'GEO', 'Tracking', {
+                bdAddress,
+                cancellable: true,
+                cancelFn: () => stopActiveGeo(bdAddress)
+            });
         }
     })
     .catch(e => addLogEntry(`Failed to start geo tracking: ${e}`, 'ERROR'));
@@ -3402,6 +3688,8 @@ function stopActiveGeo(bdAddress) {
         activeGeoSessions.delete(bdAddress);
         updateGeoButtonState(bdAddress, false);
         addLogEntry(`Active geo tracking stopped for ${bdAddress}`, 'INFO');
+        // Remove from operations bar
+        removeOperation(`geo-${bdAddress}`);
     })
     .catch(e => addLogEntry(`Failed to stop geo tracking: ${e}`, 'ERROR'));
 }
@@ -3444,17 +3732,44 @@ function handleGeoPing(data) {
 }
 
 /**
+ * Get color for RSSI value (red=strong, blue=weak)
+ * RSSI typically ranges from -30 (very strong) to -100 (very weak)
+ */
+function getRssiColor(rssi) {
+    if (rssi === null || rssi === undefined || rssi === '--') {
+        return '#8b949e'; // Default gray
+    }
+
+    // Clamp RSSI between -100 and -30
+    const clampedRssi = Math.max(-100, Math.min(-30, rssi));
+
+    // Normalize to 0-1 range (0 = weak/-100, 1 = strong/-30)
+    const normalized = (clampedRssi + 100) / 70;
+
+    // Interpolate from blue (weak) to red (strong)
+    // Blue: rgb(59, 130, 246)  -> Red: rgb(239, 68, 68)
+    const r = Math.round(59 + (239 - 59) * normalized);
+    const g = Math.round(130 + (68 - 130) * normalized);
+    const b = Math.round(246 + (68 - 246) * normalized);
+
+    return `rgb(${r}, ${g}, ${b})`;
+}
+
+/**
  * Update tracking stats display
  */
 function updateTrackingStats(data) {
     const statsEl = document.getElementById('trackingStats');
     if (!statsEl) return;
 
+    const rssiColor = getRssiColor(data.rssi);
+    const rssiValue = data.rssi !== null && data.rssi !== undefined ? data.rssi : '--';
+
     statsEl.innerHTML = `
         <div class="stats-grid">
-            <div class="stat-item">
+            <div class="stat-item rssi-highlight">
                 <span class="stat-label">RSSI</span>
-                <span class="stat-value">${data.rssi || '--'} dBm</span>
+                <span class="stat-value rssi-value" style="color: ${rssiColor}; font-size: 18px; font-weight: bold;">${rssiValue} dBm</span>
             </div>
             <div class="stat-item">
                 <span class="stat-label">RTT</span>
