@@ -1328,6 +1328,66 @@ body.resizing * {
     cursor: col-resize !important;
 }
 
+body.resizing-vertical {
+    cursor: row-resize !important;
+    user-select: none;
+}
+
+body.resizing-vertical * {
+    cursor: row-resize !important;
+}
+
+/* Vertical Resize Handles (between sections in right panel) */
+.resize-handle-vertical {
+    height: 6px;
+    background: var(--border-color);
+    cursor: row-resize;
+    flex-shrink: 0;
+    position: relative;
+    z-index: 100;
+    transition: background 0.2s;
+}
+
+.resize-handle-vertical:hover,
+.resize-handle-vertical.dragging {
+    background: var(--accent-primary);
+}
+
+.resize-handle-vertical::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 40px;
+    height: 2px;
+    background: rgba(255, 255, 255, 0.3);
+    border-radius: 1px;
+}
+
+.resize-handle-vertical:hover::before,
+.resize-handle-vertical.dragging::before {
+    background: rgba(255, 255, 255, 0.6);
+}
+
+/* Right panel flex layout for vertical resizing */
+.panel-right {
+    display: flex;
+    flex-direction: column;
+}
+
+.panel-right .panel-section {
+    min-height: 80px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+.panel-right .panel-section .section-content {
+    flex: 1;
+    overflow: auto;
+}
+
 /* Breadcrumb/trail markers */
 .breadcrumb-marker {
     border-radius: 50%;
@@ -1342,10 +1402,21 @@ body.resizing * {
     z-index: 1000;
 }
 
-/* Target heatmap - RED dots */
+/* Target heatmap - RED dots (legacy) */
 .breadcrumb-marker.target-heatmap {
     border: 1px solid rgba(255, 59, 48, 0.7);
     box-shadow: 0 0 4px rgba(255, 59, 48, 0.5);
+}
+
+/* Heatworm points - detection markers with color-coded RSSI */
+.breadcrumb-marker.heatworm-point {
+    border-radius: 50%;
+    z-index: 10;
+}
+
+.breadcrumb-marker.heatworm-point:hover {
+    transform: scale(2);
+    z-index: 1001;
 }
 
 /* System trail - CYAN dots */

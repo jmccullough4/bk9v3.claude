@@ -69,6 +69,7 @@ scan_thread = None
 gps_thread = None
 btmon_thread = None
 btmon_process = None
+geo_thread = None
 current_location = {'lat': 0.0, 'lon': 0.0, 'accuracy': 0.0}
 devices = {}  # BD Address -> device info
 targets = {}  # BD Address -> target info
@@ -235,7 +236,21 @@ def get_manufacturer(bd_address):
 
 
 def get_device_type(bd_address):
-    """Determine if device is Classic or BLE using bluetoothctl info."""
+    """Determine if device is Classic or BLE using multiple methods."""
+    bd_address = bd_address.upper()
+
+    # Method 1: Check address type pattern
+    # BLE random addresses have first nibble C-F (MSB bits 11xxxxxx)
+    first_byte = bd_address[:2]
+    try:
+        first_nibble = int(first_byte[0], 16)
+        # Random address check (first two bits = 11 means >= 0xC)
+        if first_nibble >= 0xC:
+            return 'ble'
+    except ValueError:
+        pass
+
+    # Method 2: Try bluetoothctl info
     try:
         result = subprocess.run(
             ['bluetoothctl', 'info', bd_address],
@@ -243,28 +258,48 @@ def get_device_type(bd_address):
             text=True,
             timeout=3
         )
-        output = result.stdout
+        output = result.stdout.lower()
 
-        # Check for LE (Low Energy) indicators
-        if 'AddressType: random' in output.lower() or 'addresstype: random' in output.lower():
+        # LE indicators
+        if 'addresstype: random' in output:
             return 'ble'
-        if 'AddressType: public' in output.lower():
-            # Public address can be either, check for LE services
-            if 'UUID: Generic Access' in output or 'UUID: Generic Attribute' in output:
-                return 'ble'
-        # Check for classic indicators
-        if 'Icon: phone' in output or 'Icon: audio' in output or 'Icon: computer' in output:
+        if 'le only' in output or 'advertising' in output:
+            return 'ble'
+
+        # Classic indicators - Class of Device is definitive for Classic
+        if 'class:' in output and '0x' in output:
             return 'classic'
-        if 'Class:' in output:
-            # Has Bluetooth Class of Device = Classic
+        if 'icon: phone' in output or 'icon: audio' in output or 'icon: computer' in output:
             return 'classic'
-        # Check if it supports BR/EDR (classic)
-        if 'BR/EDR' in output:
+
+        # Check for specific UUIDs
+        if 'uuid: generic access' in output or 'uuid: generic attribute' in output:
+            return 'ble'
+        if 'uuid: handsfree' in output or 'uuid: a2dp' in output or 'uuid: hfp' in output:
             return 'classic'
-        # Default based on RSSI behavior - BLE typically has more frequent RSSI updates
-        return 'unknown'
+        if 'uuid: headset' in output or 'uuid: audio' in output:
+            return 'classic'
+
     except Exception:
-        return 'unknown'
+        pass
+
+    # Method 3: Try hcitool for classic info (if responds, likely classic)
+    try:
+        result = subprocess.run(
+            ['hcitool', 'info', bd_address],
+            capture_output=True,
+            text=True,
+            timeout=3
+        )
+        if result.stdout.strip() and 'class:' in result.stdout.lower():
+            return 'classic'
+        # If hcitool info succeeded with any output, it's likely classic
+        if result.returncode == 0 and result.stdout.strip():
+            return 'classic'
+    except Exception:
+        pass
+
+    return 'unknown'
 
 
 def parse_hcitool_scan(output, scan_type='classic'):
@@ -1044,6 +1079,81 @@ def update_device_location(bd_address, rssi):
     return estimate_emitter_location(bd_address)
 
 
+def continuous_geo_loop():
+    """Background thread to continuously calculate geolocation for targets."""
+    global scanning_active
+
+    add_log("Starting continuous geolocation calculation...", "INFO")
+
+    while scanning_active:
+        try:
+            # Get all target addresses
+            conn = get_db()
+            c = conn.cursor()
+            c.execute('SELECT bd_address FROM targets')
+            target_list = [row[0] for row in c.fetchall()]
+            conn.close()
+
+            for bd_address in target_list:
+                if not scanning_active:
+                    break
+
+                # Get recent RSSI observations for this target
+                conn = get_db()
+                c = conn.cursor()
+                c.execute('''
+                    SELECT system_lat, system_lon, rssi, timestamp
+                    FROM rssi_history
+                    WHERE bd_address = ? AND system_lat IS NOT NULL AND rssi IS NOT NULL
+                    ORDER BY timestamp DESC
+                    LIMIT 50
+                ''', (bd_address,))
+                observations = c.fetchall()
+                conn.close()
+
+                if len(observations) >= 2:
+                    # Calculate geolocation
+                    location = calculate_geolocation(observations)
+
+                    if location and bd_address in devices:
+                        old_cep = devices[bd_address].get('emitter_accuracy')
+                        devices[bd_address]['emitter_lat'] = location['lat']
+                        devices[bd_address]['emitter_lon'] = location['lon']
+                        devices[bd_address]['emitter_accuracy'] = location['cep']
+
+                        # Emit update to UI
+                        socketio.emit('device_update', devices[bd_address])
+
+                        # Log if CEP improved significantly
+                        if old_cep is None or abs(old_cep - location['cep']) > 5:
+                            add_log(f"Geo update for {bd_address}: CEP={location['cep']}m ({len(observations)} obs)", "INFO")
+
+            # Wait 5 seconds before next calculation cycle
+            time.sleep(5)
+
+        except Exception as e:
+            add_log(f"Geo calculation error: {e}", "WARNING")
+            time.sleep(5)
+
+    add_log("Continuous geolocation calculation stopped", "INFO")
+
+
+def start_geo_thread():
+    """Start the continuous geo calculation thread."""
+    global geo_thread, scanning_active
+
+    if geo_thread is None or not geo_thread.is_alive():
+        geo_thread = threading.Thread(target=continuous_geo_loop, daemon=True)
+        geo_thread.start()
+
+
+def stop_geo_thread():
+    """Stop the geo calculation thread."""
+    global geo_thread
+    # Thread will stop when scanning_active becomes False
+    geo_thread = None
+
+
 # ==================== GPS TRACKING ====================
 
 def parse_nmea_gga(sentence):
@@ -1692,6 +1802,8 @@ def start_scan():
         scanning_active = True
         # Start btmon for RSSI monitoring
         start_btmon()
+        # Start continuous geo calculation
+        start_geo_thread()
         # Start scan loop
         scan_thread = threading.Thread(target=scan_loop, daemon=True)
         scan_thread.start()
@@ -1812,10 +1924,15 @@ def device_locate(bd_address):
     observations = c.fetchall()
     conn.close()
 
-    if len(observations) < 3:
+    if len(observations) < 2:
+        # Check why we might not have data
+        if not current_location.get('lat') or not current_location.get('lon'):
+            hint = " (No GPS fix - system location required)"
+        else:
+            hint = " (Scan with device in range to collect RSSI data)"
         return jsonify({
             'location': None,
-            'message': f'Insufficient data: need at least 3 observations, have {len(observations)}'
+            'message': f'Insufficient data: need at least 2 observations, have {len(observations)}{hint}'
         })
 
     # Calculate geolocation using weighted centroid algorithm

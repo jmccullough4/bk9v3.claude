@@ -486,7 +486,7 @@
             <!-- Right Panel - Survey & Logs -->
             <aside class="panel panel-right">
                 <!-- Survey Table -->
-                <div class="panel-section survey-section">
+                <div class="panel-section survey-section" id="surveySection">
                     <div class="section-header">
                         <span class="section-icon">&#128200;</span>
                         <span>BLUETOOTH SURVEY</span>
@@ -513,8 +513,11 @@
                     </div>
                 </div>
 
+                <!-- Vertical Resize Handle: Survey <-> Stats -->
+                <div class="resize-handle-vertical" id="resizeHandleSurveyStats"></div>
+
                 <!-- Stats Charts -->
-                <div class="panel-section chart-section">
+                <div class="panel-section chart-section" id="statsSection">
                     <div class="section-header">
                         <span class="section-icon">&#128202;</span>
                         <span>STATISTICS</span>
@@ -524,8 +527,11 @@
                     </div>
                 </div>
 
+                <!-- Vertical Resize Handle: Stats <-> Logs -->
+                <div class="resize-handle-vertical" id="resizeHandleStatsLogs"></div>
+
                 <!-- Live Logs -->
-                <div class="panel-section log-section">
+                <div class="panel-section log-section" id="logsSection">
                     <div class="section-header">
                         <span class="section-icon">&#128196;</span>
                         <span>LIVE LOG</span>
