@@ -591,6 +591,9 @@ function toggleShowCep() {
 
 // ==================== BREADCRUMB / HEATMAP ====================
 
+// Target Heatworm - detection points
+// Target Heatmap - RSSI-based amoeba (red=hot/center, blue=cold/outside)
+
 function toggleBreadcrumbs() {
     showBreadcrumbs = document.getElementById('toggleBreadcrumbs').checked;
 
@@ -607,20 +610,107 @@ function loadBreadcrumbs() {
         .then(points => {
             clearBreadcrumbs();
 
-            // Group points by proximity for heatmap effect
+            if (points.length === 0) {
+                addLogEntry('No heatmap data available', 'INFO');
+                return;
+            }
+
+            // Create GeoJSON for heatmap layer
+            const geojsonData = {
+                type: 'FeatureCollection',
+                features: points.filter(p => p.lat && p.lon).map(point => ({
+                    type: 'Feature',
+                    properties: {
+                        // Convert RSSI to weight (stronger signal = higher weight)
+                        // RSSI typically ranges from -30 (very strong) to -100 (very weak)
+                        weight: Math.max(0, (point.rssi + 100) / 70),
+                        rssi: point.rssi,
+                        bd_address: point.bd_address
+                    },
+                    geometry: {
+                        type: 'Point',
+                        coordinates: [point.lon, point.lat]
+                    }
+                }))
+            };
+
+            // Add or update heatmap source
+            if (map.getSource('rssi-heatmap')) {
+                map.getSource('rssi-heatmap').setData(geojsonData);
+            } else {
+                map.addSource('rssi-heatmap', {
+                    type: 'geojson',
+                    data: geojsonData
+                });
+
+                // Add heatmap layer - amoeba effect with red=hot, blue=cold
+                map.addLayer({
+                    id: 'rssi-heatmap-layer',
+                    type: 'heatmap',
+                    source: 'rssi-heatmap',
+                    paint: {
+                        // Weight based on RSSI (stronger = more weight)
+                        'heatmap-weight': ['get', 'weight'],
+                        // Intensity increases with zoom
+                        'heatmap-intensity': [
+                            'interpolate', ['linear'], ['zoom'],
+                            10, 0.5,
+                            15, 1,
+                            20, 2
+                        ],
+                        // Radius increases with zoom
+                        'heatmap-radius': [
+                            'interpolate', ['linear'], ['zoom'],
+                            10, 15,
+                            15, 30,
+                            20, 50
+                        ],
+                        // Color ramp: blue (cold) -> cyan -> green -> yellow -> red (hot)
+                        'heatmap-color': [
+                            'interpolate', ['linear'], ['heatmap-density'],
+                            0, 'rgba(0, 0, 255, 0)',        // Transparent
+                            0.1, 'rgba(0, 0, 255, 0.4)',   // Blue (cold/far)
+                            0.3, 'rgba(0, 255, 255, 0.5)', // Cyan
+                            0.5, 'rgba(0, 255, 0, 0.6)',   // Green
+                            0.7, 'rgba(255, 255, 0, 0.7)', // Yellow
+                            0.9, 'rgba(255, 128, 0, 0.8)', // Orange
+                            1.0, 'rgba(255, 0, 0, 0.9)'    // Red (hot/close)
+                        ],
+                        // Opacity
+                        'heatmap-opacity': 0.7
+                    }
+                });
+            }
+
+            // Add detection markers (heatworm points) on top of heatmap
             points.forEach((point, index) => {
                 if (!point.lat || !point.lon) return;
 
-                // Create small dot marker
                 const el = document.createElement('div');
-                el.className = 'breadcrumb-marker';
+                el.className = 'breadcrumb-marker heatworm-point';
 
-                // Color based on RSSI (stronger = more red)
+                // Small white dot with colored ring based on RSSI
                 const rssi = point.rssi || -70;
-                const intensity = Math.min(1, Math.max(0, (rssi + 100) / 50));
-                el.style.backgroundColor = `rgba(0, 212, 255, ${0.3 + intensity * 0.5})`;
-                el.style.width = `${4 + intensity * 4}px`;
-                el.style.height = `${4 + intensity * 4}px`;
+                const intensity = Math.min(1, Math.max(0, (rssi + 100) / 70));
+
+                // Color: blue (weak) -> green -> yellow -> red (strong)
+                let color;
+                if (intensity < 0.33) {
+                    color = `rgb(0, ${Math.round(intensity * 3 * 255)}, 255)`;
+                } else if (intensity < 0.66) {
+                    const t = (intensity - 0.33) * 3;
+                    color = `rgb(${Math.round(t * 255)}, 255, ${Math.round((1 - t) * 255)})`;
+                } else {
+                    const t = (intensity - 0.66) * 3;
+                    color = `rgb(255, ${Math.round((1 - t) * 255)}, 0)`;
+                }
+
+                el.style.width = '8px';
+                el.style.height = '8px';
+                el.style.backgroundColor = '#fff';
+                el.style.border = `2px solid ${color}`;
+                el.style.boxShadow = `0 0 4px ${color}`;
+                el.title = `${point.bd_address}\nRSSI: ${rssi} dBm`;
 
                 const marker = new mapboxgl.Marker(el)
                     .setLngLat([point.lon, point.lat])
@@ -629,26 +719,98 @@ function loadBreadcrumbs() {
                 breadcrumbMarkers.push(marker);
             });
 
-            addLogEntry(`Loaded ${points.length} breadcrumb points`, 'INFO');
+            addLogEntry(`Loaded heatmap: ${points.length} detection points`, 'INFO');
         })
-        .catch(e => addLogEntry(`Failed to load breadcrumbs: ${e}`, 'ERROR'));
+        .catch(e => addLogEntry(`Failed to load heatmap: ${e}`, 'ERROR'));
 }
 
 function clearBreadcrumbs() {
+    // Clear markers
     breadcrumbMarkers.forEach(m => m.remove());
     breadcrumbMarkers = [];
+
+    // Clear heatmap layer and source
+    if (map && map.getLayer('rssi-heatmap-layer')) {
+        map.removeLayer('rssi-heatmap-layer');
+    }
+    if (map && map.getSource('rssi-heatmap')) {
+        map.removeSource('rssi-heatmap');
+    }
 }
 
 function resetBreadcrumbs() {
-    if (!confirm('Reset all breadcrumb/heatmap data? This will clear all RSSI history.')) return;
+    if (!confirm('Reset all heatmap data? This will clear all RSSI history.')) return;
 
     fetch('/api/breadcrumbs/reset', { method: 'POST' })
         .then(r => r.json())
         .then(data => {
             clearBreadcrumbs();
-            addLogEntry(`Breadcrumbs reset: ${data.cleared} points cleared`, 'INFO');
+            clearSystemTrail();
+            addLogEntry(`Heatmap reset: ${data.cleared} points cleared`, 'INFO');
         })
-        .catch(e => addLogEntry(`Failed to reset breadcrumbs: ${e}`, 'ERROR'));
+        .catch(e => addLogEntry(`Failed to reset heatmap: ${e}`, 'ERROR'));
+}
+
+// System Trail - where the system has been
+let showSystemTrail = false;
+let systemTrailMarkers = [];
+
+function toggleSystemTrail() {
+    showSystemTrail = document.getElementById('toggleSystemTrail').checked;
+
+    if (showSystemTrail) {
+        loadSystemTrail();
+    } else {
+        clearSystemTrail();
+    }
+}
+
+function loadSystemTrail() {
+    fetch('/api/system_trail')
+        .then(r => r.json())
+        .then(points => {
+            clearSystemTrail();
+
+            // System trail - show in CYAN (where system has been)
+            points.forEach((point, index) => {
+                if (!point.lat || !point.lon) return;
+
+                const el = document.createElement('div');
+                el.className = 'breadcrumb-marker system-trail';
+
+                // Fade older points
+                const opacity = Math.max(0.2, 1 - (index / points.length) * 0.8);
+                el.style.backgroundColor = `rgba(0, 212, 255, ${opacity})`;
+                el.style.width = '6px';
+                el.style.height = '6px';
+
+                const marker = new mapboxgl.Marker(el)
+                    .setLngLat([point.lon, point.lat])
+                    .addTo(map);
+
+                systemTrailMarkers.push(marker);
+            });
+
+            addLogEntry(`Loaded ${points.length} system trail points`, 'INFO');
+        })
+        .catch(e => addLogEntry(`Failed to load system trail: ${e}`, 'ERROR'));
+}
+
+function clearSystemTrail() {
+    systemTrailMarkers.forEach(m => m.remove());
+    systemTrailMarkers = [];
+}
+
+function resetSystemTrail() {
+    if (!confirm('Reset system trail? This will clear all position history.')) return;
+
+    fetch('/api/system_trail/reset', { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+            clearSystemTrail();
+            addLogEntry(`System trail reset`, 'INFO');
+        })
+        .catch(e => addLogEntry(`Failed to reset trail: ${e}`, 'ERROR'));
 }
 
 // ==================== GEO RESET ====================
@@ -1176,7 +1338,19 @@ function updateGpsStatus(location) {
 // ==================== DEVICE INFO ====================
 
 function getDeviceInfo(bdAddress) {
-    addLogEntry(`Getting info for ${bdAddress}...`, 'INFO');
+    addLogEntry(`Querying hcitool info for ${bdAddress}...`, 'INFO');
+
+    // Show modal with loading spinner
+    const content = document.getElementById('deviceInfoContent');
+    content.innerHTML = `
+        <div class="loading-container">
+            <div class="loading-spinner"></div>
+            <div class="loading-text">Running hcitool info ${bdAddress}...</div>
+            <div class="loading-subtext">This may take a few seconds</div>
+        </div>
+    `;
+    document.getElementById('deviceInfoModal').classList.remove('hidden');
+
     socket.emit('request_device_info', { bd_address: bdAddress });
 }
 
@@ -1186,7 +1360,23 @@ function showDeviceInfo(info) {
 
     let html = '<div class="device-info-content">';
 
-    // Add all available info
+    // Show hcitool raw output prominently at top
+    if (info.raw_info && info.raw_info.trim()) {
+        html += `
+            <div class="info-section-header">HCITOOL INFO OUTPUT</div>
+            <pre class="hcitool-output">${info.raw_info}</pre>
+            <div class="info-section-header" style="margin-top: 15px;">DEVICE SUMMARY</div>
+        `;
+    } else {
+        html += `
+            <div class="info-section-header">HCITOOL INFO OUTPUT</div>
+            <pre class="hcitool-output hcitool-empty">No response from device.
+Device may be out of range or not responding.</pre>
+            <div class="info-section-header" style="margin-top: 15px;">CACHED DATA</div>
+        `;
+    }
+
+    // Add summary info
     const fields = [
         ['BD Address', info.bd_address],
         ['Device Name', info.device_name || device.device_name || 'Unknown'],
@@ -1196,8 +1386,6 @@ function showDeviceInfo(info) {
         ['RSSI', device.rssi ? `${device.rssi} dBm` : 'N/A'],
         ['First Seen', device.first_seen || 'N/A'],
         ['Last Seen', device.last_seen || 'N/A'],
-        ['System Location', device.system_lat && device.system_lon ?
-            `${device.system_lat.toFixed(6)}, ${device.system_lon.toFixed(6)}` : 'N/A'],
         ['Emitter Location', device.emitter_lat && device.emitter_lon ?
             `${device.emitter_lat.toFixed(6)}, ${device.emitter_lon.toFixed(6)}` : 'N/A'],
         ['CEP Radius', device.emitter_accuracy ? `${device.emitter_accuracy.toFixed(1)} m` : 'N/A'],
@@ -1213,22 +1401,9 @@ function showDeviceInfo(info) {
         `;
     });
 
-    // Add raw info if available
-    if (info.raw_info) {
-        html += `
-            <div class="info-row">
-                <span class="info-label-modal">Raw Info:</span>
-            </div>
-            <pre style="font-size: 10px; color: #8b949e; white-space: pre-wrap; word-break: break-all;">
-${info.raw_info}
-            </pre>
-        `;
-    }
-
     html += '</div>';
     content.innerHTML = html;
 
-    document.getElementById('deviceInfoModal').classList.remove('hidden');
     addLogEntry(`Device info loaded for ${info.bd_address}`, 'INFO');
 }
 
@@ -1297,7 +1472,10 @@ function showTargetAlert(data) {
 }
 
 function copyAlertDetails() {
-    if (!currentAlertData) return;
+    if (!currentAlertData) {
+        addLogEntry('No alert data to copy', 'WARNING');
+        return;
+    }
 
     const d = currentAlertData.device;
     const loc = currentAlertData.location;
@@ -1329,11 +1507,33 @@ function copyAlertDetails() {
         text += `Google Maps: https://maps.google.com/?q=${d.emitter_lat.toFixed(6)},${d.emitter_lon.toFixed(6)}\n`;
     }
 
-    navigator.clipboard.writeText(text).then(() => {
+    // Try clipboard API first, fallback to textarea method
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(() => {
+            addLogEntry('Alert details copied to clipboard', 'INFO');
+        }).catch(err => {
+            // Fallback
+            copyTextFallback(text);
+        });
+    } else {
+        copyTextFallback(text);
+    }
+}
+
+function copyTextFallback(text) {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.left = '-9999px';
+    document.body.appendChild(textarea);
+    textarea.select();
+    try {
+        document.execCommand('copy');
         addLogEntry('Alert details copied to clipboard', 'INFO');
-    }).catch(err => {
+    } catch (err) {
         addLogEntry('Failed to copy: ' + err, 'ERROR');
-    });
+    }
+    document.body.removeChild(textarea);
 }
 
 function closeAlertModal() {
@@ -1897,15 +2097,32 @@ function resetLayout() {
 
     const leftPanel = document.querySelector('.panel-left');
     const rightPanel = document.querySelector('.panel-right');
+    const surveySection = document.getElementById('surveySection');
+    const statsSection = document.getElementById('statsSection');
+    const logsSection = document.getElementById('logsSection');
 
     leftPanel.style.width = '280px';
     rightPanel.style.width = '420px';
 
+    // Reset vertical section heights to auto (flex)
+    if (surveySection) {
+        surveySection.style.height = '';
+        surveySection.style.flex = '1';
+    }
+    if (statsSection) {
+        statsSection.style.height = '';
+        statsSection.style.flex = '0 0 auto';
+    }
+    if (logsSection) {
+        logsSection.style.height = '';
+        logsSection.style.flex = '1';
+    }
+
     document.getElementById('settingLeftPanelWidth').value = 280;
     document.getElementById('settingRightPanelWidth').value = 420;
 
-    // Save to localStorage
-    saveLayoutToLocalStorage();
+    // Clear localStorage layout
+    localStorage.removeItem('bluek9_layout');
 
     addLogEntry('Layout reset to default', 'INFO');
 }
@@ -1915,10 +2132,16 @@ function resetLayout() {
 function saveLayoutToLocalStorage() {
     const leftPanel = document.querySelector('.panel-left');
     const rightPanel = document.querySelector('.panel-right');
+    const surveySection = document.getElementById('surveySection');
+    const statsSection = document.getElementById('statsSection');
+    const logsSection = document.getElementById('logsSection');
 
     const layout = {
         leftPanelWidth: leftPanel ? leftPanel.offsetWidth : 280,
         rightPanelWidth: rightPanel ? rightPanel.offsetWidth : 420,
+        surveySectionHeight: surveySection ? surveySection.offsetHeight : null,
+        statsSectionHeight: statsSection ? statsSection.offsetHeight : null,
+        logsSectionHeight: logsSection ? logsSection.offsetHeight : null,
         savedAt: new Date().toISOString()
     };
 
@@ -1939,12 +2162,29 @@ function loadLayoutFromLocalStorage() {
         const layout = JSON.parse(saved);
         const leftPanel = document.querySelector('.panel-left');
         const rightPanel = document.querySelector('.panel-right');
+        const surveySection = document.getElementById('surveySection');
+        const statsSection = document.getElementById('statsSection');
+        const logsSection = document.getElementById('logsSection');
 
         if (leftPanel && layout.leftPanelWidth) {
             leftPanel.style.width = layout.leftPanelWidth + 'px';
         }
         if (rightPanel && layout.rightPanelWidth) {
             rightPanel.style.width = layout.rightPanelWidth + 'px';
+        }
+
+        // Restore vertical section heights
+        if (surveySection && layout.surveySectionHeight) {
+            surveySection.style.height = layout.surveySectionHeight + 'px';
+            surveySection.style.flex = 'none';
+        }
+        if (statsSection && layout.statsSectionHeight) {
+            statsSection.style.height = layout.statsSectionHeight + 'px';
+            statsSection.style.flex = 'none';
+        }
+        if (logsSection && layout.logsSectionHeight) {
+            logsSection.style.height = layout.logsSectionHeight + 'px';
+            logsSection.style.flex = 'none';
         }
 
         addLogEntry('Layout loaded from local storage', 'INFO');
@@ -2035,7 +2275,93 @@ function initPanelResizers() {
     loadLayoutFromLocalStorage();
 }
 
+// Initialize vertical resizers for right panel sections
+function initVerticalResizers() {
+    const surveySection = document.getElementById('surveySection');
+    const statsSection = document.getElementById('statsSection');
+    const logsSection = document.getElementById('logsSection');
+    const handle1 = document.getElementById('resizeHandleSurveyStats');
+    const handle2 = document.getElementById('resizeHandleStatsLogs');
+
+    if (!handle1 || !handle2) return;
+
+    let isResizing = false;
+    let currentHandle = null;
+    let startY = 0;
+    let startHeight1 = 0;
+    let startHeight2 = 0;
+
+    // Handle 1: Between Survey and Stats
+    handle1.addEventListener('mousedown', (e) => {
+        isResizing = true;
+        currentHandle = 'survey-stats';
+        startY = e.clientY;
+        startHeight1 = surveySection.offsetHeight;
+        startHeight2 = statsSection.offsetHeight;
+        handle1.classList.add('dragging');
+        document.body.classList.add('resizing-vertical');
+        e.preventDefault();
+    });
+
+    // Handle 2: Between Stats and Logs
+    handle2.addEventListener('mousedown', (e) => {
+        isResizing = true;
+        currentHandle = 'stats-logs';
+        startY = e.clientY;
+        startHeight1 = statsSection.offsetHeight;
+        startHeight2 = logsSection.offsetHeight;
+        handle2.classList.add('dragging');
+        document.body.classList.add('resizing-vertical');
+        e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', (e) => {
+        if (!isResizing) return;
+
+        const diff = e.clientY - startY;
+        const minHeight = 80;
+
+        if (currentHandle === 'survey-stats') {
+            const newHeight1 = Math.max(minHeight, startHeight1 + diff);
+            const newHeight2 = Math.max(minHeight, startHeight2 - diff);
+
+            // Only apply if both heights are valid
+            if (newHeight1 >= minHeight && newHeight2 >= minHeight) {
+                surveySection.style.height = newHeight1 + 'px';
+                surveySection.style.flex = 'none';
+                statsSection.style.height = newHeight2 + 'px';
+                statsSection.style.flex = 'none';
+            }
+        } else if (currentHandle === 'stats-logs') {
+            const newHeight1 = Math.max(minHeight, startHeight1 + diff);
+            const newHeight2 = Math.max(minHeight, startHeight2 - diff);
+
+            if (newHeight1 >= minHeight && newHeight2 >= minHeight) {
+                statsSection.style.height = newHeight1 + 'px';
+                statsSection.style.flex = 'none';
+                logsSection.style.height = newHeight2 + 'px';
+                logsSection.style.flex = 'none';
+            }
+        }
+    });
+
+    document.addEventListener('mouseup', () => {
+        if (isResizing) {
+            isResizing = false;
+            handle1.classList.remove('dragging');
+            handle2.classList.remove('dragging');
+            document.body.classList.remove('resizing-vertical');
+
+            // Save layout
+            saveLayoutToLocalStorage();
+        }
+    });
+}
+
 // Call after DOM ready
 document.addEventListener('DOMContentLoaded', () => {
-    setTimeout(initPanelResizers, 500);
+    setTimeout(() => {
+        initPanelResizers();
+        initVerticalResizers();
+    }, 500);
 });
