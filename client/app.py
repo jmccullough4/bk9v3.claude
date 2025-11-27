@@ -2564,6 +2564,11 @@ def active_geo_track(bd_address, interface='hci0', methods=None):
                 conn.commit()
                 conn.close()
 
+                # Update RSSI in devices dictionary for survey table
+                if bd_address in devices:
+                    devices[bd_address]['rssi'] = rssi
+                    devices[bd_address]['last_seen'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
                 # Emit real-time ping data to UI
                 socketio.emit('geo_ping', {
                     'bd_address': bd_address,
@@ -2587,7 +2592,10 @@ def active_geo_track(bd_address, interface='hci0', methods=None):
                         devices[bd_address]['emitter_lat'] = location[0]
                         devices[bd_address]['emitter_lon'] = location[1]
                         devices[bd_address]['emitter_accuracy'] = location[2]
-                        socketio.emit('device_update', devices[bd_address])
+
+                # Always emit device update to refresh survey table with latest RSSI
+                if bd_address in devices:
+                    socketio.emit('device_update', devices[bd_address])
 
             else:
                 # No RSSI - emit status anyway
