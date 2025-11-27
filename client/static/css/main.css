@@ -2116,42 +2116,58 @@ body.resizing-vertical * {
     border-right: none !important;
     border-top: 1px solid var(--border-color);
     flex-shrink: 0;
+    display: flex;
+    flex-direction: row !important;
+    flex-wrap: nowrap;
 }
 
 .docked-bottom .panel-header {
     cursor: ns-resize;
+    writing-mode: vertical-rl;
+    text-orientation: mixed;
+    padding: 10px 8px;
+    min-width: 40px;
+    flex-shrink: 0;
+    border-right: 1px solid var(--border-color);
+    border-bottom: none;
 }
 
+.docked-bottom .panel-header-title {
+    white-space: nowrap;
+}
+
+.docked-bottom .panel-header-controls {
+    flex-direction: column;
+    margin-top: 10px;
+}
+
+/* Sections in a row when docked bottom */
 .docked-bottom .panel-section {
     flex: 1;
+    min-height: unset;
+    min-width: 0;
+    border-bottom: none;
+    border-right: 1px solid var(--border-color);
 }
 
-/* When docked to bottom, use horizontal layout for sections */
-.docked-bottom .panel-content-wrapper {
-    display: flex;
-    flex-direction: row;
-    height: 100%;
+.docked-bottom .panel-section:last-child {
+    border-right: none;
 }
 
-/* Survey section takes up most space when docked bottom */
+/* Survey section takes most space */
 .docked-bottom .survey-section {
-    flex: 2;
-    min-height: unset;
-    border-bottom: none;
-    border-right: 1px solid var(--border-color);
+    flex: 3;
 }
 
+/* Stats section smaller */
+.docked-bottom .stats-section,
 .docked-bottom .chart-section {
-    flex: 0 0 200px;
-    min-height: unset;
-    border-bottom: none;
-    border-right: 1px solid var(--border-color);
+    flex: 0 0 220px;
 }
 
+/* Log section medium */
 .docked-bottom .log-section {
-    flex: 1;
-    min-height: unset;
-    border-bottom: none;
+    flex: 2;
 }
 
 /* Hide vertical resize handles when docked bottom */
