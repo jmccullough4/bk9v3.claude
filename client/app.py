@@ -80,6 +80,43 @@ sms_numbers = []
 follow_gps = True
 log_messages = []
 btmon_rssi_cache = {}  # BD Address -> latest RSSI from btmon
+btmon_device_cache = {}  # BD Address -> full device info from btmon
+
+# Bluetooth Company Identifiers (common ones)
+# Full list at: https://www.bluetooth.com/specifications/assigned-numbers/company-identifiers/
+BT_COMPANY_IDS = {
+    0x0000: "Ericsson Technology Licensing",
+    0x0001: "Nokia Mobile Phones",
+    0x0002: "Intel Corp.",
+    0x0003: "IBM Corp.",
+    0x0004: "Toshiba Corp.",
+    0x0006: "Microsoft",
+    0x000A: "Qualcomm",
+    0x000D: "Texas Instruments",
+    0x000F: "Broadcom Corporation",
+    0x001D: "Qualcomm Technologies",
+    0x004C: "Apple, Inc.",
+    0x0059: "Nordic Semiconductor",
+    0x0075: "Samsung Electronics",
+    0x0087: "Garmin International",
+    0x00E0: "Google",
+    0x00D2: "Dialog Semiconductor",
+    0x0131: "Huawei Technologies",
+    0x0157: "Xiaomi Inc.",
+    0x0171: "Amazon.com Services",
+    0x01B0: "Fitbit, Inc.",
+    0x022B: "Facebook Technologies",
+    0x02FF: "JBL",
+    0x038F: "Tile, Inc.",
+    0x0310: "Harman International",
+    0x0301: "Sony Corporation",
+    0x0046: "Sony Ericsson Mobile",
+    0x0047: "Vizio, Inc.",
+    0x00B0: "LG Electronics",
+    0x0154: "Bose Corporation",
+    0x018D: "Logitech International",
+    0x0822: "Meta Platforms",
+}
 
 
 def init_database():
@@ -1625,56 +1662,270 @@ def get_rssi_from_bluetoothctl(bd_address):
     return None
 
 
-# ==================== BTMON RSSI MONITORING ====================
+# ==================== BTMON DEVICE MONITORING ====================
+
+# Parser state for btmon context tracking
+class BtmonParserState:
+    """Track btmon parsing context across multiple lines."""
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.current_addr = None
+        self.current_event = None
+        self.current_device = {}
+        self.is_le_event = False
+        self.is_classic_event = False
+        self.addr_type = None
+
+btmon_parser_state = BtmonParserState()
+
+
+def get_company_name(company_id):
+    """Get company name from Bluetooth Company ID."""
+    if isinstance(company_id, str):
+        try:
+            company_id = int(company_id, 16)
+        except:
+            return None
+    return BT_COMPANY_IDS.get(company_id)
+
 
 def parse_btmon_line(line):
-    """Parse a single btmon output line for RSSI and BD Address."""
-    global btmon_rssi_cache
+    """
+    Parse btmon output for rich device information.
 
-    # Pattern for HCI Event with Address and RSSI
-    # Example: "        Address: 00:11:22:33:44:55 (Public)"
-    # Example: "        RSSI: -65 dBm (0xbf)"
+    Extracts:
+    - BD Address
+    - Device type (Classic/BLE) from event type
+    - RSSI
+    - Device name (from advertising data)
+    - Manufacturer/Company ID
+    - Address type (Public/Random)
+    - TX Power
+    """
+    global btmon_rssi_cache, btmon_device_cache, btmon_parser_state
 
-    # We need to track current address being reported
-    if not hasattr(parse_btmon_line, 'current_addr'):
-        parse_btmon_line.current_addr = None
+    state = btmon_parser_state
+    line_stripped = line.strip()
 
-    line = line.strip()
+    # Detect HCI Event type - this tells us Classic vs BLE
+    if '> HCI Event:' in line or '< HCI Command:' in line:
+        # New event - save any pending device data
+        if state.current_addr and state.current_device:
+            save_btmon_device_data(state.current_addr, state.current_device)
 
-    # Look for BD Address
-    addr_match = re.search(r'Address:\s*([0-9A-Fa-f:]{17})', line)
+        state.reset()
+
+        # Identify event type
+        if 'LE Meta Event' in line:
+            state.is_le_event = True
+            state.current_event = 'le_meta'
+        elif 'Inquiry Result' in line:
+            state.is_classic_event = True
+            state.current_event = 'inquiry_result'
+        elif 'Extended Inquiry Result' in line:
+            state.is_classic_event = True
+            state.current_event = 'extended_inquiry'
+        elif 'Remote Name Req Complete' in line:
+            state.is_classic_event = True
+            state.current_event = 'name_complete'
+        elif 'Advertising Report' in line or 'advertising report' in line.lower():
+            state.is_le_event = True
+            state.current_event = 'adv_report'
+        return
+
+    # Parse BD Address with address type
+    # Format: "Address: AA:BB:CC:DD:EE:FF (Public)" or "(Random)"
+    addr_match = re.search(r'Address:\s*([0-9A-Fa-f:]{17})\s*\((\w+)\)', line_stripped)
     if addr_match:
-        parse_btmon_line.current_addr = addr_match.group(1).upper()
+        state.current_addr = addr_match.group(1).upper()
+        state.addr_type = addr_match.group(2).lower()
+        state.current_device['addr_type'] = state.addr_type
 
-    # Look for RSSI
-    rssi_match = re.search(r'RSSI:\s*(-?\d+)\s*dBm', line)
-    if rssi_match and parse_btmon_line.current_addr:
+        # Random address is a strong BLE indicator
+        if state.addr_type == 'random':
+            state.current_device['device_type'] = 'ble'
+            state.is_le_event = True
+        return
+
+    # Also try without address type
+    addr_match2 = re.search(r'Address:\s*([0-9A-Fa-f:]{17})', line_stripped)
+    if addr_match2 and not state.current_addr:
+        state.current_addr = addr_match2.group(1).upper()
+
+    # Parse LE Address Type specifically
+    le_addr_match = re.search(r'LE Address Type:\s*(\w+)', line_stripped)
+    if le_addr_match:
+        addr_type = le_addr_match.group(1).lower()
+        state.current_device['addr_type'] = addr_type
+        state.current_device['device_type'] = 'ble'
+        state.is_le_event = True
+        return
+
+    # Parse RSSI
+    rssi_match = re.search(r'RSSI:\s*(-?\d+)\s*dBm', line_stripped)
+    if rssi_match:
         rssi = int(rssi_match.group(1))
-        bd_addr = parse_btmon_line.current_addr
-        btmon_rssi_cache[bd_addr] = {
-            'rssi': rssi,
-            'timestamp': time.time()
-        }
+        state.current_device['rssi'] = rssi
 
-        # Update device if it exists
-        if bd_addr in devices:
-            devices[bd_addr]['rssi'] = rssi
-            # Emit update to UI
+        # Also update legacy cache for compatibility
+        if state.current_addr:
+            btmon_rssi_cache[state.current_addr] = {
+                'rssi': rssi,
+                'timestamp': time.time()
+            }
+        return
+
+    # Parse Device Name (complete or short)
+    name_match = re.search(r'Name \((?:complete|short)\):\s*(.+)', line_stripped)
+    if name_match:
+        name = name_match.group(1).strip()
+        if name and name != '(null)':
+            state.current_device['device_name'] = name
+        return
+
+    # Parse Local Name from advertising
+    local_name_match = re.search(r'(?:Complete|Shortened) Local Name:\s*(.+)', line_stripped)
+    if local_name_match:
+        name = local_name_match.group(1).strip()
+        if name:
+            state.current_device['device_name'] = name
+        return
+
+    # Parse Company ID (hex format: "Company: Apple, Inc. (0x004c)")
+    company_match = re.search(r'Company:\s*([^(]+)\s*\(0x([0-9A-Fa-f]+)\)', line_stripped)
+    if company_match:
+        company_name = company_match.group(1).strip()
+        company_id = int(company_match.group(2), 16)
+        state.current_device['company_id'] = company_id
+        state.current_device['company_name'] = company_name
+        return
+
+    # Parse Company ID alone (format: "Company ID: 0x004c")
+    company_id_match = re.search(r'Company ID:\s*0x([0-9A-Fa-f]+)', line_stripped)
+    if company_id_match:
+        company_id = int(company_id_match.group(1), 16)
+        state.current_device['company_id'] = company_id
+        company_name = get_company_name(company_id)
+        if company_name:
+            state.current_device['company_name'] = company_name
+        return
+
+    # Parse TX Power
+    tx_power_match = re.search(r'TX [Pp]ower:\s*(-?\d+)\s*dBm', line_stripped)
+    if tx_power_match:
+        state.current_device['tx_power'] = int(tx_power_match.group(1))
+        return
+
+    # Parse Device Class (Classic indicator)
+    class_match = re.search(r'Class:\s*(0x[0-9A-Fa-f]+)', line_stripped)
+    if class_match:
+        state.current_device['device_class'] = class_match.group(1)
+        state.current_device['device_type'] = 'classic'
+        state.is_classic_event = True
+        return
+
+    # Parse Flags for BR/EDR support
+    if 'BR/EDR Not Supported' in line_stripped:
+        state.current_device['device_type'] = 'ble'
+        state.current_device['ble_only'] = True
+        state.is_le_event = True
+        return
+
+    # Parse Event Type (ADV_IND, ADV_SCAN_IND, etc.) - BLE indicator
+    event_type_match = re.search(r'Event type:\s*(\w+)', line_stripped)
+    if event_type_match:
+        event_type = event_type_match.group(1)
+        state.current_device['adv_type'] = event_type
+        if event_type.startswith('ADV_'):
+            state.current_device['device_type'] = 'ble'
+            state.is_le_event = True
+        return
+
+
+def save_btmon_device_data(bd_addr, device_data):
+    """Save parsed btmon device data and update device record."""
+    global btmon_device_cache, btmon_parser_state
+
+    if not bd_addr:
+        return
+
+    bd_addr = bd_addr.upper()
+    now = time.time()
+
+    # Determine device type from context if not already set
+    if 'device_type' not in device_data:
+        if btmon_parser_state.is_le_event:
+            device_data['device_type'] = 'ble'
+        elif btmon_parser_state.is_classic_event:
+            device_data['device_type'] = 'classic'
+
+    device_data['timestamp'] = now
+
+    # Update or create cache entry
+    if bd_addr in btmon_device_cache:
+        # Merge with existing data (don't overwrite with None)
+        for key, value in device_data.items():
+            if value is not None:
+                btmon_device_cache[bd_addr][key] = value
+    else:
+        btmon_device_cache[bd_addr] = device_data
+
+    # Update main devices dict if device exists
+    if bd_addr in devices:
+        updated = False
+
+        # Update device type if we now have a definitive answer
+        if 'device_type' in device_data and device_data['device_type'] in ['ble', 'classic']:
+            if devices[bd_addr].get('device_type') in ['unknown', None]:
+                devices[bd_addr]['device_type'] = device_data['device_type']
+                updated = True
+
+        # Update name if we got a better one
+        if 'device_name' in device_data and device_data['device_name']:
+            current_name = devices[bd_addr].get('device_name', '')
+            if not current_name or current_name in ['Unknown', 'BLE Device', '']:
+                devices[bd_addr]['device_name'] = device_data['device_name']
+                updated = True
+
+        # Update company/manufacturer
+        if 'company_name' in device_data and device_data['company_name']:
+            devices[bd_addr]['bt_company'] = device_data['company_name']
+            updated = True
+
+        # Update RSSI
+        if 'rssi' in device_data:
+            devices[bd_addr]['rssi'] = device_data['rssi']
+            updated = True
+
+        # Update TX power
+        if 'tx_power' in device_data:
+            devices[bd_addr]['tx_power'] = device_data['tx_power']
+            updated = True
+
+        # Emit update if changed
+        if updated:
             socketio.emit('device_update', devices[bd_addr])
 
-        return bd_addr, rssi
 
-    return None, None
+def get_btmon_device_info(bd_address):
+    """Get cached device info from btmon for a device."""
+    bd_address = bd_address.upper()
+    cached = btmon_device_cache.get(bd_address)
+    if cached and (time.time() - cached.get('timestamp', 0)) < 60:
+        return cached
+    return None
 
 
 def btmon_monitor_loop():
-    """Background thread to monitor btmon output for RSSI."""
-    global btmon_process, scanning_active
+    """Background thread to monitor btmon output for device info."""
+    global btmon_process, scanning_active, btmon_parser_state
 
-    add_log("Starting btmon RSSI monitor...", "INFO")
+    add_log("Starting btmon device monitor...", "INFO")
 
     try:
-        # Start btmon process
+        # Start btmon process with timestamp option
         btmon_process = subprocess.Popen(
             ['btmon', '-T'],
             stdout=subprocess.PIPE,
@@ -1692,6 +1943,11 @@ def btmon_monitor_loop():
                 if scanning_active:
                     add_log(f"btmon read error: {e}", "WARNING")
                 break
+
+        # Save any pending device data before exit
+        if btmon_parser_state.current_addr and btmon_parser_state.current_device:
+            save_btmon_device_data(btmon_parser_state.current_addr, btmon_parser_state.current_device)
+        btmon_parser_state.reset()
 
     except Exception as e:
         add_log(f"btmon monitor error: {e}", "ERROR")
@@ -2108,7 +2364,9 @@ def estimate_emitter_location(bd_address):
     est_lon = weighted_lon / total_weight
 
     # CEP radius (Circular Error Probable) - 50th percentile
+    # Enforce minimum of 10m to ensure containment
     cep_radius = sorted(distances)[len(distances) // 2] if distances else 50
+    cep_radius = max(10, cep_radius)
 
     return (est_lat, est_lon, cep_radius)
 
@@ -2796,6 +3054,30 @@ def process_found_device(device_info):
     bd_addr = device_info['bd_address']
     now = datetime.now()
     now_str = now.strftime('%Y-%m-%d %H:%M:%S')
+
+    # Enrich with btmon cached data (device type, company, name, etc.)
+    btmon_data = get_btmon_device_info(bd_addr)
+    if btmon_data:
+        # Enrich device_type if we don't have a definitive one
+        if device_info.get('device_type') in ['unknown', None] and btmon_data.get('device_type'):
+            device_info['device_type'] = btmon_data['device_type']
+
+        # Enrich device name if we don't have a good one
+        current_name = device_info.get('device_name', '')
+        if (not current_name or current_name in ['Unknown', 'BLE Device', '']) and btmon_data.get('device_name'):
+            device_info['device_name'] = btmon_data['device_name']
+
+        # Add company/manufacturer info from btmon
+        if btmon_data.get('company_name'):
+            device_info['bt_company'] = btmon_data['company_name']
+
+        # Add TX power if available
+        if btmon_data.get('tx_power') is not None:
+            device_info['tx_power'] = btmon_data['tx_power']
+
+        # Add address type (public/random)
+        if btmon_data.get('addr_type'):
+            device_info['addr_type'] = btmon_data['addr_type']
 
     # Check if it's a new device or update
     is_new = bd_addr not in devices
@@ -3498,10 +3780,13 @@ def calculate_geolocation(observations):
 
     # CEP95 ~ 2.45 * standard deviation for 2D normal distribution
     # Scale by average distance and observation count
-    cep = max(5, min(avg_distance * 0.5 + std_dev * 2.0, 200))
+    cep = min(avg_distance * 0.5 + std_dev * 2.0, 200)
 
     # Reduce CEP with more observations (better confidence)
     cep = cep * math.sqrt(10 / len(observations))
+
+    # Enforce minimum CEP of 10m to ensure containment
+    cep = max(10, cep)
 
     return {
         'lat': est_lat,
