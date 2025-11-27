@@ -569,6 +569,11 @@ body {
     background: var(--accent-danger);
 }
 
+.gps-status.warning {
+    background: #f5a623;
+    color: #000;
+}
+
 .gps-settings {
     margin-bottom: 10px;
 }

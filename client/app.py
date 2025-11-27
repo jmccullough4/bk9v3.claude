@@ -2581,13 +2581,34 @@ def gps_update_loop():
     global current_location
     add_log(f"GPS thread started, source: {CONFIG.get('GPS_SOURCE', 'auto')}", "INFO")
 
+    last_valid_time = 0
+    no_fix_reported = False
+
     while True:
         try:
             loc = get_gps_location()
             if loc and loc.get('lat') and loc['lat'] != 0:
+                loc['status'] = 'ok'
                 socketio.emit('gps_update', loc)
+                last_valid_time = time.time()
+                no_fix_reported = False
+            else:
+                # No valid GPS - report status periodically
+                if time.time() - last_valid_time > 5 and not no_fix_reported:
+                    socketio.emit('gps_update', {
+                        'lat': 0, 'lon': 0,
+                        'status': 'no_fix',
+                        'source': CONFIG.get('GPS_SOURCE', 'unknown')
+                    })
+                    no_fix_reported = True
         except Exception as e:
             logger.error(f"GPS error: {e}")
+            # Report error status
+            socketio.emit('gps_update', {
+                'lat': 0, 'lon': 0,
+                'status': 'error',
+                'error': str(e)
+            })
         time.sleep(1)
 
 

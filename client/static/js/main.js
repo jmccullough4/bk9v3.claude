@@ -1473,12 +1473,19 @@ function testGpsConnection() {
 
 function updateGpsStatus(location) {
     const statusEl = document.getElementById('gpsStatus');
-    if (location && location.lat && location.lat !== 0) {
+
+    if (location && location.status === 'ok' && location.lat && location.lat !== 0) {
         statusEl.textContent = 'OK';
         statusEl.className = 'gps-status connected';
+    } else if (location && location.status === 'error') {
+        statusEl.textContent = 'ERROR';
+        statusEl.className = 'gps-status error';
+    } else if (location && location.status === 'no_fix') {
+        statusEl.textContent = 'NO FIX';
+        statusEl.className = 'gps-status warning';
     } else {
         statusEl.textContent = 'NO FIX';
-        statusEl.className = 'gps-status';
+        statusEl.className = 'gps-status warning';
     }
 }
 
