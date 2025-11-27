@@ -314,11 +314,12 @@ function updateSurveyTable() {
             row.classList.add('target-row');
         }
 
-        // Check if row matches filter
+        // Check if row matches filter (includes bt_company from btmon)
         const searchFields = [
             device.bd_address,
             device.device_name,
             device.manufacturer,
+            device.bt_company,
             device.device_type
         ].map(f => (f || '').toLowerCase()).join(' ');
 
@@ -368,7 +369,7 @@ function updateSurveyTable() {
 
     // Update visible count
     const visibleCount = sortedDevices.filter(d => {
-        const searchFields = [d.bd_address, d.device_name, d.manufacturer, d.device_type]
+        const searchFields = [d.bd_address, d.device_name, d.manufacturer, d.bt_company, d.device_type]
             .map(f => (f || '').toLowerCase()).join(' ');
         return !surveyFilter || searchFields.includes(surveyFilter);
     }).length;
@@ -454,13 +455,21 @@ function updateDeviceMarker(device) {
         el.appendChild(inner);
     }
 
+    // Build popup with enhanced device info
+    const typeLabel = device.device_type === 'ble' ? 'BLE' : device.device_type === 'classic' ? 'Classic' : 'Unknown';
+    const mfr = device.bt_company || device.manufacturer || 'Unknown';
+    const cepStr = device.emitter_accuracy ? `${device.emitter_accuracy.toFixed(1)}m` : 'N/A';
+
     // Create marker
     const marker = new mapboxgl.Marker(el)
         .setLngLat([lon, lat])
         .setPopup(new mapboxgl.Popup({ offset: 25 }).setHTML(`
             <strong>${device.bd_address}</strong><br>
             Name: ${device.device_name || 'Unknown'}<br>
+            Type: ${typeLabel}<br>
+            Manufacturer: ${mfr}<br>
             RSSI: ${device.rssi || '--'} dBm<br>
+            CEP: ${cepStr}<br>
             Last Seen: ${device.last_seen || '--'}
         `))
         .addTo(map);
@@ -1810,13 +1819,20 @@ Device may be out of range or not responding.</pre>
     }
 
     // Add summary info
+    const deviceTypeLabel = device.device_type === 'ble' ? 'BLE (Low Energy)' :
+                           device.device_type === 'classic' ? 'Classic' : 'Unknown';
+    const mfrDisplay = device.bt_company || device.manufacturer || 'Unknown';
+
     const fields = [
         ['BD Address', info.bd_address],
         ['Device Name', info.device_name || device.device_name || 'Unknown'],
-        ['Manufacturer', device.manufacturer || 'Unknown'],
-        ['Device Type', device.device_type || 'Unknown'],
+        ['Device Type', deviceTypeLabel],
+        ['OUI Manufacturer', device.manufacturer || 'Unknown'],
+        ['BT Company', device.bt_company || 'N/A'],
         ['Device Class', info.device_class || 'N/A'],
+        ['Address Type', device.addr_type || 'N/A'],
         ['RSSI', device.rssi ? `${device.rssi} dBm` : 'N/A'],
+        ['TX Power', device.tx_power ? `${device.tx_power} dBm` : 'N/A'],
         ['First Seen', device.first_seen || 'N/A'],
         ['Last Seen', device.last_seen || 'N/A'],
         ['Emitter Location', device.emitter_lat && device.emitter_lon ?
@@ -1870,8 +1886,11 @@ function showTargetAlert(data) {
     if (device.first_seen) details += `First Seen: ${device.first_seen}\n`;
     if (device.last_seen) details += `Last Seen: ${device.last_seen}\n`;
     if (device.rssi) details += `RSSI: ${device.rssi} dBm\n`;
-    if (device.device_type) details += `Type: ${device.device_type}\n`;
-    if (device.manufacturer) details += `Manufacturer: ${device.manufacturer}\n`;
+    if (device.tx_power) details += `TX Power: ${device.tx_power} dBm\n`;
+    if (device.device_type) details += `Type: ${device.device_type === 'ble' ? 'BLE' : device.device_type === 'classic' ? 'Classic' : device.device_type}\n`;
+    if (device.addr_type) details += `Address Type: ${device.addr_type}\n`;
+    if (device.manufacturer) details += `OUI Manufacturer: ${device.manufacturer}\n`;
+    if (device.bt_company) details += `BT Company: ${device.bt_company}\n`;
     if (device.emitter_lat && device.emitter_lon) {
         details += `Emitter Est: ${device.emitter_lat.toFixed(6)}, ${device.emitter_lon.toFixed(6)}\n`;
         if (device.emitter_accuracy) details += `CEP: ${device.emitter_accuracy.toFixed(1)}m\n`;
@@ -1920,8 +1939,11 @@ function copyAlertDetails() {
     text += `BD Address: ${d.bd_address}\n`;
     text += `Name: ${d.device_name || 'Unknown'}\n`;
     if (d.rssi) text += `RSSI: ${d.rssi} dBm\n`;
-    if (d.device_type) text += `Type: ${d.device_type}\n`;
-    if (d.manufacturer) text += `Manufacturer: ${d.manufacturer}\n`;
+    if (d.tx_power) text += `TX Power: ${d.tx_power} dBm\n`;
+    if (d.device_type) text += `Type: ${d.device_type === 'ble' ? 'BLE' : d.device_type === 'classic' ? 'Classic' : d.device_type}\n`;
+    if (d.addr_type) text += `Address Type: ${d.addr_type}\n`;
+    if (d.manufacturer) text += `OUI Manufacturer: ${d.manufacturer}\n`;
+    if (d.bt_company) text += `BT Company: ${d.bt_company}\n`;
     if (d.first_seen) text += `First Seen: ${d.first_seen}\n`;
     if (d.last_seen) text += `Last Seen: ${d.last_seen}\n`;
 
