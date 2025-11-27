@@ -430,29 +430,32 @@ def generate_demo_devices(count=3, scan_type='both'):
 
 
 def scan_classic_bluetooth(interface='hci0'):
-    """Scan for Classic Bluetooth devices using bluetoothctl."""
+    """
+    Unified Bluetooth scan using bluetoothctl scan on.
+    This scans BOTH Classic and BLE devices simultaneously.
+    """
     # DEMO MODE
     if CONFIG.get('DEMO_MODE'):
-        add_log(f"[DEMO] Classic BT scan on {interface}", "INFO")
+        add_log(f"[DEMO] BT scan on {interface}", "INFO")
         time.sleep(1)
-        devices_found = generate_demo_devices(random.randint(1, 4), 'classic')
-        add_log(f"[DEMO] Classic scan found {len(devices_found)} devices", "INFO")
+        devices_found = generate_demo_devices(random.randint(2, 5), 'mixed')
+        add_log(f"[DEMO] Scan found {len(devices_found)} devices", "INFO")
         return devices_found
 
     devices_found = []
     device_rssi = {}
+    seen_addresses = set()
 
     try:
-        add_log(f"Starting Classic BT scan on {interface}", "INFO")
+        add_log(f"Starting unified BT scan on {interface} (Classic + LE)", "INFO")
 
         # Select the controller and power on
         subprocess.run(['bluetoothctl', 'select', interface], capture_output=True, timeout=5)
         subprocess.run(['bluetoothctl', 'power', 'on'], capture_output=True, timeout=5)
 
-        # Run scan using timeout command for reliability
-        # Use stdbuf for line-buffered output
+        # Run scan using timeout command - bluetoothctl scan on does BOTH Classic and LE
         proc = subprocess.Popen(
-            ['stdbuf', '-oL', 'timeout', '8', 'bluetoothctl', 'scan', 'on'],
+            ['stdbuf', '-oL', 'timeout', '10', 'bluetoothctl', 'scan', 'on'],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -473,11 +476,12 @@ def scan_classic_bluetooth(interface='hci0'):
                 if new_match:
                     bd_addr = new_match.group(1).upper()
                     name = new_match.group(2).strip() or 'Unknown'
-                    if bd_addr not in [d['bd_address'] for d in devices_found]:
+                    if bd_addr not in seen_addresses:
+                        seen_addresses.add(bd_addr)
                         devices_found.append({
                             'bd_address': bd_addr,
                             'device_name': name,
-                            'device_type': 'unknown',  # Will be determined later
+                            'device_type': 'unknown',  # Will be determined after scan
                             'manufacturer': get_manufacturer(bd_addr),
                             'rssi': device_rssi.get(bd_addr)
                         })
@@ -496,8 +500,8 @@ def scan_classic_bluetooth(interface='hci0'):
                             dev['rssi'] = rssi
                             found = True
                             break
-                    if not found:
-                        # Device exists in bluetoothctl cache, add it
+                    if not found and bd_addr not in seen_addresses:
+                        seen_addresses.add(bd_addr)
                         devices_found.append({
                             'bd_address': bd_addr,
                             'device_name': 'Unknown',
@@ -515,16 +519,23 @@ def scan_classic_bluetooth(interface='hci0'):
                     for dev in devices_found:
                         if dev['bd_address'] == bd_addr and name:
                             dev['device_name'] = name
+
         except Exception as read_err:
             add_log(f"Error reading scan output: {read_err}", "WARNING")
         finally:
             proc.terminate()
             proc.wait()
 
-        # Get device info to determine type (classic vs BLE)
+        # Determine device type for each found device
+        classic_count = 0
+        ble_count = 0
         for dev in devices_found:
             dev_type = get_device_type(dev['bd_address'])
             dev['device_type'] = dev_type
+            if dev_type == 'classic':
+                classic_count += 1
+            elif dev_type == 'ble':
+                ble_count += 1
 
         # Also get list of cached devices from bluetoothctl
         result = subprocess.run(
@@ -540,117 +551,39 @@ def scan_classic_bluetooth(interface='hci0'):
             if match:
                 bd_addr = match.group(1).upper()
                 name = match.group(2).strip() or 'Unknown'
-                if bd_addr not in [d['bd_address'] for d in devices_found]:
+                if bd_addr not in seen_addresses:
+                    seen_addresses.add(bd_addr)
+                    dev_type = get_device_type(bd_addr)
                     devices_found.append({
                         'bd_address': bd_addr,
                         'device_name': name,
-                        'device_type': 'classic',
+                        'device_type': dev_type,
                         'manufacturer': get_manufacturer(bd_addr),
                         'rssi': device_rssi.get(bd_addr)
                     })
+                    if dev_type == 'classic':
+                        classic_count += 1
+                    elif dev_type == 'ble':
+                        ble_count += 1
 
-        add_log(f"Classic scan found {len(devices_found)} devices", "INFO")
+        add_log(f"Scan found {len(devices_found)} devices ({classic_count} Classic, {ble_count} BLE)", "INFO")
         return devices_found
 
     except subprocess.TimeoutExpired:
-        add_log("Classic scan timeout", "WARNING")
+        add_log("Scan timeout", "WARNING")
         return devices_found
     except Exception as e:
-        add_log(f"Classic scan error: {str(e)}", "ERROR")
+        add_log(f"Scan error: {str(e)}", "ERROR")
         return devices_found
 
 
 def scan_ble_devices(interface='hci0'):
-    """Scan for Bluetooth Low Energy devices using bluetoothctl."""
-    # DEMO MODE
-    if CONFIG.get('DEMO_MODE'):
-        add_log(f"[DEMO] BLE scan on {interface}", "INFO")
-        time.sleep(1)
-        devices_found = generate_demo_devices(random.randint(1, 3), 'ble')
-        add_log(f"[DEMO] BLE scan found {len(devices_found)} devices", "INFO")
-        return devices_found
-
-    devices_found = []
-    device_rssi = {}
-
-    try:
-        add_log(f"Starting BLE scan on {interface}", "INFO")
-
-        # Select the controller and power on
-        subprocess.run(['bluetoothctl', 'select', interface], capture_output=True, timeout=5)
-        subprocess.run(['bluetoothctl', 'power', 'on'], capture_output=True, timeout=5)
-
-        # Run BLE scan using timeout command for reliability
-        proc = subprocess.Popen(
-            ['stdbuf', '-oL', 'timeout', '6', 'bluetoothctl', 'scan', 'on'],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1
-        )
-
-        # Read output in real-time
-        try:
-            for line in iter(proc.stdout.readline, ''):
-                if not line:
-                    break
-                line = line.strip()
-                if not line:
-                    continue
-
-                # Parse [NEW] Device
-                new_match = re.search(r'\[NEW\]\s+Device\s+([0-9A-Fa-f:]{17})\s*(.*)', line)
-                if new_match:
-                    bd_addr = new_match.group(1).upper()
-                    name = new_match.group(2).strip() or 'BLE Device'
-                    if bd_addr not in [d['bd_address'] for d in devices_found]:
-                        devices_found.append({
-                            'bd_address': bd_addr,
-                            'device_name': name,
-                            'device_type': 'ble',
-                            'manufacturer': get_manufacturer(bd_addr),
-                            'rssi': device_rssi.get(bd_addr)
-                        })
-                        add_log(f"Found BLE device: {bd_addr} ({name})", "DEBUG")
-
-                # Parse RSSI
-                rssi_match = re.search(r'\[CHG\]\s+Device\s+([0-9A-Fa-f:]{17})\s+RSSI:\s*(-?\d+)', line)
-                if rssi_match:
-                    bd_addr = rssi_match.group(1).upper()
-                    rssi = int(rssi_match.group(2))
-                    device_rssi[bd_addr] = rssi
-                    for dev in devices_found:
-                        if dev['bd_address'] == bd_addr:
-                            dev['rssi'] = rssi
-
-                # Parse Name changes
-                name_match = re.search(r'\[CHG\]\s+Device\s+([0-9A-Fa-f:]{17})\s+Name:\s*(.*)', line)
-                if name_match:
-                    bd_addr = name_match.group(1).upper()
-                    name = name_match.group(2).strip()
-                    for dev in devices_found:
-                        if dev['bd_address'] == bd_addr and name:
-                            dev['device_name'] = name
-        except Exception as read_err:
-            add_log(f"Error reading BLE scan output: {read_err}", "WARNING")
-        finally:
-            proc.terminate()
-            proc.wait()
-
-        # Update RSSI for devices that didn't have it inline
-        for dev in devices_found:
-            if dev['rssi'] is None and dev['bd_address'] in device_rssi:
-                dev['rssi'] = device_rssi[dev['bd_address']]
-
-        add_log(f"BLE scan found {len(devices_found)} devices", "INFO")
-        return devices_found
-
-    except subprocess.TimeoutExpired:
-        add_log("BLE scan timeout", "WARNING")
-        return devices_found
-    except Exception as e:
-        add_log(f"BLE scan error: {str(e)}", "ERROR")
-        return devices_found
+    """
+    Legacy function - now just returns empty list since unified scan handles BLE.
+    Kept for compatibility but not used.
+    """
+    # Unified scan already handles BLE, skip separate BLE scan
+    return []
 
 
 def get_device_rssi(bd_address, interface='hci0'):
@@ -956,21 +889,12 @@ def stimulate_ble_devices(interface='hci0'):
 
 
 def get_device_info(bd_address, interface='hci0'):
-    """Get detailed info about a specific device."""
+    """Get detailed info about a specific device. Runs hcitool info for up to 10 seconds."""
     info = {'bd_address': bd_address}
 
     try:
-        # Try to get device name
-        result = subprocess.run(
-            ['hcitool', '-i', interface, 'name', bd_address],
-            capture_output=True,
-            text=True,
-            timeout=10
-        )
-        if result.stdout.strip():
-            info['device_name'] = result.stdout.strip()
-
-        # Try to get device info
+        # Run hcitool info with 10 second timeout
+        add_log(f"Running hcitool info {bd_address} (10s timeout)...", "INFO")
         result = subprocess.run(
             ['hcitool', '-i', interface, 'info', bd_address],
             capture_output=True,
@@ -979,14 +903,100 @@ def get_device_info(bd_address, interface='hci0'):
         )
         info['raw_info'] = result.stdout
 
+        # Parse device name if available
+        name_match = re.search(r'Device Name:\s*(.+)', result.stdout)
+        if name_match:
+            info['device_name'] = name_match.group(1).strip()
+
         # Parse device class if available
         class_match = re.search(r'Class:\s*(0x[0-9A-Fa-f]+)', result.stdout)
         if class_match:
             info['device_class'] = class_match.group(1)
-    except:
-        pass
+
+        # Parse manufacturer
+        mfr_match = re.search(r'Manufacturer:\s*(.+)', result.stdout)
+        if mfr_match:
+            info['manufacturer_info'] = mfr_match.group(1).strip()
+
+        add_log(f"hcitool info complete for {bd_address}", "INFO")
+    except subprocess.TimeoutExpired:
+        add_log(f"hcitool info timeout for {bd_address} (10s)", "WARNING")
+        info['raw_info'] = "Timeout after 10 seconds - device not responding"
+    except Exception as e:
+        add_log(f"hcitool info error for {bd_address}: {e}", "ERROR")
+        info['raw_info'] = f"Error: {str(e)}"
 
     return info
+
+
+# Global state for continuous name retrieval
+name_retrieval_active = {}  # bd_address -> bool
+
+
+def continuous_name_retrieval(bd_address, interface='hci0'):
+    """Background thread to continuously try to get device name."""
+    global name_retrieval_active
+
+    add_log(f"Starting continuous name retrieval for {bd_address}", "INFO")
+    name_retrieval_active[bd_address] = True
+    attempt = 0
+
+    while name_retrieval_active.get(bd_address, False):
+        attempt += 1
+        try:
+            # Try hcitool name
+            result = subprocess.run(
+                ['hcitool', '-i', interface, 'name', bd_address],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if result.stdout.strip():
+                name = result.stdout.strip()
+                add_log(f"Got name for {bd_address}: {name} (attempt {attempt})", "INFO")
+
+                # Update device in memory
+                if bd_address in devices:
+                    devices[bd_address]['device_name'] = name
+                    socketio.emit('device_update', devices[bd_address])
+
+                # Emit name result
+                socketio.emit('name_result', {
+                    'bd_address': bd_address,
+                    'name': name,
+                    'attempt': attempt,
+                    'status': 'found'
+                })
+            else:
+                socketio.emit('name_result', {
+                    'bd_address': bd_address,
+                    'name': None,
+                    'attempt': attempt,
+                    'status': 'no_response'
+                })
+
+        except subprocess.TimeoutExpired:
+            socketio.emit('name_result', {
+                'bd_address': bd_address,
+                'name': None,
+                'attempt': attempt,
+                'status': 'timeout'
+            })
+        except Exception as e:
+            add_log(f"Name retrieval error for {bd_address}: {e}", "WARNING")
+            socketio.emit('name_result', {
+                'bd_address': bd_address,
+                'name': None,
+                'attempt': attempt,
+                'status': 'error',
+                'error': str(e)
+            })
+
+        # Wait before next attempt
+        time.sleep(2)
+
+    add_log(f"Stopped name retrieval for {bd_address} after {attempt} attempts", "INFO")
+    name_retrieval_active.pop(bd_address, None)
 
 
 # ==================== GEOLOCATION ALGORITHM ====================
@@ -1620,14 +1630,9 @@ def scan_loop():
                 if not scanning_active:
                     break
 
-                # Classic scan
-                classic_devices = scan_classic_bluetooth(iface)
-                for dev in classic_devices:
-                    process_found_device(dev)
-
-                # BLE scan
-                ble_devices = scan_ble_devices(iface)
-                for dev in ble_devices:
+                # Unified scan - handles both Classic and BLE with bluetoothctl scan on
+                all_devices = scan_classic_bluetooth(iface)
+                for dev in all_devices:
                     process_found_device(dev)
 
             time.sleep(CONFIG['SCAN_INTERVAL'])
@@ -1903,6 +1908,45 @@ def device_name(bd_address):
     except Exception as e:
         add_log(f"Error getting name for {bd_address}: {e}", "ERROR")
         return jsonify({'name': None, 'bd_address': bd_address, 'error': str(e)})
+
+
+@app.route('/api/device/<bd_address>/name/start', methods=['POST'])
+@login_required
+def start_continuous_name(bd_address):
+    """Start continuous name retrieval for a device."""
+    global name_retrieval_active
+
+    bd_address = bd_address.upper()
+
+    if name_retrieval_active.get(bd_address):
+        return jsonify({'status': 'already_running', 'bd_address': bd_address})
+
+    # Start background thread for continuous name retrieval
+    thread = threading.Thread(
+        target=continuous_name_retrieval,
+        args=(bd_address,),
+        daemon=True
+    )
+    thread.start()
+
+    add_log(f"Started continuous name retrieval for {bd_address}", "INFO")
+    return jsonify({'status': 'started', 'bd_address': bd_address})
+
+
+@app.route('/api/device/<bd_address>/name/stop', methods=['POST'])
+@login_required
+def stop_continuous_name(bd_address):
+    """Stop continuous name retrieval for a device."""
+    global name_retrieval_active
+
+    bd_address = bd_address.upper()
+
+    if bd_address in name_retrieval_active:
+        name_retrieval_active[bd_address] = False
+        add_log(f"Stopping name retrieval for {bd_address}", "INFO")
+        return jsonify({'status': 'stopped', 'bd_address': bd_address})
+
+    return jsonify({'status': 'not_running', 'bd_address': bd_address})
 
 
 @app.route('/api/device/<bd_address>/locate', methods=['POST'])
