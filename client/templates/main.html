@@ -596,6 +596,10 @@
                     <div class="section-header">
                         <span class="section-icon">&#128196;</span>
                         <span>LIVE LOG</span>
+                        <div class="header-controls">
+                            <button class="btn btn-sm" onclick="exportCollection('json')" title="Export JSON">&#128190;</button>
+                            <button class="btn btn-sm" onclick="exportCollection('csv')" title="Export CSV">&#128195;</button>
+                        </div>
                     </div>
                     <div class="section-content log-container" id="logContainer">
                         <!-- Logs will be populated here -->
@@ -607,7 +611,7 @@
 
     <!-- Version Footer -->
     <div class="version-footer">
-        <span class="version-text">BlueK9 v3.0.21</span>
+        <span class="version-text">BlueK9 v3.0.22</span>
         <span class="version-divider">|</span>
         <span class="version-id" id="systemIdFooter">--</span>
     </div>

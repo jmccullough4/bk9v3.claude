@@ -300,6 +300,18 @@ body {
     font-size: 14px;
 }
 
+.header-controls {
+    margin-left: auto;
+    display: flex;
+    gap: 5px;
+}
+
+.header-controls .btn {
+    padding: 2px 6px;
+    font-size: 12px;
+    min-width: unset;
+}
+
 .section-content {
     padding: 15px;
 }
@@ -696,6 +708,18 @@ body {
 .survey-table .action-btn:hover {
     border-color: var(--accent-primary);
     color: var(--accent-primary);
+}
+
+.survey-table .geo-btn.active {
+    background: var(--accent-success);
+    border-color: var(--accent-success);
+    color: var(--bg-primary);
+    animation: geo-pulse 1s infinite;
+}
+
+@keyframes geo-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
 }
 
 /* Survey Search/Filter Bar */
