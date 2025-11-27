@@ -2334,6 +2334,99 @@ def get_gps():
     return jsonify(current_location)
 
 
+@app.route('/api/system/stats')
+@login_required
+def get_system_stats():
+    """Get system hardware statistics (CPU, memory, temperature)."""
+    stats = {
+        'cpu_percent': None,
+        'memory_percent': None,
+        'cpu_temp': None,
+        'disk_percent': None,
+        'uptime': None
+    }
+
+    try:
+        # CPU usage
+        result = subprocess.run(
+            ['grep', 'cpu ', '/proc/stat'],
+            capture_output=True, text=True, timeout=2
+        )
+        if result.stdout:
+            fields = result.stdout.split()
+            if len(fields) >= 5:
+                idle = int(fields[4])
+                total = sum(int(x) for x in fields[1:8])
+                # Store for delta calculation
+                if not hasattr(get_system_stats, 'last_cpu'):
+                    get_system_stats.last_cpu = (total, idle)
+                last_total, last_idle = get_system_stats.last_cpu
+                total_delta = total - last_total
+                idle_delta = idle - last_idle
+                if total_delta > 0:
+                    stats['cpu_percent'] = round(100 * (1 - idle_delta / total_delta), 1)
+                get_system_stats.last_cpu = (total, idle)
+    except Exception:
+        pass
+
+    try:
+        # Memory usage
+        result = subprocess.run(['free', '-m'], capture_output=True, text=True, timeout=2)
+        if result.stdout:
+            lines = result.stdout.strip().split('\n')
+            if len(lines) >= 2:
+                parts = lines[1].split()
+                if len(parts) >= 3:
+                    total = int(parts[1])
+                    used = int(parts[2])
+                    stats['memory_percent'] = round(100 * used / total, 1) if total > 0 else 0
+    except Exception:
+        pass
+
+    try:
+        # CPU temperature (Raspberry Pi and others)
+        temp_paths = [
+            '/sys/class/thermal/thermal_zone0/temp',
+            '/sys/class/hwmon/hwmon0/temp1_input',
+            '/sys/devices/virtual/thermal/thermal_zone0/temp'
+        ]
+        for temp_path in temp_paths:
+            try:
+                with open(temp_path, 'r') as f:
+                    temp = int(f.read().strip())
+                    stats['cpu_temp'] = round(temp / 1000, 1)  # Convert milli-celsius to celsius
+                    break
+            except FileNotFoundError:
+                continue
+    except Exception:
+        pass
+
+    try:
+        # Disk usage
+        result = subprocess.run(['df', '-h', '/'], capture_output=True, text=True, timeout=2)
+        if result.stdout:
+            lines = result.stdout.strip().split('\n')
+            if len(lines) >= 2:
+                parts = lines[1].split()
+                if len(parts) >= 5:
+                    # Parse percentage (remove %)
+                    stats['disk_percent'] = int(parts[4].replace('%', ''))
+    except Exception:
+        pass
+
+    try:
+        # Uptime
+        with open('/proc/uptime', 'r') as f:
+            uptime_seconds = float(f.read().split()[0])
+            hours = int(uptime_seconds // 3600)
+            minutes = int((uptime_seconds % 3600) // 60)
+            stats['uptime'] = f"{hours}h {minutes}m"
+    except Exception:
+        pass
+
+    return jsonify(stats)
+
+
 @app.route('/api/gps/follow', methods=['POST'])
 @login_required
 def set_gps_follow():
