@@ -177,6 +177,37 @@ def get_db():
     return conn
 
 
+def load_settings_from_db():
+    """Load persisted settings from database on startup."""
+    global CONFIG
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT key, value FROM system_settings')
+        rows = c.fetchall()
+        conn.close()
+
+        # Map of database keys to their types for proper conversion
+        int_keys = {'NMEA_TCP_PORT', 'GPSD_PORT', 'GPS_SERIAL_BAUD', 'SMS_ALERT_INTERVAL'}
+
+        for row in rows:
+            key = row['key']
+            value = row['value']
+            if key in CONFIG:
+                # Convert to appropriate type
+                if key in int_keys:
+                    try:
+                        value = int(value)
+                    except (ValueError, TypeError):
+                        continue
+                CONFIG[key] = value
+                logger.info(f"Loaded setting {key} from database")
+
+        logger.info(f"Settings loaded: GPS_SOURCE={CONFIG.get('GPS_SOURCE')}, SYSTEM_ID={CONFIG.get('SYSTEM_ID')}")
+    except Exception as e:
+        logger.warning(f"Could not load settings from database: {e}")
+
+
 def add_log(message, level='INFO'):
     """Add a log message and broadcast to clients."""
     timestamp = datetime.now().strftime('%H:%M:%S')
@@ -4162,9 +4193,12 @@ def handle_device_info_request(data):
 
 # ==================== MAIN ====================
 
-def main():
+def run_app():
     """Main entry point."""
     init_database()
+
+    # Load persisted settings from database
+    load_settings_from_db()
 
     # Start GPS thread
     global gps_thread
@@ -4172,10 +4206,11 @@ def main():
     gps_thread.start()
 
     add_log("BlueK9 Client starting...", "INFO")
+    add_log(f"System ID: {CONFIG.get('SYSTEM_ID')}, GPS Source: {CONFIG.get('GPS_SOURCE')}", "INFO")
 
     # Run the app
     socketio.run(app, host='0.0.0.0', port=5000, debug=False, allow_unsafe_werkzeug=True)
 
 
 if __name__ == '__main__':
-    main()
+    run_app()
