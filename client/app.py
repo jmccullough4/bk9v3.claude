@@ -15,7 +15,7 @@ import threading
 import re
 from datetime import datetime
 from functools import wraps
-from flask import Flask, render_template, request, jsonify, session, redirect, url_for
+from flask import Flask, render_template, request, jsonify, session, redirect, url_for, make_response
 from flask_socketio import SocketIO, emit
 import struct
 
@@ -1909,8 +1909,15 @@ def get_device_info(bd_address, interface='hci0'):
 
         add_log(f"hcitool info complete for {bd_address}", "INFO")
 
-        # Only alert on target if device actually responded with data
+        # Device responded - add to survey table
         if device_responded:
+            device_data = {
+                'bd_address': bd_address,
+                'device_name': info.get('device_name'),
+                'device_type': 'classic',
+                'manufacturer': info.get('manufacturer_info') or get_manufacturer(bd_address)
+            }
+            process_found_device(device_data)
             check_target_and_alert(bd_address, source='get_info')
 
     except subprocess.TimeoutExpired:
@@ -1950,15 +1957,24 @@ def continuous_name_retrieval(bd_address, interface='hci0'):
                 name = result.stdout.strip()
                 add_log(f"Got name for {bd_address}: {name} (attempt {attempt})", "INFO")
 
-                # Device actually responded - check if target (only once)
+                # Device responded - add to survey table if not already there
+                if bd_address not in devices:
+                    device_data = {
+                        'bd_address': bd_address,
+                        'device_name': name,
+                        'device_type': 'classic',
+                        'manufacturer': get_manufacturer(bd_address)
+                    }
+                    process_found_device(device_data)
+                else:
+                    # Update existing device
+                    devices[bd_address]['device_name'] = name
+                    socketio.emit('device_update', devices[bd_address])
+
+                # Check if target (only once per session)
                 if not target_alerted:
                     target_alerted = True
                     check_target_and_alert(bd_address, source='get_name')
-
-                # Update device in memory
-                if bd_address in devices:
-                    devices[bd_address]['device_name'] = name
-                    socketio.emit('device_update', devices[bd_address])
 
                 # Emit name result
                 socketio.emit('name_result', {
@@ -2162,6 +2178,185 @@ def stop_geo_thread():
     global geo_thread
     # Thread will stop when scanning_active becomes False
     geo_thread = None
+
+
+# ==================== ACTIVE GEO TRACKING ====================
+
+# Active geo tracking state
+active_geo_sessions = {}  # bd_address -> {'thread': Thread, 'active': bool, 'interface': str}
+
+
+def active_geo_track(bd_address, interface='hci0'):
+    """
+    Actively track a device using continuous l2ping with RSSI/RTT extraction.
+    This runs in a dedicated thread for the target device.
+    """
+    global active_geo_sessions, current_location
+
+    add_log(f"Starting active geo tracking for {bd_address}", "INFO")
+    session = active_geo_sessions.get(bd_address, {})
+
+    ping_count = 0
+    successful_pings = 0
+    rtt_history = []
+
+    while session.get('active', False):
+        try:
+            ping_count += 1
+
+            # Run l2ping and capture RTT
+            result = subprocess.run(
+                ['l2ping', '-i', interface, '-c', '1', '-s', '44', '-t', '3', bd_address],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+
+            # Parse l2ping output for RTT
+            # Format: "44 bytes from XX:XX:XX:XX:XX:XX id 0 time 12.34ms"
+            rtt = None
+            if 'time' in result.stdout:
+                rtt_match = re.search(r'time\s+([\d.]+)ms', result.stdout)
+                if rtt_match:
+                    rtt = float(rtt_match.group(1))
+                    rtt_history.append(rtt)
+                    successful_pings += 1
+
+            # Try to get RSSI while connection is active
+            rssi = None
+
+            # Method 1: Check btmon cache
+            rssi = get_btmon_rssi(bd_address)
+
+            # Method 2: Try hcitool rssi if we have a connection
+            if rssi is None:
+                try:
+                    rssi_result = subprocess.run(
+                        ['hcitool', '-i', interface, 'rssi', bd_address],
+                        capture_output=True, text=True, timeout=2
+                    )
+                    rssi_match = re.search(r'RSSI return value:\s*(-?\d+)', rssi_result.stdout)
+                    if rssi_match:
+                        rssi = int(rssi_match.group(1))
+                except:
+                    pass
+
+            # Method 3: Parse btmon live
+            if rssi is None:
+                rssi = get_rssi_from_bluetoothctl(bd_address)
+
+            # Record observation if we have location and RSSI
+            if current_location.get('lat') and rssi:
+                conn = get_db()
+                c = conn.cursor()
+                c.execute('''
+                    INSERT INTO rssi_history (bd_address, rssi, system_lat, system_lon)
+                    VALUES (?, ?, ?, ?)
+                ''', (bd_address, rssi, current_location['lat'], current_location['lon']))
+                conn.commit()
+                conn.close()
+
+                # Emit real-time ping data to UI
+                socketio.emit('geo_ping', {
+                    'bd_address': bd_address,
+                    'rssi': rssi,
+                    'rtt': rtt,
+                    'ping': ping_count,
+                    'success_rate': round(successful_pings / ping_count * 100, 1),
+                    'avg_rtt': round(sum(rtt_history[-10:]) / len(rtt_history[-10:]), 2) if rtt_history else None,
+                    'system_lat': current_location['lat'],
+                    'system_lon': current_location['lon']
+                })
+
+                add_log(f"GEO PING {bd_address}: RSSI={rssi}dBm RTT={rtt}ms", "DEBUG")
+
+                # Recalculate geolocation after each successful ping
+                if successful_pings >= 2:
+                    location = update_device_location(bd_address, rssi)
+                    if location and bd_address in devices:
+                        devices[bd_address]['emitter_lat'] = location[0]
+                        devices[bd_address]['emitter_lon'] = location[1]
+                        devices[bd_address]['emitter_accuracy'] = location[2]
+                        socketio.emit('device_update', devices[bd_address])
+
+            elif rtt:
+                # No RSSI but got RTT - still log the ping
+                socketio.emit('geo_ping', {
+                    'bd_address': bd_address,
+                    'rssi': None,
+                    'rtt': rtt,
+                    'ping': ping_count,
+                    'success_rate': round(successful_pings / ping_count * 100, 1),
+                    'avg_rtt': round(sum(rtt_history[-10:]) / len(rtt_history[-10:]), 2) if rtt_history else None
+                })
+
+            # Short delay between pings
+            time.sleep(0.5)
+
+        except subprocess.TimeoutExpired:
+            socketio.emit('geo_ping', {
+                'bd_address': bd_address,
+                'rssi': None,
+                'rtt': None,
+                'ping': ping_count,
+                'status': 'timeout',
+                'success_rate': round(successful_pings / ping_count * 100, 1) if ping_count > 0 else 0
+            })
+            time.sleep(1)
+
+        except Exception as e:
+            add_log(f"Active geo error for {bd_address}: {e}", "WARNING")
+            time.sleep(1)
+
+        # Re-check session state
+        session = active_geo_sessions.get(bd_address, {})
+
+    add_log(f"Stopped active geo tracking for {bd_address} ({successful_pings}/{ping_count} pings)", "INFO")
+
+
+def start_active_geo(bd_address, interface='hci0'):
+    """Start active geo tracking for a device."""
+    global active_geo_sessions
+
+    if bd_address in active_geo_sessions and active_geo_sessions[bd_address].get('active'):
+        return {'status': 'already_running'}
+
+    active_geo_sessions[bd_address] = {
+        'active': True,
+        'interface': interface,
+        'thread': None
+    }
+
+    thread = threading.Thread(
+        target=active_geo_track,
+        args=(bd_address, interface),
+        daemon=True
+    )
+    active_geo_sessions[bd_address]['thread'] = thread
+    thread.start()
+
+    # Also add device to survey if not present
+    if bd_address not in devices:
+        device_data = {
+            'bd_address': bd_address,
+            'device_name': None,
+            'device_type': 'classic',
+            'manufacturer': get_manufacturer(bd_address)
+        }
+        process_found_device(device_data)
+
+    return {'status': 'started', 'bd_address': bd_address}
+
+
+def stop_active_geo(bd_address):
+    """Stop active geo tracking for a device."""
+    global active_geo_sessions
+
+    if bd_address in active_geo_sessions:
+        active_geo_sessions[bd_address]['active'] = False
+        return {'status': 'stopped', 'bd_address': bd_address}
+
+    return {'status': 'not_running'}
 
 
 # ==================== GPS TRACKING ====================
@@ -3019,6 +3214,42 @@ def reset_device_geo(bd_address):
     return jsonify({'status': 'reset', 'cleared': deleted})
 
 
+@app.route('/api/device/<bd_address>/geo/track', methods=['POST'])
+@login_required
+def start_device_geo_track(bd_address):
+    """Start active geo tracking with continuous l2ping for a device."""
+    bd_address = bd_address.upper()
+    interface = request.json.get('interface', 'hci0') if request.json else 'hci0'
+
+    result = start_active_geo(bd_address, interface)
+    add_log(f"Active geo tracking started for {bd_address}", "INFO")
+    return jsonify(result)
+
+
+@app.route('/api/device/<bd_address>/geo/stop', methods=['POST'])
+@login_required
+def stop_device_geo_track(bd_address):
+    """Stop active geo tracking for a device."""
+    bd_address = bd_address.upper()
+
+    result = stop_active_geo(bd_address)
+    return jsonify(result)
+
+
+@app.route('/api/geo/active', methods=['GET'])
+@login_required
+def get_active_geo_sessions():
+    """Get list of active geo tracking sessions."""
+    sessions = []
+    for bd_addr, session in active_geo_sessions.items():
+        if session.get('active'):
+            sessions.append({
+                'bd_address': bd_addr,
+                'interface': session.get('interface', 'hci0')
+            })
+    return jsonify(sessions)
+
+
 @app.route('/api/geo/reset_all', methods=['POST'])
 @login_required
 def reset_all_geo():
@@ -3761,22 +3992,91 @@ def get_logs():
 @app.route('/api/logs/export')
 @login_required
 def export_logs():
-    """Export device logs for analysis."""
+    """Export comprehensive collection logs for offline analysis."""
+    export_format = request.args.get('format', 'json')
     conn = get_db()
     c = conn.cursor()
 
+    # Get all devices with full details
     c.execute('''
         SELECT bd_address, device_name, manufacturer, device_type, rssi,
                first_seen, last_seen, system_lat, system_lon,
-               emitter_lat, emitter_lon, is_target
+               emitter_lat, emitter_lon, emitter_accuracy, is_target, raw_data
         FROM devices
         ORDER BY last_seen DESC
     ''')
-
     devices_log = [dict(row) for row in c.fetchall()]
+
+    # Get all RSSI history for geolocation data
+    c.execute('''
+        SELECT bd_address, rssi, system_lat, system_lon, timestamp
+        FROM rssi_history
+        ORDER BY timestamp DESC
+    ''')
+    rssi_history = [dict(row) for row in c.fetchall()]
+
+    # Get targets list
+    c.execute('SELECT bd_address, notes, added_at FROM targets')
+    targets_list = [dict(row) for row in c.fetchall()]
+
+    # Get system settings
+    c.execute('SELECT key, value FROM system_settings')
+    settings = {row['key']: row['value'] for row in c.fetchall()}
+
     conn.close()
 
-    return jsonify(devices_log)
+    # Build export data
+    export_data = {
+        'export_timestamp': datetime.now().isoformat(),
+        'system_id': settings.get('SYSTEM_ID', 'UNKNOWN'),
+        'devices': devices_log,
+        'rssi_history': rssi_history,
+        'targets': targets_list,
+        'summary': {
+            'total_devices': len(devices_log),
+            'total_rssi_readings': len(rssi_history),
+            'total_targets': len(targets_list),
+            'devices_with_location': sum(1 for d in devices_log if d.get('emitter_lat')),
+            'targets_detected': sum(1 for d in devices_log if d.get('is_target'))
+        }
+    }
+
+    if export_format == 'csv':
+        # Generate CSV for devices
+        import io
+        output = io.StringIO()
+        output.write('# BlueK9 Collection Export\n')
+        output.write(f'# Exported: {export_data["export_timestamp"]}\n')
+        output.write(f'# System ID: {export_data["system_id"]}\n')
+        output.write('#\n')
+        output.write('# DEVICES\n')
+        output.write('bd_address,device_name,manufacturer,device_type,rssi,first_seen,last_seen,')
+        output.write('system_lat,system_lon,emitter_lat,emitter_lon,emitter_accuracy,is_target\n')
+
+        for d in devices_log:
+            output.write(f'{d.get("bd_address","")},{d.get("device_name","").replace(",", ";") if d.get("device_name") else ""},')
+            output.write(f'{d.get("manufacturer","").replace(",", ";") if d.get("manufacturer") else ""},')
+            output.write(f'{d.get("device_type","")},{d.get("rssi","")},{d.get("first_seen","")},')
+            output.write(f'{d.get("last_seen","")},{d.get("system_lat","")},{d.get("system_lon","")},')
+            output.write(f'{d.get("emitter_lat","")},{d.get("emitter_lon","")},{d.get("emitter_accuracy","")},')
+            output.write(f'{1 if d.get("is_target") else 0}\n')
+
+        output.write('#\n# RSSI HISTORY\n')
+        output.write('bd_address,rssi,system_lat,system_lon,timestamp\n')
+        for r in rssi_history:
+            output.write(f'{r.get("bd_address","")},{r.get("rssi","")},{r.get("system_lat","")},')
+            output.write(f'{r.get("system_lon","")},{r.get("timestamp","")}\n')
+
+        response = make_response(output.getvalue())
+        response.headers['Content-Type'] = 'text/csv'
+        response.headers['Content-Disposition'] = f'attachment; filename=bluek9_collection_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
+        return response
+
+    # Default JSON export
+    response = make_response(json.dumps(export_data, indent=2))
+    response.headers['Content-Type'] = 'application/json'
+    response.headers['Content-Disposition'] = f'attachment; filename=bluek9_collection_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json'
+    return response
 
 
 # ==================== WEBSOCKET EVENTS ====================

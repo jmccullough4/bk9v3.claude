@@ -118,6 +118,10 @@ function initWebSocket() {
     socket.on('name_result', (data) => {
         handleNameResult(data);
     });
+
+    socket.on('geo_ping', (data) => {
+        handleGeoPing(data);
+    });
 }
 
 function handleNameResult(data) {
@@ -288,6 +292,7 @@ function updateSurveyTable() {
             <td>${lastSeen}</td>
             <td>
                 <button class="action-btn" onclick="getDeviceInfo('${device.bd_address}')" title="Get Info">i</button>
+                <button class="action-btn geo-btn" onclick="toggleActiveGeo('${device.bd_address}')" title="Track Location" data-bd="${device.bd_address}">&#128205;</button>
                 ${!device.is_target ? `<button class="action-btn" onclick="quickAddTarget('${device.bd_address}')" title="Add as Target">+</button>` : ''}
             </td>
         `;
@@ -2927,5 +2932,104 @@ function loadPanelLayout() {
         } catch (e) {
             console.error('Failed to load panel layout:', e);
         }
+    }
+}
+
+// ==================== EXPORT FUNCTIONS ====================
+
+/**
+ * Export collection data for offline analysis
+ */
+function exportCollection(format = 'json') {
+    addLogEntry(`Exporting collection data as ${format.toUpperCase()}...`, 'INFO');
+
+    // Create download link
+    const link = document.createElement('a');
+    link.href = `/api/logs/export?format=${format}`;
+    link.download = `bluek9_collection.${format}`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    addLogEntry(`Collection export initiated`, 'INFO');
+}
+
+// ==================== ACTIVE GEO TRACKING ====================
+
+// Track which devices have active geo sessions
+const activeGeoSessions = new Set();
+
+/**
+ * Toggle active geo tracking for a device
+ */
+function toggleActiveGeo(bdAddress) {
+    if (activeGeoSessions.has(bdAddress)) {
+        stopActiveGeo(bdAddress);
+    } else {
+        startActiveGeo(bdAddress);
+    }
+}
+
+/**
+ * Start active geo tracking with continuous l2ping
+ */
+function startActiveGeo(bdAddress) {
+    fetch(`/api/device/${bdAddress}/geo/track`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'started' || data.status === 'already_running') {
+            activeGeoSessions.add(bdAddress);
+            updateGeoButtonState(bdAddress, true);
+            addLogEntry(`Active geo tracking started for ${bdAddress}`, 'INFO');
+        }
+    })
+    .catch(e => addLogEntry(`Failed to start geo tracking: ${e}`, 'ERROR'));
+}
+
+/**
+ * Stop active geo tracking
+ */
+function stopActiveGeo(bdAddress) {
+    fetch(`/api/device/${bdAddress}/geo/stop`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+    })
+    .then(r => r.json())
+    .then(data => {
+        activeGeoSessions.delete(bdAddress);
+        updateGeoButtonState(bdAddress, false);
+        addLogEntry(`Active geo tracking stopped for ${bdAddress}`, 'INFO');
+    })
+    .catch(e => addLogEntry(`Failed to stop geo tracking: ${e}`, 'ERROR'));
+}
+
+/**
+ * Update geo button visual state
+ */
+function updateGeoButtonState(bdAddress, active) {
+    const btn = document.querySelector(`.geo-btn[data-bd="${bdAddress}"]`);
+    if (btn) {
+        btn.classList.toggle('active', active);
+        btn.title = active ? 'Stop Tracking' : 'Track Location';
+    }
+}
+
+/**
+ * Handle geo ping events from server
+ */
+function handleGeoPing(data) {
+    // Update device RSSI in real-time
+    if (data.rssi && devices[data.bd_address]) {
+        devices[data.bd_address].rssi = data.rssi;
+    }
+
+    // Show ping status in log (throttled)
+    if (data.ping % 5 === 0 || data.status === 'timeout') {
+        const status = data.status === 'timeout' ? 'TIMEOUT' :
+            `RSSI:${data.rssi || '--'}dBm RTT:${data.rtt || '--'}ms`;
+        addLogEntry(`GEO ${data.bd_address}: ${status} (${data.success_rate}% success)`, 'DEBUG');
     }
 }
