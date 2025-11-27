@@ -80,11 +80,13 @@ function initWebSocket() {
 
     socket.on('connect', () => {
         addLogEntry('Connected to server', 'INFO');
+        // Sync state on reconnect
+        syncSystemState();
     });
 
     socket.on('disconnect', () => {
         addLogEntry('Disconnected from server', 'WARNING');
-        updateScanStatus(false);
+        // Don't reset UI state on disconnect - server operations may still be running
     });
 
     socket.on('device_update', (device) => {
@@ -122,6 +124,59 @@ function initWebSocket() {
     socket.on('geo_ping', (data) => {
         handleGeoPing(data);
     });
+}
+
+/**
+ * Sync system state on connect/reconnect
+ */
+function syncSystemState() {
+    fetch('/api/state')
+        .then(r => r.json())
+        .then(state => {
+            // Sync scanning state
+            updateScanStatus(state.scanning);
+
+            // Sync active geo sessions
+            activeGeoSessions.clear();
+            state.active_geo_sessions.forEach(session => {
+                activeGeoSessions.add(session.bd_address);
+                updateGeoButtonState(session.bd_address, true);
+
+                // If this is the manual tracking target, update panel
+                const select = document.getElementById('trackTargetSelect');
+                if (select && select.value === session.bd_address) {
+                    manualTrackingBd = session.bd_address;
+                    document.getElementById('btnStartTrack').disabled = true;
+                    document.getElementById('btnStopTrack').disabled = false;
+                    document.getElementById('trackTargetSelect').disabled = true;
+                    document.getElementById('trackingStatus').textContent = 'ACTIVE';
+                    document.getElementById('trackingStatus').className = 'tracking-status active';
+                }
+            });
+
+            // Check if any tracking session matches our dropdown
+            if (state.active_geo_sessions.length > 0) {
+                const select = document.getElementById('trackTargetSelect');
+                const activeSession = state.active_geo_sessions.find(s => s.bd_address === select?.value);
+                if (!activeSession && manualTrackingBd) {
+                    // Our tracked target stopped, reset UI
+                    if (!state.active_geo_sessions.find(s => s.bd_address === manualTrackingBd)) {
+                        manualTrackingBd = null;
+                        document.getElementById('btnStartTrack').disabled = false;
+                        document.getElementById('btnStopTrack').disabled = true;
+                        document.getElementById('trackTargetSelect').disabled = false;
+                        document.getElementById('trackingStatus').textContent = '--';
+                        document.getElementById('trackingStatus').className = 'tracking-status';
+                    }
+                }
+            }
+
+            addLogEntry(`State synced: scanning=${state.scanning}, geo_sessions=${state.active_geo_sessions.length}`, 'INFO');
+        })
+        .catch(e => {
+            // May fail if not logged in yet
+            console.log('State sync failed:', e);
+        });
 }
 
 function handleNameResult(data) {

@@ -3067,6 +3067,28 @@ def get_config():
     })
 
 
+@app.route('/api/state')
+@login_required
+def get_system_state():
+    """Get current system operation state for UI sync on reconnect."""
+    # Get active geo sessions
+    geo_sessions = []
+    for bd_addr, session in active_geo_sessions.items():
+        if session.get('active'):
+            geo_sessions.append({
+                'bd_address': bd_addr,
+                'interface': session.get('interface', 'hci0'),
+                'methods': session.get('methods', ['l2ping', 'rssi'])
+            })
+
+    return jsonify({
+        'scanning': scanning_active,
+        'active_geo_sessions': geo_sessions,
+        'device_count': len(devices),
+        'target_count': len(targets)
+    })
+
+
 @app.route('/api/scan/start', methods=['POST'])
 @login_required
 def start_scan():
