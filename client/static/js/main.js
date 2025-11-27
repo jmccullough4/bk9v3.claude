@@ -2895,8 +2895,9 @@ function initVerticalResizers() {
                 statsSection.style.flex = 'none';
             }
         } else if (currentHandle === 'stats-logs') {
-            const newHeight1 = Math.max(minHeight, startHeight1 + diff);
-            const newHeight2 = Math.max(minHeight, startHeight2 - diff);
+            // Dragging down (positive diff) expands logs (below), shrinks stats (above)
+            const newHeight1 = Math.max(minHeight, startHeight1 - diff);
+            const newHeight2 = Math.max(minHeight, startHeight2 + diff);
 
             if (newHeight1 >= minHeight && newHeight2 >= minHeight) {
                 statsSection.style.height = newHeight1 + 'px';
