@@ -2649,6 +2649,7 @@ document.addEventListener('DOMContentLoaded', () => {
         initPanelResizers();
         initVerticalResizers();
         loadPanelLayout();
+        refreshTargetList();
     }, 500);
 });
 
@@ -3094,14 +3095,49 @@ function updateTrackingStats(data) {
 }
 
 /**
- * Start manual tracking from the panel
+ * Refresh target list in dropdown
  */
-function startManualTracking() {
-    const bdInput = document.getElementById('trackBdAddress');
-    const bdAddress = bdInput.value.trim().toUpperCase();
+function refreshTargetList() {
+    fetch('/api/targets')
+        .then(r => r.json())
+        .then(targets => {
+            const select = document.getElementById('trackTargetSelect');
+            const currentValue = select.value;
 
-    if (!bdAddress || !/^([0-9A-F]{2}:){5}[0-9A-F]{2}$/.test(bdAddress)) {
-        addLogEntry('Invalid BD address format. Use XX:XX:XX:XX:XX:XX', 'ERROR');
+            // Clear existing options except the placeholder
+            select.innerHTML = '<option value="">-- Select Target --</option>';
+
+            // Add targets
+            targets.forEach(target => {
+                const option = document.createElement('option');
+                option.value = target.bd_address;
+                const device = devices[target.bd_address];
+                const name = device?.device_name || target.notes || 'Unknown';
+                option.textContent = `${target.bd_address} (${name})`;
+                select.appendChild(option);
+            });
+
+            // Restore selection if still valid
+            if (currentValue && targets.some(t => t.bd_address === currentValue)) {
+                select.value = currentValue;
+            }
+
+            if (targets.length === 0) {
+                addLogEntry('No targets defined. Add targets first.', 'WARNING');
+            }
+        })
+        .catch(e => addLogEntry(`Failed to load targets: ${e}`, 'ERROR'));
+}
+
+/**
+ * Start target tracking from the panel
+ */
+function startTargetTracking() {
+    const select = document.getElementById('trackTargetSelect');
+    const bdAddress = select.value;
+
+    if (!bdAddress) {
+        addLogEntry('Select a target to track', 'ERROR');
         return;
     }
 
@@ -3128,18 +3164,19 @@ function startManualTracking() {
             activeGeoSessions.add(bdAddress);
             document.getElementById('btnStartTrack').disabled = true;
             document.getElementById('btnStopTrack').disabled = false;
+            document.getElementById('trackTargetSelect').disabled = true;
             document.getElementById('trackingStatus').textContent = 'ACTIVE';
             document.getElementById('trackingStatus').className = 'tracking-status active';
-            addLogEntry(`Manual tracking started for ${bdAddress} (${methods.join('+')})`, 'INFO');
+            addLogEntry(`Target tracking started for ${bdAddress} (${methods.join('+')})`, 'INFO');
         }
     })
     .catch(e => addLogEntry(`Failed to start tracking: ${e}`, 'ERROR'));
 }
 
 /**
- * Stop manual tracking
+ * Stop target tracking
  */
-function stopManualTracking() {
+function stopTargetTracking() {
     if (!manualTrackingBd) return;
 
     fetch(`/api/device/${manualTrackingBd}/geo/stop`, {
@@ -3152,9 +3189,10 @@ function stopManualTracking() {
         activeGeoSessions.delete(manualTrackingBd);
         document.getElementById('btnStartTrack').disabled = false;
         document.getElementById('btnStopTrack').disabled = true;
+        document.getElementById('trackTargetSelect').disabled = false;
         document.getElementById('trackingStatus').textContent = 'STOPPED';
         document.getElementById('trackingStatus').className = 'tracking-status';
-        addLogEntry(`Manual tracking stopped for ${manualTrackingBd}`, 'INFO');
+        addLogEntry(`Target tracking stopped for ${manualTrackingBd}`, 'INFO');
         manualTrackingBd = null;
     })
     .catch(e => addLogEntry(`Failed to stop tracking: ${e}`, 'ERROR'));
