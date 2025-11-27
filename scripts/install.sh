@@ -270,6 +270,52 @@ create_directories() {
     chown -R $SUDO_USER:$SUDO_USER "$PROJECT_DIR" 2>/dev/null || true
 }
 
+# Generate random system ID
+generate_system_id() {
+    log_step "Generating unique system ID..."
+
+    # Generate random 6-character alphanumeric suffix
+    RANDOM_SUFFIX=$(cat /dev/urandom | tr -dc 'A-Z0-9' | head -c 6)
+    SYSTEM_ID="BK9-${RANDOM_SUFFIX}"
+
+    log_info "Generated System ID: $SYSTEM_ID"
+
+    # Store in database using Python
+    cd "$CLIENT_DIR"
+    source venv/bin/activate
+
+    python3 << EOF
+import sqlite3
+import os
+
+db_path = 'bluek9.db'
+conn = sqlite3.connect(db_path)
+c = conn.cursor()
+
+# Create table if not exists
+c.execute('''CREATE TABLE IF NOT EXISTS system_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)''')
+
+# Insert or replace system ID
+c.execute('''INSERT OR REPLACE INTO system_settings (key, value, updated_at)
+            VALUES ('SYSTEM_ID', '${SYSTEM_ID}', datetime('now'))''')
+
+# Also set a random system name
+c.execute('''INSERT OR REPLACE INTO system_settings (key, value, updated_at)
+            VALUES ('SYSTEM_NAME', 'BlueK9 Unit ${RANDOM_SUFFIX}', datetime('now'))''')
+
+conn.commit()
+conn.close()
+print(f"System ID '{db_path}' configured with ID: ${SYSTEM_ID}")
+EOF
+
+    deactivate
+    log_info "System ID configured: $SYSTEM_ID"
+}
+
 # Create systemd service
 create_service() {
     log_step "Creating systemd service..."
@@ -350,6 +396,7 @@ main() {
     create_directories
     install_python_deps
     download_alert_sound
+    generate_system_id
     create_service
     print_completion
 }
