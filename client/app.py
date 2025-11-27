@@ -1696,13 +1696,13 @@ def parse_btmon_line(line):
     Parse btmon output for rich device information.
 
     Extracts:
-    - BD Address
-    - Device type (Classic/BLE) from event type
-    - RSSI
-    - Device name (from advertising data)
-    - Manufacturer/Company ID
-    - Address type (Public/Random)
-    - TX Power
+    - BD Address with type detection (Resolvable/Static/Non-Resolvable = BLE, OUI = Classic)
+    - Device type (Classic/BLE) from event type and address format
+    - RSSI (handles "invalid" RSSI)
+    - Device name (from advertising data or name request)
+    - Manufacturer/Company ID (decimal format like "Apple, Inc. (76)")
+    - Address type (Public/Random/Resolvable/Static)
+    - TX Power (filters out 127 dBm which means unknown)
     """
     global btmon_rssi_cache, btmon_device_cache, btmon_parser_state
 
@@ -1710,15 +1710,15 @@ def parse_btmon_line(line):
     line_stripped = line.strip()
 
     # Detect HCI Event type - this tells us Classic vs BLE
-    if '> HCI Event:' in line or '< HCI Command:' in line:
+    if '> HCI Event:' in line or '< HCI Command:' in line or '@ MGMT Event:' in line:
         # New event - save any pending device data
         if state.current_addr and state.current_device:
             save_btmon_device_data(state.current_addr, state.current_device)
 
         state.reset()
 
-        # Identify event type
-        if 'LE Meta Event' in line:
+        # Identify event type from HCI Events
+        if 'LE Meta Event' in line or 'LE Extended Advertising Report' in line:
             state.is_le_event = True
             state.current_event = 'le_meta'
         elif 'Inquiry Result' in line:
@@ -1730,54 +1730,105 @@ def parse_btmon_line(line):
         elif 'Remote Name Req Complete' in line:
             state.is_classic_event = True
             state.current_event = 'name_complete'
-        elif 'Advertising Report' in line or 'advertising report' in line.lower():
-            state.is_le_event = True
-            state.current_event = 'adv_report'
+        elif 'Remote Name Request' in line:
+            state.is_classic_event = True
+            state.current_event = 'name_request'
+        elif 'Connect Complete' in line or 'Connect Failed' in line:
+            state.current_event = 'connect'
+        elif 'Device Found' in line:
+            # MGMT Event: Device Found - could be either type
+            state.current_event = 'device_found'
         return
 
-    # Parse BD Address with address type
-    # Format: "Address: AA:BB:CC:DD:EE:FF (Public)" or "(Random)"
-    addr_match = re.search(r'Address:\s*([0-9A-Fa-f:]{17})\s*\((\w+)\)', line_stripped)
-    if addr_match:
-        state.current_addr = addr_match.group(1).upper()
-        state.addr_type = addr_match.group(2).lower()
-        state.current_device['addr_type'] = state.addr_type
-
-        # Random address is a strong BLE indicator
-        if state.addr_type == 'random':
-            state.current_device['device_type'] = 'ble'
-            state.is_le_event = True
-        return
-
-    # Also try without address type
-    addr_match2 = re.search(r'Address:\s*([0-9A-Fa-f:]{17})', line_stripped)
-    if addr_match2 and not state.current_addr:
-        state.current_addr = addr_match2.group(1).upper()
-
-    # Parse LE Address Type specifically
-    le_addr_match = re.search(r'LE Address Type:\s*(\w+)', line_stripped)
+    # Parse explicit LE Address (from MGMT events)
+    # Format: "LE Address: 47:63:95:64:91:7A (Resolvable)"
+    le_addr_match = re.search(r'LE Address:\s*([0-9A-Fa-f:]{17})\s*\((\w+)\)', line_stripped)
     if le_addr_match:
-        addr_type = le_addr_match.group(1).lower()
+        state.current_addr = le_addr_match.group(1).upper()
+        addr_type = le_addr_match.group(2).lower()
         state.current_device['addr_type'] = addr_type
         state.current_device['device_type'] = 'ble'
         state.is_le_event = True
         return
 
-    # Parse RSSI
-    rssi_match = re.search(r'RSSI:\s*(-?\d+)\s*dBm', line_stripped)
-    if rssi_match:
-        rssi = int(rssi_match.group(1))
-        state.current_device['rssi'] = rssi
-
-        # Also update legacy cache for compatibility
-        if state.current_addr:
-            btmon_rssi_cache[state.current_addr] = {
-                'rssi': rssi,
-                'timestamp': time.time()
-            }
+    # Parse explicit BR/EDR Address (from MGMT events)
+    # Format: "BR/EDR Address: 72:3D:D6:79:8B:36 (OUI 72-3D-D6)"
+    bredr_addr_match = re.search(r'BR/EDR Address:\s*([0-9A-Fa-f:]{17})', line_stripped)
+    if bredr_addr_match:
+        state.current_addr = bredr_addr_match.group(1).upper()
+        state.current_device['device_type'] = 'classic'
+        state.is_classic_event = True
         return
 
-    # Parse Device Name (complete or short)
+    # Parse Address with BLE-specific type indicators
+    # Format: "Address: 47:63:95:64:91:7A (Resolvable)" or "(Static)" or "(Non-Resolvable)"
+    addr_ble_match = re.search(r'Address:\s*([0-9A-Fa-f:]{17})\s*\((Resolvable|Static|Non-Resolvable)\)', line_stripped)
+    if addr_ble_match:
+        state.current_addr = addr_ble_match.group(1).upper()
+        addr_type = addr_ble_match.group(2).lower()
+        state.current_device['addr_type'] = addr_type
+        state.current_device['device_type'] = 'ble'
+        state.is_le_event = True
+        return
+
+    # Parse Address with OUI - indicates Classic/BR-EDR
+    # Format: "Address: 4E:4A:9D:42:1C:F4 (OUI 4E-4A-9D)"
+    addr_oui_match = re.search(r'Address:\s*([0-9A-Fa-f:]{17})\s*\(OUI [0-9A-Fa-f-]+\)', line_stripped)
+    if addr_oui_match:
+        state.current_addr = addr_oui_match.group(1).upper()
+        # OUI format often indicates Classic, but could be either - use event context
+        if not state.is_le_event:
+            state.current_device['device_type'] = 'classic'
+            state.is_classic_event = True
+        return
+
+    # Parse Address with Public/Random type
+    # Format: "Address type: Random (0x01)" or "Address type: Public (0x00)"
+    addr_type_match = re.search(r'Address type:\s*(Random|Public)\s*\(0x0[01]\)', line_stripped)
+    if addr_type_match:
+        addr_type = addr_type_match.group(1).lower()
+        state.current_device['addr_type'] = addr_type
+        if addr_type == 'random':
+            state.current_device['device_type'] = 'ble'
+            state.is_le_event = True
+        return
+
+    # Parse generic Address if we don't have one yet
+    if not state.current_addr:
+        addr_match = re.search(r'Address:\s*([0-9A-Fa-f:]{17})', line_stripped)
+        if addr_match:
+            state.current_addr = addr_match.group(1).upper()
+
+    # Parse RSSI - handle "invalid" RSSI
+    # Format: "RSSI: -96 dBm (0xa0)" or "RSSI: invalid (0x99)"
+    if 'RSSI:' in line_stripped:
+        if 'invalid' in line_stripped.lower():
+            # Invalid RSSI, skip it
+            return
+        rssi_match = re.search(r'RSSI:\s*(-?\d+)\s*dBm', line_stripped)
+        if rssi_match:
+            rssi = int(rssi_match.group(1))
+            state.current_device['rssi'] = rssi
+
+            # Also update legacy cache for compatibility
+            if state.current_addr:
+                btmon_rssi_cache[state.current_addr] = {
+                    'rssi': rssi,
+                    'timestamp': time.time()
+                }
+        return
+
+    # Parse Device Name from Remote Name Req Complete
+    # Format: "Name: DeviceName" (after Status line)
+    if state.current_event == 'name_complete':
+        name_match = re.search(r'^\s*Name:\s*(.+)', line_stripped)
+        if name_match:
+            name = name_match.group(1).strip()
+            if name and name != '(null)' and len(name) > 0:
+                state.current_device['device_name'] = name
+            return
+
+    # Parse Device Name (complete or short) from advertising
     name_match = re.search(r'Name \((?:complete|short)\):\s*(.+)', line_stripped)
     if name_match:
         name = name_match.group(1).strip()
@@ -1793,11 +1844,20 @@ def parse_btmon_line(line):
             state.current_device['device_name'] = name
         return
 
+    # Parse Company with decimal ID - "Company: Apple, Inc. (76)"
+    company_dec_match = re.search(r'Company:\s*([^(]+)\s*\((\d+)\)', line_stripped)
+    if company_dec_match:
+        company_name = company_dec_match.group(1).strip()
+        company_id = int(company_dec_match.group(2))
+        state.current_device['company_id'] = company_id
+        state.current_device['company_name'] = company_name
+        return
+
     # Parse Company ID (hex format: "Company: Apple, Inc. (0x004c)")
-    company_match = re.search(r'Company:\s*([^(]+)\s*\(0x([0-9A-Fa-f]+)\)', line_stripped)
-    if company_match:
-        company_name = company_match.group(1).strip()
-        company_id = int(company_match.group(2), 16)
+    company_hex_match = re.search(r'Company:\s*([^(]+)\s*\(0x([0-9A-Fa-f]+)\)', line_stripped)
+    if company_hex_match:
+        company_name = company_hex_match.group(1).strip()
+        company_id = int(company_hex_match.group(2), 16)
         state.current_device['company_id'] = company_id
         state.current_device['company_name'] = company_name
         return
@@ -1812,10 +1872,24 @@ def parse_btmon_line(line):
             state.current_device['company_name'] = company_name
         return
 
-    # Parse TX Power
+    # Parse TX Power - filter out 127 dBm which means "unknown"
+    # Format: "TX power: 12 dBm" or "TX power: 0 dBm"
     tx_power_match = re.search(r'TX [Pp]ower:\s*(-?\d+)\s*dBm', line_stripped)
     if tx_power_match:
-        state.current_device['tx_power'] = int(tx_power_match.group(1))
+        tx_power = int(tx_power_match.group(1))
+        # 127 dBm means unknown/not available
+        if tx_power != 127:
+            state.current_device['tx_power'] = tx_power
+        return
+
+    # Parse Legacy PDU Type - strong BLE indicator
+    # Format: "Legacy PDU Type: ADV_IND (0x0013)" or "ADV_NONCONN_IND" or "SCAN_RSP"
+    pdu_match = re.search(r'Legacy PDU Type:\s*(ADV_\w+|SCAN_RSP)', line_stripped)
+    if pdu_match:
+        pdu_type = pdu_match.group(1)
+        state.current_device['adv_type'] = pdu_type
+        state.current_device['device_type'] = 'ble'
+        state.is_le_event = True
         return
 
     # Parse Device Class (Classic indicator)
@@ -1833,14 +1907,23 @@ def parse_btmon_line(line):
         state.is_le_event = True
         return
 
+    # Parse "Not Connectable" flag (from MGMT Device Found)
+    if 'Not Connectable' in line_stripped:
+        state.current_device['connectable'] = False
+        return
+
+    # Parse LE General Discoverable Mode flag - BLE indicator
+    if 'LE General Discoverable Mode' in line_stripped:
+        state.current_device['device_type'] = 'ble'
+        state.is_le_event = True
+        return
+
     # Parse Event Type (ADV_IND, ADV_SCAN_IND, etc.) - BLE indicator
-    event_type_match = re.search(r'Event type:\s*(\w+)', line_stripped)
+    event_type_match = re.search(r'Event type:\s*0x[0-9A-Fa-f]+', line_stripped)
     if event_type_match:
-        event_type = event_type_match.group(1)
-        state.current_device['adv_type'] = event_type
-        if event_type.startswith('ADV_'):
-            state.current_device['device_type'] = 'ble'
-            state.is_le_event = True
+        # Hex event type from LE Extended Advertising Report
+        state.current_device['device_type'] = 'ble'
+        state.is_le_event = True
         return
 
 
