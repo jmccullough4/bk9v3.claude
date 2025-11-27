@@ -569,12 +569,90 @@ body {
     background: var(--accent-danger);
 }
 
+.gps-status.warning {
+    background: #f5a623;
+    color: #000;
+}
+
 .gps-settings {
     margin-bottom: 10px;
 }
 
 .gps-settings.hidden {
     display: none;
+}
+
+/* ==================== ACTIVE TRACKING ==================== */
+
+.tracking-status {
+    margin-left: auto;
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: var(--text-muted);
+    color: var(--bg-primary);
+}
+
+.tracking-status.active {
+    background: var(--accent-success);
+    animation: pulse-glow 1.5s infinite;
+}
+
+@keyframes pulse-glow {
+    0%, 100% { box-shadow: 0 0 5px var(--accent-success); }
+    50% { box-shadow: 0 0 15px var(--accent-success); }
+}
+
+.tracking-methods {
+    display: flex;
+    gap: 15px;
+    margin: 10px 0;
+}
+
+.method-option {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+
+.method-option input[type="checkbox"] {
+    accent-color: var(--accent-primary);
+}
+
+.tracking-stats {
+    margin: 10px 0;
+    min-height: 60px;
+}
+
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+}
+
+.stat-item {
+    background: rgba(0, 0, 0, 0.3);
+    padding: 6px 8px;
+    border-radius: 4px;
+    text-align: center;
+}
+
+.stat-label {
+    display: block;
+    font-size: 9px;
+    color: var(--text-muted);
+    letter-spacing: 1px;
+}
+
+.stat-value {
+    display: block;
+    font-size: 12px;
+    color: var(--accent-primary);
+    font-weight: bold;
+    font-family: var(--font-mono);
 }
 
 .hidden {

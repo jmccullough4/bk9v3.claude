@@ -380,9 +380,11 @@ function updateDeviceMarker(device) {
     }
 
     // Only add marker if we have valid location (not 0,0 which is null island)
-    if (!device.emitter_lat || !device.emitter_lon ||
-        device.emitter_lat === 0 || device.emitter_lon === 0 ||
-        isNaN(device.emitter_lat) || isNaN(device.emitter_lon)) {
+    const lat = parseFloat(device.emitter_lat);
+    const lon = parseFloat(device.emitter_lon);
+
+    if (!lat || !lon || lat === 0 || lon === 0 || isNaN(lat) || isNaN(lon) ||
+        lat < -90 || lat > 90 || lon < -180 || lon > 180) {
         return;
     }
 
@@ -392,7 +394,7 @@ function updateDeviceMarker(device) {
 
     // Create marker
     const marker = new mapboxgl.Marker(el)
-        .setLngLat([device.emitter_lon, device.emitter_lat])
+        .setLngLat([lon, lat])
         .setPopup(new mapboxgl.Popup({ offset: 25 }).setHTML(`
             <strong>${device.bd_address}</strong><br>
             Name: ${device.device_name || 'Unknown'}<br>
@@ -419,16 +421,18 @@ function addCepCircle(device) {
     const bdAddr = device.bd_address;
     const radius = device.emitter_accuracy || 50; // meters
 
-    // Validate emitter location
-    if (!device.emitter_lat || !device.emitter_lon ||
-        device.emitter_lat === 0 || device.emitter_lon === 0 ||
-        isNaN(device.emitter_lat) || isNaN(device.emitter_lon)) {
+    // Validate emitter location with robust parsing
+    const lat = parseFloat(device.emitter_lat);
+    const lon = parseFloat(device.emitter_lon);
+
+    if (!lat || !lon || lat === 0 || lon === 0 || isNaN(lat) || isNaN(lon) ||
+        lat < -90 || lat > 90 || lon < -180 || lon > 180) {
         return; // Don't add CEP if no valid location
     }
 
     // Create circle GeoJSON
     const circle = createGeoJSONCircle(
-        [device.emitter_lon, device.emitter_lat],
+        [lon, lat],
         radius / 1000 // Convert to km
     );
 
@@ -1473,12 +1477,19 @@ function testGpsConnection() {
 
 function updateGpsStatus(location) {
     const statusEl = document.getElementById('gpsStatus');
-    if (location && location.lat && location.lat !== 0) {
+
+    if (location && location.status === 'ok' && location.lat && location.lat !== 0) {
         statusEl.textContent = 'OK';
         statusEl.className = 'gps-status connected';
+    } else if (location && location.status === 'error') {
+        statusEl.textContent = 'ERROR';
+        statusEl.className = 'gps-status error';
+    } else if (location && location.status === 'no_fix') {
+        statusEl.textContent = 'NO FIX';
+        statusEl.className = 'gps-status warning';
     } else {
         statusEl.textContent = 'NO FIX';
-        statusEl.className = 'gps-status';
+        statusEl.className = 'gps-status warning';
     }
 }
 
@@ -2976,7 +2987,8 @@ function toggleActiveGeo(bdAddress) {
 function startActiveGeo(bdAddress) {
     fetch(`/api/device/${bdAddress}/geo/track`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
     })
     .then(r => r.json())
     .then(data => {
@@ -2995,7 +3007,8 @@ function startActiveGeo(bdAddress) {
 function stopActiveGeo(bdAddress) {
     fetch(`/api/device/${bdAddress}/geo/stop`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
     })
     .then(r => r.json())
     .then(data => {
@@ -3020,16 +3033,129 @@ function updateGeoButtonState(bdAddress, active) {
 /**
  * Handle geo ping events from server
  */
+let manualTrackingBd = null;
+
 function handleGeoPing(data) {
     // Update device RSSI in real-time
     if (data.rssi && devices[data.bd_address]) {
         devices[data.bd_address].rssi = data.rssi;
     }
 
-    // Show ping status in log (throttled)
-    if (data.ping % 5 === 0 || data.status === 'timeout') {
-        const status = data.status === 'timeout' ? 'TIMEOUT' :
-            `RSSI:${data.rssi || '--'}dBm RTT:${data.rtt || '--'}ms`;
-        addLogEntry(`GEO ${data.bd_address}: ${status} (${data.success_rate}% success)`, 'DEBUG');
+    // Update tracking stats panel if this is the manual tracking target
+    if (data.bd_address === manualTrackingBd) {
+        updateTrackingStats(data);
     }
+
+    // Show ping status in log (throttled)
+    if (data.ping % 5 === 0 || data.status === 'timeout' || data.status === 'error') {
+        const methods = data.methods ? `[${data.methods.join('+')}]` : '';
+        const status = data.status === 'timeout' ? 'TIMEOUT' :
+            data.status === 'error' ? `ERROR: ${data.error}` :
+            `RSSI:${data.rssi || '--'}dBm RTT:${data.rtt || '--'}ms`;
+        addLogEntry(`GEO ${methods} ${data.bd_address}: ${status}`, 'DEBUG');
+    }
+}
+
+/**
+ * Update tracking stats display
+ */
+function updateTrackingStats(data) {
+    const statsEl = document.getElementById('trackingStats');
+    if (!statsEl) return;
+
+    statsEl.innerHTML = `
+        <div class="stats-grid">
+            <div class="stat-item">
+                <span class="stat-label">RSSI</span>
+                <span class="stat-value">${data.rssi || '--'} dBm</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">RTT</span>
+                <span class="stat-value">${data.rtt ? data.rtt.toFixed(1) : '--'} ms</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">AVG RTT</span>
+                <span class="stat-value">${data.avg_rtt || '--'} ms</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">PINGS</span>
+                <span class="stat-value">${data.ping || 0}</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">READINGS</span>
+                <span class="stat-value">${data.rssi_readings || 0}</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">SUCCESS</span>
+                <span class="stat-value">${data.success_rate || 0}%</span>
+            </div>
+        </div>
+    `;
+}
+
+/**
+ * Start manual tracking from the panel
+ */
+function startManualTracking() {
+    const bdInput = document.getElementById('trackBdAddress');
+    const bdAddress = bdInput.value.trim().toUpperCase();
+
+    if (!bdAddress || !/^([0-9A-F]{2}:){5}[0-9A-F]{2}$/.test(bdAddress)) {
+        addLogEntry('Invalid BD address format. Use XX:XX:XX:XX:XX:XX', 'ERROR');
+        return;
+    }
+
+    // Get selected methods
+    const methods = [];
+    if (document.getElementById('methodL2ping').checked) methods.push('l2ping');
+    if (document.getElementById('methodRssi').checked) methods.push('rssi');
+
+    if (methods.length === 0) {
+        addLogEntry('Select at least one tracking method', 'ERROR');
+        return;
+    }
+
+    manualTrackingBd = bdAddress;
+
+    fetch(`/api/device/${bdAddress}/geo/track`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ methods: methods })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'started' || data.status === 'already_running') {
+            activeGeoSessions.add(bdAddress);
+            document.getElementById('btnStartTrack').disabled = true;
+            document.getElementById('btnStopTrack').disabled = false;
+            document.getElementById('trackingStatus').textContent = 'ACTIVE';
+            document.getElementById('trackingStatus').className = 'tracking-status active';
+            addLogEntry(`Manual tracking started for ${bdAddress} (${methods.join('+')})`, 'INFO');
+        }
+    })
+    .catch(e => addLogEntry(`Failed to start tracking: ${e}`, 'ERROR'));
+}
+
+/**
+ * Stop manual tracking
+ */
+function stopManualTracking() {
+    if (!manualTrackingBd) return;
+
+    fetch(`/api/device/${manualTrackingBd}/geo/stop`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+    })
+    .then(r => r.json())
+    .then(data => {
+        activeGeoSessions.delete(manualTrackingBd);
+        document.getElementById('btnStartTrack').disabled = false;
+        document.getElementById('btnStopTrack').disabled = true;
+        document.getElementById('trackingStatus').textContent = 'STOPPED';
+        document.getElementById('trackingStatus').className = 'tracking-status';
+        addLogEntry(`Manual tracking stopped for ${manualTrackingBd}`, 'INFO');
+        manualTrackingBd = null;
+    })
+    .catch(e => addLogEntry(`Failed to stop tracking: ${e}`, 'ERROR'));
 }
