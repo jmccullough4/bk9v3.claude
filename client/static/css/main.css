@@ -1287,6 +1287,14 @@ body {
 .target-marker {
     width: 16px;
     height: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.target-marker-inner {
+    width: 16px;
+    height: 16px;
     background: var(--accent-danger);
     border: 3px solid #fff;
     border-radius: 50%;

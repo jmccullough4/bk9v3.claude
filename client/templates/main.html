@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>BlueK9 - Tactical Bluetooth Surveillance</title>
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='logo/favicon.svg') }}">
     <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
     <script src="https://api.mapbox.com/mapbox-gl-js/v3.0.1/mapbox-gl.js"></script>
     <link href="https://api.mapbox.com/mapbox-gl-js/v3.0.1/mapbox-gl.css" rel="stylesheet">
@@ -392,6 +393,20 @@
                                 <span class="toggle-label">System Trail</span>
                             </label>
                         </div>
+                        <div class="toggle-group">
+                            <label class="toggle">
+                                <input type="checkbox" id="toggle3dTerrain" onchange="toggle3dTerrain()">
+                                <span class="toggle-slider"></span>
+                                <span class="toggle-label">3D Terrain</span>
+                            </label>
+                        </div>
+                        <div class="toggle-group">
+                            <label class="toggle">
+                                <input type="checkbox" id="toggle3dBuildings" onchange="toggle3dBuildings()">
+                                <span class="toggle-slider"></span>
+                                <span class="toggle-label">3D Buildings</span>
+                            </label>
+                        </div>
                         <div class="btn-group mt-10">
                             <button class="btn btn-secondary btn-sm" onclick="resetBreadcrumbs()">RESET ALL</button>
                             <button class="btn btn-secondary btn-sm" onclick="resetAllGeo()">RESET GEO</button>
@@ -646,7 +661,7 @@
 
     <!-- Version Footer -->
     <div class="version-footer">
-        <span class="version-text">BlueK9 v3.0.24</span>
+        <span class="version-text">BlueK9 v3.0.25</span>
         <span class="version-divider">|</span>
         <span class="version-id" id="systemIdFooter">--</span>
     </div>

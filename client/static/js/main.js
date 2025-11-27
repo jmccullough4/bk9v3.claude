@@ -392,6 +392,13 @@ function updateDeviceMarker(device) {
     const el = document.createElement('div');
     el.className = device.is_target ? 'target-marker' : 'device-marker';
 
+    // For target markers, add inner element for animation (prevents CSS transform conflict)
+    if (device.is_target) {
+        const inner = document.createElement('div');
+        inner.className = 'target-marker-inner';
+        el.appendChild(inner);
+    }
+
     // Create marker
     const marker = new mapboxgl.Marker(el)
         .setLngLat([lon, lat])
@@ -707,6 +714,46 @@ function setMapStyle(style) {
                 updateDeviceMarker(device);
             }
         });
+
+        // Re-apply 3D terrain if enabled
+        if (show3dTerrain) {
+            if (!map.getSource('mapbox-dem')) {
+                map.addSource('mapbox-dem', {
+                    type: 'raster-dem',
+                    url: 'mapbox://mapbox.mapbox-terrain-dem-v1',
+                    tileSize: 512,
+                    maxzoom: 14
+                });
+            }
+            map.setTerrain({ source: 'mapbox-dem', exaggeration: 1.5 });
+        }
+
+        // Re-apply 3D buildings if enabled
+        if (show3dBuildings && !map.getLayer('3d-buildings')) {
+            const layers = map.getStyle().layers;
+            let labelLayerId;
+            for (let i = 0; i < layers.length; i++) {
+                if (layers[i].type === 'symbol' && layers[i].layout['text-field']) {
+                    labelLayerId = layers[i].id;
+                    break;
+                }
+            }
+
+            map.addLayer({
+                id: '3d-buildings',
+                source: 'composite',
+                'source-layer': 'building',
+                filter: ['==', 'extrude', 'true'],
+                type: 'fill-extrusion',
+                minzoom: 15,
+                paint: {
+                    'fill-extrusion-color': '#1a2633',
+                    'fill-extrusion-height': ['get', 'height'],
+                    'fill-extrusion-base': ['get', 'min_height'],
+                    'fill-extrusion-opacity': 0.7
+                }
+            }, labelLayerId);
+        }
     });
 }
 
@@ -962,6 +1009,74 @@ function resetSystemTrail() {
             addLogEntry(`System trail reset`, 'INFO');
         })
         .catch(e => addLogEntry(`Failed to reset trail: ${e}`, 'ERROR'));
+}
+
+// ==================== 3D TERRAIN & BUILDINGS ====================
+
+let show3dTerrain = false;
+let show3dBuildings = false;
+
+function toggle3dTerrain() {
+    show3dTerrain = document.getElementById('toggle3dTerrain').checked;
+
+    if (show3dTerrain) {
+        // Add terrain source if not present
+        if (!map.getSource('mapbox-dem')) {
+            map.addSource('mapbox-dem', {
+                type: 'raster-dem',
+                url: 'mapbox://mapbox.mapbox-terrain-dem-v1',
+                tileSize: 512,
+                maxzoom: 14
+            });
+        }
+        map.setTerrain({ source: 'mapbox-dem', exaggeration: 1.5 });
+        addLogEntry('3D terrain enabled', 'INFO');
+    } else {
+        map.setTerrain(null);
+        addLogEntry('3D terrain disabled', 'INFO');
+    }
+}
+
+function toggle3dBuildings() {
+    show3dBuildings = document.getElementById('toggle3dBuildings').checked;
+
+    if (show3dBuildings) {
+        // Add 3D buildings layer if not present
+        if (!map.getLayer('3d-buildings')) {
+            // Find the first symbol layer for proper layering
+            const layers = map.getStyle().layers;
+            let labelLayerId;
+            for (let i = 0; i < layers.length; i++) {
+                if (layers[i].type === 'symbol' && layers[i].layout['text-field']) {
+                    labelLayerId = layers[i].id;
+                    break;
+                }
+            }
+
+            map.addLayer({
+                id: '3d-buildings',
+                source: 'composite',
+                'source-layer': 'building',
+                filter: ['==', 'extrude', 'true'],
+                type: 'fill-extrusion',
+                minzoom: 15,
+                paint: {
+                    'fill-extrusion-color': '#1a2633',
+                    'fill-extrusion-height': ['get', 'height'],
+                    'fill-extrusion-base': ['get', 'min_height'],
+                    'fill-extrusion-opacity': 0.7
+                }
+            }, labelLayerId);
+        } else {
+            map.setLayoutProperty('3d-buildings', 'visibility', 'visible');
+        }
+        addLogEntry('3D buildings enabled', 'INFO');
+    } else {
+        if (map.getLayer('3d-buildings')) {
+            map.setLayoutProperty('3d-buildings', 'visibility', 'none');
+        }
+        addLogEntry('3D buildings disabled', 'INFO');
+    }
 }
 
 // ==================== GEO RESET ====================
