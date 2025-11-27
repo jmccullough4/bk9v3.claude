@@ -374,8 +374,12 @@ function updateDeviceMarker(device) {
         delete cepCircles[bdAddr];
     }
 
-    // Only add marker if we have location
-    if (!device.emitter_lat || !device.emitter_lon) return;
+    // Only add marker if we have valid location (not 0,0 which is null island)
+    if (!device.emitter_lat || !device.emitter_lon ||
+        device.emitter_lat === 0 || device.emitter_lon === 0 ||
+        isNaN(device.emitter_lat) || isNaN(device.emitter_lon)) {
+        return;
+    }
 
     // Create marker element
     const el = document.createElement('div');
@@ -480,7 +484,12 @@ function createGeoJSONCircle(center, radiusKm, points = 64) {
  * Update system location marker
  */
 function updateSystemLocation(location) {
-    if (!location.lat || !location.lon) return;
+    // Validate location (not null, not 0,0)
+    if (!location.lat || !location.lon ||
+        (location.lat === 0 && location.lon === 0) ||
+        isNaN(location.lat) || isNaN(location.lon)) {
+        return;
+    }
 
     document.getElementById('sysLocation').textContent =
         `${location.lat.toFixed(5)}, ${location.lon.toFixed(5)}`;
