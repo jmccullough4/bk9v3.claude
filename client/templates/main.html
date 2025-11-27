@@ -340,6 +340,14 @@
             </div>
         </header>
 
+        <!-- Operations Bar - Shows running operations -->
+        <div class="operations-bar" id="operationsBar">
+            <div class="ops-label">ACTIVE OPS:</div>
+            <div class="ops-list" id="opsList">
+                <span class="ops-none">None</span>
+            </div>
+        </div>
+
         <!-- Main Content -->
         <div class="main-content">
             <!-- Left Panel - Controls -->
@@ -572,8 +580,46 @@
                         <span class="section-icon">&#128202;</span>
                         <span>STATISTICS</span>
                     </div>
-                    <div class="section-content chart-container">
-                        <canvas id="deviceTypeChart"></canvas>
+                    <div class="section-content stats-container">
+                        <div class="stats-grid-compact">
+                            <div class="stat-box">
+                                <div class="stat-value" id="statTotalDevices">0</div>
+                                <div class="stat-label">TOTAL</div>
+                            </div>
+                            <div class="stat-box stat-classic">
+                                <div class="stat-value" id="statClassic">0</div>
+                                <div class="stat-label">CLASSIC</div>
+                            </div>
+                            <div class="stat-box stat-ble">
+                                <div class="stat-value" id="statBLE">0</div>
+                                <div class="stat-label">BLE</div>
+                            </div>
+                            <div class="stat-box stat-targets">
+                                <div class="stat-value" id="statTargets">0</div>
+                                <div class="stat-label">TARGETS</div>
+                            </div>
+                            <div class="stat-box">
+                                <div class="stat-value" id="statLocated">0</div>
+                                <div class="stat-label">LOCATED</div>
+                            </div>
+                            <div class="stat-box">
+                                <div class="stat-value" id="statAvgRSSI">--</div>
+                                <div class="stat-label">AVG RSSI</div>
+                            </div>
+                        </div>
+                        <div class="chart-wrapper">
+                            <canvas id="deviceTypeChart"></canvas>
+                        </div>
+                        <div class="stats-footer">
+                            <div class="stat-inline">
+                                <span class="stat-label">Session:</span>
+                                <span class="stat-value" id="statSessionTime">00:00:00</span>
+                            </div>
+                            <div class="stat-inline">
+                                <span class="stat-label">Top Mfr:</span>
+                                <span class="stat-value" id="statTopManufacturer">--</span>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
