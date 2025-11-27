@@ -2183,54 +2183,68 @@ def stop_geo_thread():
 # ==================== ACTIVE GEO TRACKING ====================
 
 # Active geo tracking state
-active_geo_sessions = {}  # bd_address -> {'thread': Thread, 'active': bool, 'interface': str}
+active_geo_sessions = {}  # bd_address -> {'thread': Thread, 'active': bool, 'interface': str, 'methods': list}
 
 
-def active_geo_track(bd_address, interface='hci0'):
+def active_geo_track(bd_address, interface='hci0', methods=None):
     """
-    Actively track a device using continuous l2ping with RSSI/RTT extraction.
-    This runs in a dedicated thread for the target device.
+    Actively track a device using selected methods for RSSI/RTT extraction.
+    Methods: 'l2ping' (RTT + connection), 'rssi' (direct hcitool rssi)
     """
     global active_geo_sessions, current_location
 
-    add_log(f"Starting active geo tracking for {bd_address}", "INFO")
+    if methods is None:
+        methods = ['l2ping', 'rssi']
+
+    method_str = '+'.join(methods)
+    add_log(f"Starting active geo tracking for {bd_address} ({method_str})", "INFO")
     session = active_geo_sessions.get(bd_address, {})
 
     ping_count = 0
     successful_pings = 0
+    rssi_readings = 0
     rtt_history = []
 
     while session.get('active', False):
         try:
             ping_count += 1
-
-            # Run l2ping and capture RTT
-            result = subprocess.run(
-                ['l2ping', '-i', interface, '-c', '1', '-s', '44', '-t', '3', bd_address],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-
-            # Parse l2ping output for RTT
-            # Format: "44 bytes from XX:XX:XX:XX:XX:XX id 0 time 12.34ms"
             rtt = None
-            if 'time' in result.stdout:
-                rtt_match = re.search(r'time\s+([\d.]+)ms', result.stdout)
-                if rtt_match:
-                    rtt = float(rtt_match.group(1))
-                    rtt_history.append(rtt)
-                    successful_pings += 1
-
-            # Try to get RSSI while connection is active
             rssi = None
 
-            # Method 1: Check btmon cache
-            rssi = get_btmon_rssi(bd_address)
-
-            # Method 2: Try hcitool rssi if we have a connection
-            if rssi is None:
+            # Method 1: L2PING for RTT and connection establishment
+            if 'l2ping' in methods:
                 try:
+                    result = subprocess.run(
+                        ['l2ping', '-i', interface, '-c', '1', '-s', '44', '-t', '3', bd_address],
+                        capture_output=True,
+                        text=True,
+                        timeout=5
+                    )
+
+                    # Parse l2ping output for RTT
+                    if 'time' in result.stdout:
+                        rtt_match = re.search(r'time\s+([\d.]+)ms', result.stdout)
+                        if rtt_match:
+                            rtt = float(rtt_match.group(1))
+                            rtt_history.append(rtt)
+                            successful_pings += 1
+                except subprocess.TimeoutExpired:
+                    pass
+                except Exception as e:
+                    add_log(f"L2PING error: {e}", "DEBUG")
+
+            # Method 2: Direct RSSI query with hcitool
+            if 'rssi' in methods:
+                # First try to create a connection if needed
+                try:
+                    # Create ACL connection
+                    subprocess.run(
+                        ['hcitool', '-i', interface, 'cc', bd_address],
+                        capture_output=True, timeout=3
+                    )
+                    time.sleep(0.2)
+
+                    # Get RSSI
                     rssi_result = subprocess.run(
                         ['hcitool', '-i', interface, 'rssi', bd_address],
                         capture_output=True, text=True, timeout=2
@@ -2238,15 +2252,20 @@ def active_geo_track(bd_address, interface='hci0'):
                     rssi_match = re.search(r'RSSI return value:\s*(-?\d+)', rssi_result.stdout)
                     if rssi_match:
                         rssi = int(rssi_match.group(1))
-                except:
-                    pass
+                        rssi_readings += 1
+                except Exception as e:
+                    add_log(f"RSSI query error: {e}", "DEBUG")
 
-            # Method 3: Parse btmon live
+            # Fallback: Check btmon cache
+            if rssi is None:
+                rssi = get_btmon_rssi(bd_address)
+
+            # Fallback: bluetoothctl
             if rssi is None:
                 rssi = get_rssi_from_bluetoothctl(bd_address)
 
             # Record observation if we have location and RSSI
-            if current_location.get('lat') and rssi:
+            if current_location.get('lat') and current_location.get('lon') and rssi:
                 conn = get_db()
                 c = conn.cursor()
                 c.execute('''
@@ -2262,16 +2281,18 @@ def active_geo_track(bd_address, interface='hci0'):
                     'rssi': rssi,
                     'rtt': rtt,
                     'ping': ping_count,
-                    'success_rate': round(successful_pings / ping_count * 100, 1),
+                    'rssi_readings': rssi_readings,
+                    'success_rate': round(successful_pings / ping_count * 100, 1) if ping_count > 0 else 0,
                     'avg_rtt': round(sum(rtt_history[-10:]) / len(rtt_history[-10:]), 2) if rtt_history else None,
                     'system_lat': current_location['lat'],
-                    'system_lon': current_location['lon']
+                    'system_lon': current_location['lon'],
+                    'methods': methods
                 })
 
-                add_log(f"GEO PING {bd_address}: RSSI={rssi}dBm RTT={rtt}ms", "DEBUG")
+                add_log(f"GEO [{method_str}] {bd_address}: RSSI={rssi}dBm RTT={rtt}ms", "DEBUG")
 
-                # Recalculate geolocation after each successful ping
-                if successful_pings >= 2:
+                # Recalculate geolocation after sufficient readings
+                if rssi_readings >= 2:
                     location = update_device_location(bd_address, rssi)
                     if location and bd_address in devices:
                         devices[bd_address]['emitter_lat'] = location[0]
@@ -2279,33 +2300,31 @@ def active_geo_track(bd_address, interface='hci0'):
                         devices[bd_address]['emitter_accuracy'] = location[2]
                         socketio.emit('device_update', devices[bd_address])
 
-            elif rtt:
-                # No RSSI but got RTT - still log the ping
+            else:
+                # No RSSI - emit status anyway
                 socketio.emit('geo_ping', {
                     'bd_address': bd_address,
-                    'rssi': None,
+                    'rssi': rssi,
                     'rtt': rtt,
                     'ping': ping_count,
-                    'success_rate': round(successful_pings / ping_count * 100, 1),
-                    'avg_rtt': round(sum(rtt_history[-10:]) / len(rtt_history[-10:]), 2) if rtt_history else None
+                    'rssi_readings': rssi_readings,
+                    'success_rate': round(successful_pings / ping_count * 100, 1) if ping_count > 0 else 0,
+                    'avg_rtt': round(sum(rtt_history[-10:]) / len(rtt_history[-10:]), 2) if rtt_history else None,
+                    'status': 'no_rssi' if not rssi else 'no_gps',
+                    'methods': methods
                 })
 
-            # Short delay between pings
+            # Short delay between cycles
             time.sleep(0.5)
-
-        except subprocess.TimeoutExpired:
-            socketio.emit('geo_ping', {
-                'bd_address': bd_address,
-                'rssi': None,
-                'rtt': None,
-                'ping': ping_count,
-                'status': 'timeout',
-                'success_rate': round(successful_pings / ping_count * 100, 1) if ping_count > 0 else 0
-            })
-            time.sleep(1)
 
         except Exception as e:
             add_log(f"Active geo error for {bd_address}: {e}", "WARNING")
+            socketio.emit('geo_ping', {
+                'bd_address': bd_address,
+                'ping': ping_count,
+                'status': 'error',
+                'error': str(e)
+            })
             time.sleep(1)
 
         # Re-check session state
@@ -2314,9 +2333,12 @@ def active_geo_track(bd_address, interface='hci0'):
     add_log(f"Stopped active geo tracking for {bd_address} ({successful_pings}/{ping_count} pings)", "INFO")
 
 
-def start_active_geo(bd_address, interface='hci0'):
-    """Start active geo tracking for a device."""
+def start_active_geo(bd_address, interface='hci0', methods=None):
+    """Start active geo tracking for a device with selectable methods."""
     global active_geo_sessions
+
+    if methods is None:
+        methods = ['l2ping', 'rssi']
 
     if bd_address in active_geo_sessions and active_geo_sessions[bd_address].get('active'):
         return {'status': 'already_running'}
@@ -2324,12 +2346,13 @@ def start_active_geo(bd_address, interface='hci0'):
     active_geo_sessions[bd_address] = {
         'active': True,
         'interface': interface,
+        'methods': methods,
         'thread': None
     }
 
     thread = threading.Thread(
         target=active_geo_track,
-        args=(bd_address, interface),
+        args=(bd_address, interface, methods),
         daemon=True
     )
     active_geo_sessions[bd_address]['thread'] = thread
@@ -2345,7 +2368,7 @@ def start_active_geo(bd_address, interface='hci0'):
         }
         process_found_device(device_data)
 
-    return {'status': 'started', 'bd_address': bd_address}
+    return {'status': 'started', 'bd_address': bd_address, 'methods': methods}
 
 
 def stop_active_geo(bd_address):
@@ -3238,13 +3261,20 @@ def reset_device_geo(bd_address):
 @app.route('/api/device/<bd_address>/geo/track', methods=['POST'])
 @login_required
 def start_device_geo_track(bd_address):
-    """Start active geo tracking with continuous l2ping for a device."""
+    """Start active geo tracking with selectable methods."""
     bd_address = bd_address.upper()
     data = request.get_json(silent=True) or {}
     interface = data.get('interface', 'hci0')
+    methods = data.get('methods', ['l2ping', 'rssi'])
 
-    result = start_active_geo(bd_address, interface)
-    add_log(f"Active geo tracking started for {bd_address}", "INFO")
+    # Validate methods
+    valid_methods = ['l2ping', 'rssi']
+    methods = [m for m in methods if m in valid_methods]
+    if not methods:
+        methods = ['l2ping', 'rssi']
+
+    result = start_active_geo(bd_address, interface, methods)
+    add_log(f"Active geo tracking started for {bd_address} ({'+'.join(methods)})", "INFO")
     return jsonify(result)
 
 

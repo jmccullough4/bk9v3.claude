@@ -399,6 +399,37 @@
                     </div>
                 </div>
 
+                <!-- Active Geo Tracking -->
+                <div class="panel-section">
+                    <div class="section-header">
+                        <span class="section-icon">&#128205;</span>
+                        <span>ACTIVE TRACKING</span>
+                        <span class="tracking-status" id="trackingStatus">--</span>
+                    </div>
+                    <div class="section-content">
+                        <div class="input-group">
+                            <input type="text" id="trackBdAddress" class="input" placeholder="XX:XX:XX:XX:XX:XX" style="text-transform: uppercase;">
+                        </div>
+                        <div class="tracking-methods">
+                            <label class="method-option">
+                                <input type="checkbox" id="methodL2ping" checked>
+                                <span>L2PING (RTT)</span>
+                            </label>
+                            <label class="method-option">
+                                <input type="checkbox" id="methodRssi" checked>
+                                <span>HCITOOL RSSI</span>
+                            </label>
+                        </div>
+                        <div class="tracking-stats" id="trackingStats">
+                            <!-- Stats populated by JS -->
+                        </div>
+                        <div class="btn-group mt-10">
+                            <button class="btn btn-primary" id="btnStartTrack" onclick="startManualTracking()">START</button>
+                            <button class="btn btn-danger" id="btnStopTrack" onclick="stopManualTracking()" disabled>STOP</button>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- GPS Configuration -->
                 <div class="panel-section">
                     <div class="section-header">
@@ -611,7 +642,7 @@
 
     <!-- Version Footer -->
     <div class="version-footer">
-        <span class="version-text">BlueK9 v3.0.22</span>
+        <span class="version-text">BlueK9 v3.0.23</span>
         <span class="version-divider">|</span>
         <span class="version-id" id="systemIdFooter">--</span>
     </div>
