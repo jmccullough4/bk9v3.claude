@@ -1743,3 +1743,216 @@ body.resizing-vertical * {
 .version-id {
     color: var(--text-secondary);
 }
+
+/* ==================== DOCKABLE PANELS ==================== */
+
+/* Panel header for dragging */
+.panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    background: var(--bg-tertiary);
+    border-bottom: 1px solid var(--border-color);
+    cursor: move;
+    user-select: none;
+}
+
+.panel-header-title {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--accent-primary);
+    letter-spacing: 2px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.panel-header-controls {
+    display: flex;
+    gap: 5px;
+}
+
+.panel-control-btn {
+    width: 20px;
+    height: 20px;
+    background: transparent;
+    border: 1px solid var(--border-color);
+    color: var(--text-muted);
+    font-size: 12px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+}
+
+.panel-control-btn:hover {
+    color: var(--accent-primary);
+    border-color: var(--accent-primary);
+}
+
+.panel-control-btn.collapse-btn:hover {
+    color: var(--accent-warning);
+    border-color: var(--accent-warning);
+}
+
+.panel-control-btn.close-btn:hover {
+    color: var(--accent-danger);
+    border-color: var(--accent-danger);
+}
+
+/* Docking zones */
+.dock-zone {
+    position: absolute;
+    background: transparent;
+    z-index: 500;
+    pointer-events: none;
+    transition: background 0.2s;
+}
+
+.dock-zone.active {
+    background: rgba(0, 212, 255, 0.2);
+    border: 2px dashed var(--accent-primary);
+    pointer-events: auto;
+}
+
+.dock-zone-left {
+    left: 0;
+    top: 50px;
+    width: 60px;
+    bottom: 24px;
+}
+
+.dock-zone-right {
+    right: 0;
+    top: 50px;
+    width: 60px;
+    bottom: 24px;
+}
+
+.dock-zone-top {
+    left: 60px;
+    right: 60px;
+    top: 50px;
+    height: 60px;
+}
+
+.dock-zone-bottom {
+    left: 60px;
+    right: 60px;
+    bottom: 24px;
+    height: 60px;
+}
+
+/* Floating panel (when undocked) */
+.panel.floating {
+    position: fixed;
+    z-index: 900;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+    border: 1px solid var(--accent-primary);
+    border-radius: 4px;
+    overflow: hidden;
+    resize: both;
+}
+
+.panel.floating .panel-header {
+    background: var(--accent-primary);
+    color: var(--bg-primary);
+}
+
+.panel.floating .panel-header-title {
+    color: var(--bg-primary);
+}
+
+/* Panel being dragged */
+.panel.dragging {
+    opacity: 0.8;
+    z-index: 1000;
+    pointer-events: none;
+}
+
+/* Collapsed panel */
+.panel.collapsed .panel-section {
+    display: none;
+}
+
+.panel.collapsed .panel-header {
+    border-bottom: none;
+}
+
+/* Panel dock positions */
+.panel.docked-left {
+    order: -2;
+}
+
+.panel.docked-right {
+    order: 2;
+}
+
+/* Horizontal panels (top/bottom docked) */
+.panel.docked-top,
+.panel.docked-bottom {
+    flex-direction: row;
+    width: 100%;
+    max-height: 250px;
+    overflow-x: auto;
+}
+
+.panel.docked-top .panel-section,
+.panel.docked-bottom .panel-section {
+    min-width: 250px;
+    flex-shrink: 0;
+}
+
+/* Panel swap indicators */
+.panel-swap-hint {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    background: var(--accent-primary);
+    color: var(--bg-primary);
+    padding: 4px 8px;
+    font-size: 10px;
+    font-family: var(--font-mono);
+    border-radius: 2px;
+    opacity: 0;
+    transition: opacity 0.2s;
+    pointer-events: none;
+    z-index: 1001;
+}
+
+.panel:hover .panel-swap-hint {
+    opacity: 0.8;
+}
+
+.panel-left .panel-swap-hint {
+    right: -50px;
+}
+
+.panel-right .panel-swap-hint {
+    left: -50px;
+}
+
+/* Dock indicator overlay */
+.dock-indicator {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    pointer-events: none;
+    z-index: 999;
+    display: none;
+}
+
+.dock-indicator.active {
+    display: block;
+}
+
+.dock-indicator .dock-highlight {
+    position: absolute;
+    background: rgba(0, 212, 255, 0.3);
+    border: 2px solid var(--accent-primary);
+    transition: all 0.15s ease;
+}
