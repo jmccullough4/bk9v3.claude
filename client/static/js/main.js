@@ -2976,7 +2976,8 @@ function toggleActiveGeo(bdAddress) {
 function startActiveGeo(bdAddress) {
     fetch(`/api/device/${bdAddress}/geo/track`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
     })
     .then(r => r.json())
     .then(data => {
@@ -2995,7 +2996,8 @@ function startActiveGeo(bdAddress) {
 function stopActiveGeo(bdAddress) {
     fetch(`/api/device/${bdAddress}/geo/stop`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
     })
     .then(r => r.json())
     .then(data => {

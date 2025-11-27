@@ -3219,7 +3219,8 @@ def reset_device_geo(bd_address):
 def start_device_geo_track(bd_address):
     """Start active geo tracking with continuous l2ping for a device."""
     bd_address = bd_address.upper()
-    interface = request.json.get('interface', 'hci0') if request.json else 'hci0'
+    data = request.get_json(silent=True) or {}
+    interface = data.get('interface', 'hci0')
 
     result = start_active_geo(bd_address, interface)
     add_log(f"Active geo tracking started for {bd_address}", "INFO")
