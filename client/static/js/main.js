@@ -331,9 +331,7 @@ function updateSurveyTable() {
             ? `${device.emitter_accuracy.toFixed(0)}m`
             : '--';
 
-        const lastSeen = device.last_seen
-            ? new Date(device.last_seen).toLocaleTimeString()
-            : '--';
+        const lastSeen = formatTimeInTimezone(device.last_seen);
 
         // Device type badge
         const deviceType = device.device_type || 'unknown';
@@ -470,7 +468,7 @@ function updateDeviceMarker(device) {
             Manufacturer: ${mfr}<br>
             RSSI: ${device.rssi || '--'} dBm<br>
             CEP: ${cepStr}<br>
-            Last Seen: ${device.last_seen || '--'}
+            Last Seen: ${formatTimeInTimezone(device.last_seen)}
         `))
         .addTo(map);
 
@@ -1833,8 +1831,8 @@ Device may be out of range or not responding.</pre>
         ['Address Type', device.addr_type || 'N/A'],
         ['RSSI', device.rssi ? `${device.rssi} dBm` : 'N/A'],
         ['TX Power', device.tx_power ? `${device.tx_power} dBm` : 'N/A'],
-        ['First Seen', device.first_seen || 'N/A'],
-        ['Last Seen', device.last_seen || 'N/A'],
+        ['First Seen', formatDateTimeInTimezone(device.first_seen)],
+        ['Last Seen', formatDateTimeInTimezone(device.last_seen)],
         ['Emitter Location', device.emitter_lat && device.emitter_lon ?
             `${device.emitter_lat.toFixed(6)}, ${device.emitter_lon.toFixed(6)}` : 'N/A'],
         ['CEP Radius', device.emitter_accuracy ? `${device.emitter_accuracy.toFixed(1)} m` : 'N/A'],
@@ -1882,9 +1880,9 @@ function showTargetAlert(data) {
 
     let details = '';
     details += `System: ${systemId} (${systemName})\n`;
-    details += `Time: ${new Date().toLocaleString()}\n`;
-    if (device.first_seen) details += `First Seen: ${device.first_seen}\n`;
-    if (device.last_seen) details += `Last Seen: ${device.last_seen}\n`;
+    details += `Time: ${formatDateTimeInTimezone(new Date())}\n`;
+    if (device.first_seen) details += `First Seen: ${formatDateTimeInTimezone(device.first_seen)}\n`;
+    if (device.last_seen) details += `Last Seen: ${formatDateTimeInTimezone(device.last_seen)}\n`;
     if (device.rssi) details += `RSSI: ${device.rssi} dBm\n`;
     if (device.tx_power) details += `TX Power: ${device.tx_power} dBm\n`;
     if (device.device_type) details += `Type: ${device.device_type === 'ble' ? 'BLE' : device.device_type === 'classic' ? 'Classic' : device.device_type}\n`;
@@ -1944,8 +1942,8 @@ function copyAlertDetails() {
     if (d.addr_type) text += `Address Type: ${d.addr_type}\n`;
     if (d.manufacturer) text += `OUI Manufacturer: ${d.manufacturer}\n`;
     if (d.bt_company) text += `BT Company: ${d.bt_company}\n`;
-    if (d.first_seen) text += `First Seen: ${d.first_seen}\n`;
-    if (d.last_seen) text += `Last Seen: ${d.last_seen}\n`;
+    if (d.first_seen) text += `First Seen: ${formatDateTimeInTimezone(d.first_seen)}\n`;
+    if (d.last_seen) text += `Last Seen: ${formatDateTimeInTimezone(d.last_seen)}\n`;
 
     if (loc && loc.lat) {
         text += `\n--- System Location ---\n`;
@@ -2015,7 +2013,7 @@ function addLogEntry(message, level = 'INFO', scroll = true) {
     const entry = document.createElement('div');
     entry.className = 'log-entry';
 
-    const time = new Date().toLocaleTimeString();
+    const time = formatTimeInTimezone(new Date());
     entry.innerHTML = `
         <span class="log-time">${time}</span>
         <span class="log-level ${level}">${level}</span>
@@ -2055,6 +2053,7 @@ function updateTime() {
 }
 
 function formatTimeInTimezone(date) {
+    if (!date) return '--';
     const options = {
         hour: '2-digit',
         minute: '2-digit',
@@ -2066,6 +2065,25 @@ function formatTimeInTimezone(date) {
         return new Date(date).toLocaleTimeString('en-US', options);
     } catch (e) {
         return new Date(date).toLocaleTimeString();
+    }
+}
+
+function formatDateTimeInTimezone(date) {
+    if (!date) return '--';
+    const options = {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+        timeZone: currentTimezone
+    };
+    try {
+        return new Date(date).toLocaleString('en-US', options);
+    } catch (e) {
+        return new Date(date).toLocaleString();
     }
 }
 

@@ -4506,9 +4506,9 @@ def export_logs():
 
     conn.close()
 
-    # Build export data
+    # Build export data (all timestamps in UTC)
     export_data = {
-        'export_timestamp': datetime.now().isoformat(),
+        'export_timestamp': datetime.utcnow().isoformat() + 'Z',
         'system_id': settings.get('SYSTEM_ID', 'UNKNOWN'),
         'devices': devices_log,
         'rssi_history': rssi_history,
@@ -4529,6 +4529,7 @@ def export_logs():
         output.write('# BlueK9 Collection Export\n')
         output.write(f'# Exported: {export_data["export_timestamp"]}\n')
         output.write(f'# System ID: {export_data["system_id"]}\n')
+        output.write('# NOTE: All timestamps are in UTC\n')
         output.write('#\n')
         output.write('# DEVICES\n')
         output.write('bd_address,device_name,manufacturer,device_type,rssi,first_seen,last_seen,')
