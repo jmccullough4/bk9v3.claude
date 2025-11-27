@@ -245,6 +245,11 @@
                     <span class="status-dot"></span>
                     <span class="status-text">STANDBY</span>
                 </span>
+                <!-- Activity Indicator - Radar/Pulse Animation -->
+                <div class="activity-indicator" id="activityIndicator">
+                    <div class="radar-sweep"></div>
+                    <div class="radar-ping"></div>
+                </div>
             </div>
             <div class="header-center">
                 <div class="system-info">
@@ -262,6 +267,18 @@
                 <div class="system-info">
                     <span class="info-label">TARGETS:</span>
                     <span class="info-value target-count" id="targetCount">0</span>
+                </div>
+                <div class="system-info hw-info">
+                    <span class="info-label">CPU:</span>
+                    <span class="info-value" id="cpuUsage">--%</span>
+                </div>
+                <div class="system-info hw-info">
+                    <span class="info-label">TEMP:</span>
+                    <span class="info-value" id="cpuTemp">--°C</span>
+                </div>
+                <div class="system-info hw-info">
+                    <span class="info-label">MEM:</span>
+                    <span class="info-value" id="memUsage">--%</span>
                 </div>
             </div>
             <div class="header-right">
@@ -492,17 +509,21 @@
                         <span>BLUETOOTH SURVEY</span>
                         <span class="device-counter" id="surveyCount">0</span>
                     </div>
+                    <!-- Search/Filter Bar -->
+                    <div class="survey-search">
+                        <input type="text" id="surveySearch" placeholder="Filter by BD address, name, manufacturer..." oninput="filterSurveyTable()">
+                        <button class="search-clear" onclick="clearSurveyFilter()" title="Clear filter">&times;</button>
+                    </div>
                     <div class="section-content table-container">
                         <table class="survey-table" id="surveyTable">
                             <thead>
                                 <tr>
-                                    <th>BD ADDRESS</th>
-                                    <th>NAME</th>
-                                    <th>MFR</th>
-                                    <th>RSSI</th>
-                                    <th>CEP</th>
-                                    <th>LOC</th>
-                                    <th>LAST</th>
+                                    <th class="sortable" data-sort="bd_address" onclick="sortSurveyTable('bd_address')">BD ADDR <span class="sort-icon"></span></th>
+                                    <th class="sortable" data-sort="device_name" onclick="sortSurveyTable('device_name')">NAME <span class="sort-icon"></span></th>
+                                    <th class="sortable" data-sort="device_type" onclick="sortSurveyTable('device_type')">TYPE <span class="sort-icon"></span></th>
+                                    <th class="sortable" data-sort="rssi" onclick="sortSurveyTable('rssi')">RSSI <span class="sort-icon"></span></th>
+                                    <th class="sortable" data-sort="emitter_accuracy" onclick="sortSurveyTable('emitter_accuracy')">CEP <span class="sort-icon"></span></th>
+                                    <th class="sortable" data-sort="last_seen" onclick="sortSurveyTable('last_seen')">LAST <span class="sort-icon"></span></th>
                                     <th>ACT</th>
                                 </tr>
                             </thead>

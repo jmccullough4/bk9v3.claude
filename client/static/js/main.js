@@ -60,6 +60,10 @@ function initApp() {
     setInterval(updateTime, 1000);
     updateTime();
 
+    // Fetch hardware stats every 5 seconds
+    setInterval(fetchSystemStats, 5000);
+    fetchSystemStats();
+
     // Map click handler
     map.on('click', (e) => {
         // Clicked on empty map area
@@ -201,6 +205,10 @@ function updateDevice(device) {
     document.getElementById('targetCount').textContent = targetCount;
 }
 
+// Survey table sorting state
+let surveySort = { column: 'last_seen', direction: 'desc' };
+let surveyFilter = '';
+
 /**
  * Update the survey table
  */
@@ -208,22 +216,55 @@ function updateSurveyTable() {
     const tbody = document.getElementById('surveyTableBody');
     tbody.innerHTML = '';
 
-    // Sort devices: targets first, then by last_seen
-    const sortedDevices = Object.values(devices).sort((a, b) => {
+    // Get filter value
+    surveyFilter = (document.getElementById('surveySearch')?.value || '').toLowerCase();
+
+    // Sort devices based on current sort state
+    let sortedDevices = Object.values(devices).sort((a, b) => {
+        // Targets always first
         if (a.is_target && !b.is_target) return -1;
         if (!a.is_target && b.is_target) return 1;
-        return new Date(b.last_seen) - new Date(a.last_seen);
+
+        // Then by selected column
+        let aVal = a[surveySort.column];
+        let bVal = b[surveySort.column];
+
+        // Handle special cases
+        if (surveySort.column === 'last_seen') {
+            aVal = aVal ? new Date(aVal).getTime() : 0;
+            bVal = bVal ? new Date(bVal).getTime() : 0;
+        } else if (surveySort.column === 'rssi' || surveySort.column === 'emitter_accuracy') {
+            aVal = aVal || -999;
+            bVal = bVal || -999;
+        } else {
+            aVal = (aVal || '').toString().toLowerCase();
+            bVal = (bVal || '').toString().toLowerCase();
+        }
+
+        if (aVal < bVal) return surveySort.direction === 'asc' ? -1 : 1;
+        if (aVal > bVal) return surveySort.direction === 'asc' ? 1 : -1;
+        return 0;
     });
 
     sortedDevices.forEach(device => {
         const row = document.createElement('tr');
+        row.dataset.bdAddress = device.bd_address;
+
         if (device.is_target) {
             row.classList.add('target-row');
         }
 
-        const emitterLoc = device.emitter_lat && device.emitter_lon
-            ? `${device.emitter_lat.toFixed(4)}, ${device.emitter_lon.toFixed(4)}`
-            : '--';
+        // Check if row matches filter
+        const searchFields = [
+            device.bd_address,
+            device.device_name,
+            device.manufacturer,
+            device.device_type
+        ].map(f => (f || '').toLowerCase()).join(' ');
+
+        if (surveyFilter && !searchFields.includes(surveyFilter)) {
+            row.classList.add('filtered-out');
+        }
 
         const cep = device.emitter_accuracy
             ? `${device.emitter_accuracy.toFixed(0)}m`
@@ -233,13 +274,16 @@ function updateSurveyTable() {
             ? new Date(device.last_seen).toLocaleTimeString()
             : '--';
 
+        // Device type badge
+        const deviceType = device.device_type || 'unknown';
+        const typeBadge = `<span class="device-type-badge ${deviceType}">${deviceType === 'ble' ? 'LE' : deviceType === 'classic' ? 'CL' : '?'}</span>`;
+
         row.innerHTML = `
             <td class="bd-address">${device.bd_address}</td>
-            <td title="${device.device_name || 'Unknown'}">${truncate(device.device_name || 'Unknown', 12)}</td>
-            <td title="${device.manufacturer || 'Unknown'}">${truncate(device.manufacturer || '?', 8)}</td>
+            <td title="${device.device_name || 'Unknown'}">${truncate(device.device_name || 'Unknown', 10)}</td>
+            <td>${typeBadge}</td>
             <td>${device.rssi || '--'}</td>
             <td class="cep-cell">${cep}</td>
-            <td title="${emitterLoc}">${emitterLoc !== '--' ? emitterLoc.split(',')[0] + '...' : '--'}</td>
             <td>${lastSeen}</td>
             <td>
                 <button class="action-btn" onclick="getDeviceInfo('${device.bd_address}')" title="Get Info">i</button>
@@ -260,6 +304,55 @@ function updateSurveyTable() {
 
         tbody.appendChild(row);
     });
+
+    // Update visible count
+    const visibleCount = sortedDevices.filter(d => {
+        const searchFields = [d.bd_address, d.device_name, d.manufacturer, d.device_type]
+            .map(f => (f || '').toLowerCase()).join(' ');
+        return !surveyFilter || searchFields.includes(surveyFilter);
+    }).length;
+    document.getElementById('surveyCount').textContent = surveyFilter
+        ? `${visibleCount}/${Object.keys(devices).length}`
+        : Object.keys(devices).length;
+}
+
+/**
+ * Sort survey table by column
+ */
+function sortSurveyTable(column) {
+    // Toggle direction if same column
+    if (surveySort.column === column) {
+        surveySort.direction = surveySort.direction === 'asc' ? 'desc' : 'asc';
+    } else {
+        surveySort.column = column;
+        surveySort.direction = 'desc';
+    }
+
+    // Update header classes
+    document.querySelectorAll('.survey-table th.sortable').forEach(th => {
+        th.classList.remove('sort-asc', 'sort-desc');
+        if (th.dataset.sort === column) {
+            th.classList.add(surveySort.direction === 'asc' ? 'sort-asc' : 'sort-desc');
+        }
+    });
+
+    updateSurveyTable();
+}
+
+/**
+ * Filter survey table
+ */
+function filterSurveyTable() {
+    updateSurveyTable();
+}
+
+/**
+ * Clear survey filter
+ */
+function clearSurveyFilter() {
+    document.getElementById('surveySearch').value = '';
+    surveyFilter = '';
+    updateSurveyTable();
 }
 
 /**
@@ -532,17 +625,26 @@ function updateScanStatus(isScanning) {
     const statusText = indicator.querySelector('.status-text');
     const startBtn = document.getElementById('btnStartScan');
     const stopBtn = document.getElementById('btnStopScan');
+    const activityIndicator = document.getElementById('activityIndicator');
 
     if (isScanning) {
         indicator.classList.add('active');
         statusText.textContent = 'SCANNING';
         startBtn.disabled = true;
         stopBtn.disabled = false;
+        // Activate radar animation
+        if (activityIndicator) {
+            activityIndicator.classList.add('active');
+        }
     } else {
         indicator.classList.remove('active');
         statusText.textContent = 'STANDBY';
         startBtn.disabled = false;
         stopBtn.disabled = true;
+        // Deactivate radar animation
+        if (activityIndicator) {
+            activityIndicator.classList.remove('active');
+        }
     }
 }
 
@@ -1608,6 +1710,59 @@ function addLogEntry(message, level = 'INFO', scroll = true) {
 function updateTime() {
     const now = new Date();
     document.getElementById('sysTime').textContent = now.toLocaleTimeString();
+}
+
+// ==================== HARDWARE MONITORING ====================
+
+function fetchSystemStats() {
+    fetch('/api/system/stats')
+        .then(r => r.json())
+        .then(stats => {
+            updateHardwareDisplay(stats);
+        })
+        .catch(e => {
+            // Silent fail - hardware stats are non-critical
+        });
+}
+
+function updateHardwareDisplay(stats) {
+    // CPU Usage
+    const cpuEl = document.getElementById('cpuUsage');
+    if (cpuEl && stats.cpu_percent !== null) {
+        cpuEl.textContent = `${stats.cpu_percent}%`;
+        cpuEl.classList.remove('warning', 'danger');
+        if (stats.cpu_percent > 80) {
+            cpuEl.classList.add('danger');
+        } else if (stats.cpu_percent > 60) {
+            cpuEl.classList.add('warning');
+        }
+    }
+
+    // CPU Temperature
+    const tempEl = document.getElementById('cpuTemp');
+    if (tempEl && stats.cpu_temp !== null) {
+        tempEl.textContent = `${stats.cpu_temp}°C`;
+        tempEl.classList.remove('warning', 'danger');
+        if (stats.cpu_temp > 70) {
+            tempEl.classList.add('danger');
+        } else if (stats.cpu_temp > 55) {
+            tempEl.classList.add('warning');
+        }
+    } else if (tempEl) {
+        tempEl.textContent = '--°C';
+    }
+
+    // Memory Usage
+    const memEl = document.getElementById('memUsage');
+    if (memEl && stats.memory_percent !== null) {
+        memEl.textContent = `${stats.memory_percent}%`;
+        memEl.classList.remove('warning', 'danger');
+        if (stats.memory_percent > 85) {
+            memEl.classList.add('danger');
+        } else if (stats.memory_percent > 70) {
+            memEl.classList.add('warning');
+        }
+    }
 }
 
 function truncate(str, length) {
