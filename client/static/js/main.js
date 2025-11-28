@@ -11,7 +11,7 @@ let targets = {};
 let markers = {};
 let cepCircles = {};
 let systemMarker = null;
-let followGps = true;
+let followGps = false;  // Disabled by default
 let showCep = true;
 let showBreadcrumbs = false;
 let scanning = false;
@@ -6198,13 +6198,18 @@ function initNetworkWebSocket() {
  * Manually sync targets with all BlueK9 peers
  */
 function syncTargetsWithPeers() {
+    addLogEntry('Syncing targets with peers...', 'INFO');
     fetch('/api/network/sync_targets', { method: 'POST' })
         .then(r => r.json())
         .then(data => {
             if (data.status === 'synced') {
-                addLogEntry(`Targets synced with ${data.peer_count} peer(s)`, 'INFO');
+                addLogEntry(`Target sync complete: sent to ${data.sent_to} peer(s), received ${data.received} new target(s)`, 'INFO');
+                // Refresh targets list
+                loadTargets();
+            } else if (data.status === 'no_peers') {
+                addLogEntry('Target sync: No BlueK9 peers connected', 'WARNING');
             } else {
-                addLogEntry(`Target sync failed: ${data.error}`, 'ERROR');
+                addLogEntry(`Target sync failed: ${data.message || data.error || 'Unknown error'}`, 'ERROR');
             }
         })
         .catch(e => addLogEntry(`Target sync failed: ${e}`, 'ERROR'));

@@ -214,7 +214,10 @@ setup_logs() {
     mkdir -p "$PROJECT_DIR/logs"
 }
 
-# Start the application
+# Restart flag file
+RESTART_FLAG="/tmp/bluek9_restart"
+
+# Start the application with auto-restart support
 start_app() {
     log_info "Starting BlueK9 Client..."
     echo ""
@@ -229,8 +232,36 @@ start_app() {
     cd "$CLIENT_DIR"
     source venv/bin/activate
 
-    # Start with proper permissions
-    python app.py
+    # Remove any stale restart flag
+    rm -f "$RESTART_FLAG"
+
+    # Run in a loop to support restart
+    while true; do
+        log_info "Starting BlueK9 application..."
+        python app.py
+        EXIT_CODE=$?
+
+        # Check if restart was requested
+        if [ -f "$RESTART_FLAG" ]; then
+            rm -f "$RESTART_FLAG"
+            echo ""
+            log_info "Restart requested - restarting BlueK9..."
+
+            # Pull latest updates if available
+            if [ "$SKIP_UPDATE" = false ]; then
+                auto_update
+            fi
+
+            sleep 2
+            continue
+        fi
+
+        # If exit was not restart, break the loop
+        if [ $EXIT_CODE -ne 0 ]; then
+            log_error "BlueK9 exited with code $EXIT_CODE"
+        fi
+        break
+    done
 }
 
 # Docker start
