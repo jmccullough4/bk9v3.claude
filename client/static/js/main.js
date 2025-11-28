@@ -5687,6 +5687,10 @@ let peerMarkers = {};
 let connectionLines = {};
 let showPeerLocations = true;
 let showPeerConnections = true;
+let showNetworkStats = false;
+let peerLatencyChart = null;
+let peerLatencyHistory = {};  // peer_ip -> [latency values]
+let networkStatsUpdateInterval = null;
 
 /**
  * Start WARHAMMER network monitoring
@@ -5769,6 +5773,11 @@ function handleWarhammerUpdate(data) {
         networkRoutes = data.routes;
         updateRouteList();
         document.getElementById('networkRouteCount').textContent = networkRoutes.length;
+    }
+
+    // Update network statistics if visible
+    if (showNetworkStats) {
+        updateNetworkStatsDisplay();
     }
 }
 
@@ -6226,6 +6235,519 @@ function syncTargetsWithPeers() {
         .catch(e => addLogEntry(`Target sync failed: ${e}`, 'ERROR'));
 }
 
+/**
+ * Toggle network statistics panel visibility
+ */
+function toggleNetworkStats() {
+    showNetworkStats = document.getElementById('toggleShowNetStats').checked;
+    const panel = document.getElementById('networkStatsPanel');
+
+    if (showNetworkStats) {
+        panel.classList.remove('hidden');
+        initPeerLatencyChart();
+        updateNetworkStatsDisplay();
+        refreshSpeedtestPeers();  // Refresh available peers for speed test
+    } else {
+        panel.classList.add('hidden');
+    }
+}
+
+/**
+ * Initialize the peer latency chart
+ */
+function initPeerLatencyChart() {
+    const ctx = document.getElementById('peerLatencyChart');
+    if (!ctx) return;
+
+    if (peerLatencyChart) {
+        peerLatencyChart.destroy();
+    }
+
+    peerLatencyChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: [],
+            datasets: []
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: { duration: 300 },
+            scales: {
+                x: {
+                    display: false
+                },
+                y: {
+                    beginAtZero: true,
+                    grid: { color: 'rgba(0, 255, 255, 0.1)' },
+                    ticks: {
+                        color: '#00ffff',
+                        font: { size: 10, family: 'monospace' }
+                    }
+                }
+            },
+            plugins: {
+                legend: {
+                    display: true,
+                    position: 'bottom',
+                    labels: {
+                        color: '#00ffff',
+                        font: { size: 10, family: 'monospace' },
+                        boxWidth: 12
+                    }
+                }
+            }
+        }
+    });
+}
+
+/**
+ * Update network statistics display
+ */
+function updateNetworkStatsDisplay() {
+    if (!showNetworkStats) return;
+
+    // Count online BlueK9 nodes
+    const bluek9Nodes = networkPeers.filter(p => p.is_bluek9);
+    document.getElementById('netStatNodesOnline').textContent = bluek9Nodes.length;
+
+    // Calculate average latency
+    let totalLatency = 0;
+    let latencyCount = 0;
+    bluek9Nodes.forEach(peer => {
+        if (peer.latency && peer.latency !== '0s') {
+            const ms = parseLatency(peer.latency);
+            if (ms > 0) {
+                totalLatency += ms;
+                latencyCount++;
+            }
+        }
+    });
+    const avgLatency = latencyCount > 0 ? (totalLatency / latencyCount).toFixed(1) : '--';
+    document.getElementById('netStatAvgLatency').textContent = avgLatency !== '--' ? `${avgLatency}ms` : '--';
+
+    // Calculate data synced (sum of transfer)
+    let totalTransfer = 0;
+    bluek9Nodes.forEach(peer => {
+        if (peer.transfer_rx) totalTransfer += parseTransfer(peer.transfer_rx);
+        if (peer.transfer_tx) totalTransfer += parseTransfer(peer.transfer_tx);
+    });
+    document.getElementById('netStatDataSynced').textContent = formatBytes(totalTransfer);
+
+    // Update peer status list
+    updateNetStatsPeersList(bluek9Nodes);
+
+    // Update latency chart
+    updateLatencyChart(bluek9Nodes);
+}
+
+/**
+ * Parse latency string to milliseconds
+ */
+function parseLatency(latencyStr) {
+    if (!latencyStr || latencyStr === '0s' || latencyStr === '-') return 0;
+
+    // Handle formats like "57.443748ms", "1.5s", etc.
+    const msMatch = latencyStr.match(/([\d.]+)ms/);
+    if (msMatch) return parseFloat(msMatch[1]);
+
+    const sMatch = latencyStr.match(/([\d.]+)s/);
+    if (sMatch) return parseFloat(sMatch[1]) * 1000;
+
+    return 0;
+}
+
+/**
+ * Parse transfer string to bytes
+ */
+function parseTransfer(transferStr) {
+    if (!transferStr || transferStr === '0 B') return 0;
+
+    const match = transferStr.match(/([\d.]+)\s*(B|KiB|MiB|GiB|KB|MB|GB)/i);
+    if (!match) return 0;
+
+    const value = parseFloat(match[1]);
+    const unit = match[2].toUpperCase();
+
+    switch (unit) {
+        case 'B': return value;
+        case 'KIB': case 'KB': return value * 1024;
+        case 'MIB': case 'MB': return value * 1024 * 1024;
+        case 'GIB': case 'GB': return value * 1024 * 1024 * 1024;
+        default: return value;
+    }
+}
+
+/**
+ * Format bytes to human readable
+ */
+function formatBytes(bytes) {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
+/**
+ * Update the BlueK9 peers status list in stats panel
+ */
+function updateNetStatsPeersList(bluek9Nodes) {
+    const container = document.getElementById('netStatsPeersList');
+    if (!container) return;
+
+    if (bluek9Nodes.length === 0) {
+        container.innerHTML = '<div class="net-stats-peer-item no-peers">No BlueK9 nodes connected</div>';
+        return;
+    }
+
+    container.innerHTML = bluek9Nodes.map(peer => {
+        const latency = peer.latency && peer.latency !== '0s' ? peer.latency : '--';
+        const connType = peer.connection_type || 'Unknown';
+        const status = peer.connected ? 'online' : 'offline';
+        const name = peer.system_name || peer.name || peer.hostname;
+
+        return `
+            <div class="net-stats-peer-item">
+                <div class="net-stats-peer-status ${status}"></div>
+                <div class="net-stats-peer-info">
+                    <div class="net-stats-peer-name">${name}</div>
+                    <div class="net-stats-peer-details">
+                        <span class="peer-latency">${latency}</span>
+                        <span class="peer-conn-type">${connType}</span>
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+/**
+ * Update the latency chart with current peer data
+ */
+function updateLatencyChart(bluek9Nodes) {
+    if (!peerLatencyChart || !showNetworkStats) return;
+
+    const maxDataPoints = 30;  // Keep last 30 data points
+    const timestamp = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+    // Update history for each peer
+    bluek9Nodes.forEach(peer => {
+        const peerId = peer.system_id || peer.ip;
+        if (!peerLatencyHistory[peerId]) {
+            peerLatencyHistory[peerId] = [];
+        }
+
+        const latency = parseLatency(peer.latency);
+        peerLatencyHistory[peerId].push(latency);
+
+        // Keep only last N points
+        if (peerLatencyHistory[peerId].length > maxDataPoints) {
+            peerLatencyHistory[peerId].shift();
+        }
+    });
+
+    // Build chart datasets
+    const colors = ['#00ffff', '#ff6b6b', '#4ecdc4', '#ffe66d', '#95e1d3', '#f38181'];
+    const datasets = [];
+    let colorIdx = 0;
+
+    bluek9Nodes.forEach(peer => {
+        const peerId = peer.system_id || peer.ip;
+        const name = peer.system_name || peer.name || peerId;
+        const color = colors[colorIdx % colors.length];
+
+        datasets.push({
+            label: name,
+            data: peerLatencyHistory[peerId] || [],
+            borderColor: color,
+            backgroundColor: color + '20',
+            borderWidth: 2,
+            pointRadius: 0,
+            tension: 0.3,
+            fill: true
+        });
+        colorIdx++;
+    });
+
+    // Update labels (time points)
+    const labels = [];
+    const maxLen = Math.max(...Object.values(peerLatencyHistory).map(h => h.length), 1);
+    for (let i = 0; i < maxLen; i++) {
+        labels.push('');
+    }
+
+    peerLatencyChart.data.labels = labels;
+    peerLatencyChart.data.datasets = datasets;
+    peerLatencyChart.update('none');  // No animation for smooth updates
+}
+
+
+// ==================== SPEED TEST ====================
+
+let speedtestChart = null;
+let speedtestRunning = false;
+
+/**
+ * Initialize speed test chart
+ */
+function initSpeedtestChart() {
+    const ctx = document.getElementById('speedtestChart');
+    if (!ctx) return;
+
+    speedtestChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: [],
+            datasets: [{
+                label: 'Speed (Mbps)',
+                data: [],
+                borderColor: '#00ffff',
+                backgroundColor: 'rgba(0, 255, 255, 0.1)',
+                borderWidth: 3,
+                pointRadius: 4,
+                pointBackgroundColor: '#00ffff',
+                fill: true,
+                tension: 0.4
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: {
+                duration: 300
+            },
+            plugins: {
+                legend: { display: false }
+            },
+            scales: {
+                x: {
+                    display: true,
+                    grid: { color: 'rgba(255,255,255,0.1)' },
+                    ticks: { color: '#00ffff', font: { size: 9 } }
+                },
+                y: {
+                    display: true,
+                    beginAtZero: true,
+                    grid: { color: 'rgba(255,255,255,0.1)' },
+                    ticks: {
+                        color: '#00ffff',
+                        font: { size: 10 },
+                        callback: (v) => v + ' Mbps'
+                    }
+                }
+            }
+        }
+    });
+}
+
+/**
+ * Refresh the list of available peers for speed testing
+ */
+async function refreshSpeedtestPeers() {
+    const select = document.getElementById('speedtestPeerSelect');
+    if (!select) return;
+
+    try {
+        const response = await fetch('/api/network/speedtest/peers');
+        if (!response.ok) return;
+
+        const data = await response.json();
+        const peers = data.peers || [];
+
+        // Keep current selection if possible
+        const currentValue = select.value;
+
+        // Clear and rebuild options
+        select.innerHTML = '<option value="">Select target node...</option>';
+
+        peers.forEach(peer => {
+            const option = document.createElement('option');
+            option.value = peer.ip;
+            option.dataset.name = peer.name;
+            const typeIcon = peer.type === 'bluek9' ? '🔷' : '🌐';
+            option.textContent = `${typeIcon} ${peer.name} (${peer.ip})`;
+            select.appendChild(option);
+        });
+
+        // Restore selection if still available
+        if (currentValue) {
+            select.value = currentValue;
+        }
+    } catch (e) {
+        console.error('Failed to refresh speedtest peers:', e);
+    }
+}
+
+/**
+ * Start a speed test
+ */
+async function startSpeedTest() {
+    const select = document.getElementById('speedtestPeerSelect');
+    const targetIp = select?.value;
+    const targetName = select?.selectedOptions[0]?.dataset.name || targetIp;
+
+    if (!targetIp) {
+        addLog('Please select a target node for speed test', 'WARNING');
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/network/speedtest/start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                target_ip: targetIp,
+                target_name: targetName,
+                duration: 10
+            })
+        });
+
+        const data = await response.json();
+        if (!response.ok) {
+            addLog(`Speed test failed: ${data.error}`, 'ERROR');
+            return;
+        }
+
+        // Show test display
+        speedtestRunning = true;
+        updateSpeedtestUI('running', targetName);
+
+        // Initialize chart if needed
+        if (!speedtestChart) {
+            initSpeedtestChart();
+        } else {
+            // Clear previous data
+            speedtestChart.data.labels = [];
+            speedtestChart.data.datasets[0].data = [];
+            speedtestChart.update();
+        }
+
+    } catch (e) {
+        addLog(`Speed test error: ${e.message}`, 'ERROR');
+    }
+}
+
+/**
+ * Stop running speed test
+ */
+async function stopSpeedTest() {
+    try {
+        await fetch('/api/network/speedtest/stop', { method: 'POST' });
+        updateSpeedtestUI('stopped');
+    } catch (e) {
+        console.error('Failed to stop speed test:', e);
+    }
+}
+
+/**
+ * Update speed test UI based on status
+ */
+function updateSpeedtestUI(status, targetName = '') {
+    const badge = document.getElementById('speedtestBadge');
+    const display = document.getElementById('speedtestDisplay');
+    const results = document.getElementById('speedtestResults');
+    const startBtn = document.getElementById('speedtestStartBtn');
+    const stopBtn = document.getElementById('speedtestStopBtn');
+    const targetNameEl = document.getElementById('speedtestTargetName');
+
+    switch (status) {
+        case 'running':
+            badge.textContent = 'TESTING';
+            badge.className = 'speedtest-badge running';
+            display.classList.remove('hidden');
+            results.classList.add('hidden');
+            startBtn.classList.add('hidden');
+            stopBtn.classList.remove('hidden');
+            if (targetName) targetNameEl.textContent = targetName;
+            break;
+
+        case 'complete':
+            badge.textContent = 'COMPLETE';
+            badge.className = 'speedtest-badge complete';
+            display.classList.add('hidden');
+            results.classList.remove('hidden');
+            startBtn.classList.remove('hidden');
+            stopBtn.classList.add('hidden');
+            speedtestRunning = false;
+            break;
+
+        case 'error':
+        case 'stopped':
+        case 'cancelled':
+            badge.textContent = status === 'error' ? 'ERROR' : 'READY';
+            badge.className = 'speedtest-badge ' + (status === 'error' ? 'error' : '');
+            display.classList.add('hidden');
+            startBtn.classList.remove('hidden');
+            stopBtn.classList.add('hidden');
+            speedtestRunning = false;
+            break;
+    }
+}
+
+/**
+ * Handle speed test WebSocket updates
+ */
+function handleSpeedtestUpdate(data) {
+    const progressBar = document.getElementById('speedtestProgressBar');
+    const progressText = document.getElementById('speedtestProgressText');
+    const liveSpeed = document.getElementById('speedtestLiveSpeed');
+
+    switch (data.status) {
+        case 'running':
+            // Update progress
+            if (progressBar) progressBar.style.width = `${data.progress || 0}%`;
+            if (progressText) progressText.textContent = `${data.progress || 0}%`;
+            if (liveSpeed) liveSpeed.textContent = (data.bandwidth || 0).toFixed(2);
+
+            // Update chart
+            if (speedtestChart && data.results) {
+                speedtestChart.data.labels = data.results.map(r => `${r.time}s`);
+                speedtestChart.data.datasets[0].data = data.results.map(r => r.mbps);
+                speedtestChart.update('none');
+            }
+            break;
+
+        case 'complete':
+            updateSpeedtestUI('complete');
+            if (data.final_result) {
+                document.getElementById('speedtestUpload').textContent =
+                    `${data.final_result.upload_mbps} Mbps`;
+                document.getElementById('speedtestDownload').textContent =
+                    `${data.final_result.download_mbps} Mbps`;
+                document.getElementById('speedtestRetransmits').textContent =
+                    data.final_result.retransmits;
+
+                // Final chart update
+                if (speedtestChart && data.results) {
+                    speedtestChart.data.labels = data.results.map(r => `${r.time}s`);
+                    speedtestChart.data.datasets[0].data = data.results.map(r => r.mbps);
+                    speedtestChart.update();
+                }
+            }
+            break;
+
+        case 'error':
+            updateSpeedtestUI('error');
+            addLog(`Speed test error: ${data.error}`, 'ERROR');
+            break;
+
+        case 'cancelled':
+            updateSpeedtestUI('cancelled');
+            break;
+    }
+}
+
+/**
+ * Initialize speed test WebSocket handler
+ */
+function initSpeedtestWebSocket() {
+    if (typeof socket !== 'undefined') {
+        socket.on('speedtest_update', handleSpeedtestUpdate);
+    }
+}
+
+
 // Extend the section states to include network section
 const originalSaveSectionStates = typeof saveSectionStates === 'function' ? saveSectionStates : null;
 function saveSectionStatesExtended() {
@@ -6248,6 +6770,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Initialize network WebSocket handlers after a short delay
     setTimeout(() => {
         initNetworkWebSocket();
+        initSpeedtestWebSocket();
         // Auto-start network monitor if setting is enabled
         const autoConnect = localStorage.getItem('bluek9_network_autoconnect') !== 'false';
         if (autoConnect) {
@@ -6255,5 +6778,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         // Initial cellular status check
         updateCellularStatus();
+        // Refresh speedtest peers
+        refreshSpeedtestPeers();
     }, 1000);
 });
