@@ -92,9 +92,8 @@ ubertooth_running = False
 ubertooth_data = {}  # LAP -> piconet info (UAP, channel, clock)
 
 # WARHAMMER Network state (NetBird-based mesh network)
+# Uses local `netbird status -d` for peer discovery (no API token needed)
 WARHAMMER_CONFIG = {
-    'API_TOKEN': 'nbp_P936c4V7F5bkiEZjn1mi7bJ0zAEGT83xIS2r',
-    'API_BASE': 'https://api.netbird.io/api',
     'NETWORK_NAME': 'WARHAMMER'
 }
 warhammer_peers = {}  # peer_id -> peer info (name, ip, location, status)
@@ -5803,51 +5802,36 @@ def get_network_routes():
 @app.route('/api/network/routes', methods=['POST'])
 @login_required
 def add_network_route():
-    """Add a new network route."""
-    data = request.json
-    if not data:
-        return jsonify({'error': 'No data provided'}), 400
-
-    # Create route via API
-    route_data = {
-        'network': data.get('network'),
-        'network_id': data.get('network_id'),
-        'description': data.get('description', ''),
-        'peer': data.get('peer'),
-        'peer_groups': data.get('peer_groups', []),
-        'masquerade': data.get('masquerade', True),
-        'metric': data.get('metric', 9999),
-        'enabled': data.get('enabled', True)
-    }
-
-    result = warhammer_api_request('/routes', method='POST', data=route_data)
-    if result:
-        add_log(f"WARHAMMER route added: {route_data.get('network')}", "INFO")
-        return jsonify({'status': 'created', 'route': result})
-    return jsonify({'error': 'Failed to create route'}), 500
+    """Add a new network route - requires NetBird management dashboard."""
+    # Route creation requires NetBird management dashboard access
+    # Local CLI doesn't support adding routes
+    add_log("Route creation requires NetBird management dashboard", "WARNING")
+    return jsonify({
+        'error': 'Route creation requires NetBird management dashboard',
+        'hint': 'Use the NetBird dashboard at https://app.netbird.io to add routes'
+    }), 501
 
 
 @app.route('/api/network/routes/<route_id>', methods=['DELETE'])
 @login_required
 def delete_network_route(route_id):
-    """Delete a network route (non-persistent only)."""
-    # Check if route is persistent
+    """Delete a network route - requires NetBird management dashboard."""
     route = warhammer_routes.get(route_id)
     if route and route.get('persistent'):
         return jsonify({'error': 'Cannot delete persistent routes'}), 403
 
-    result = warhammer_api_request(f'/routes/{route_id}', method='DELETE')
-    if result is not None:
-        warhammer_routes.pop(route_id, None)
-        add_log(f"WARHAMMER route deleted: {route_id}", "INFO")
-        return jsonify({'status': 'deleted'})
-    return jsonify({'error': 'Failed to delete route'}), 500
+    # Route deletion requires NetBird management dashboard access
+    add_log("Route deletion requires NetBird management dashboard", "WARNING")
+    return jsonify({
+        'error': 'Route deletion requires NetBird management dashboard',
+        'hint': 'Use the NetBird dashboard at https://app.netbird.io to manage routes'
+    }), 501
 
 
 @app.route('/api/network/routes/<route_id>/toggle', methods=['POST'])
 @login_required
 def toggle_network_route(route_id):
-    """Toggle a network route enabled/disabled (non-persistent only)."""
+    """Toggle a network route using netbird routes select/deselect."""
     route = warhammer_routes.get(route_id)
     if not route:
         return jsonify({'error': 'Route not found'}), 404
@@ -5855,13 +5839,40 @@ def toggle_network_route(route_id):
     if route.get('persistent'):
         return jsonify({'error': 'Cannot modify persistent routes'}), 403
 
-    new_state = not route.get('enabled', True)
-    result = warhammer_api_request(f'/routes/{route_id}', method='PUT', data={'enabled': new_state})
-    if result:
-        route['enabled'] = new_state
-        add_log(f"WARHAMMER route {'enabled' if new_state else 'disabled'}: {route_id}", "INFO")
-        return jsonify({'status': 'toggled', 'enabled': new_state})
-    return jsonify({'error': 'Failed to toggle route'}), 500
+    try:
+        # Use netbird CLI to select/deselect routes
+        network = route.get('network', '')
+        current_enabled = route.get('enabled', True)
+
+        if current_enabled:
+            # Deselect (disable) the route
+            result = subprocess.run(
+                ['netbird', 'routes', 'deselect', network],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.returncode == 0:
+                route['enabled'] = False
+                add_log(f"WARHAMMER route disabled: {network}", "INFO")
+                return jsonify({'status': 'toggled', 'enabled': False})
+        else:
+            # Select (enable) the route
+            result = subprocess.run(
+                ['netbird', 'routes', 'select', network],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.returncode == 0:
+                route['enabled'] = True
+                add_log(f"WARHAMMER route enabled: {network}", "INFO")
+                return jsonify({'status': 'toggled', 'enabled': True})
+
+        add_log(f"Route toggle failed: {result.stderr}", "ERROR")
+        return jsonify({'error': f'Failed to toggle route: {result.stderr}'}), 500
+
+    except subprocess.TimeoutExpired:
+        return jsonify({'error': 'Command timeout'}), 500
+    except Exception as e:
+        add_log(f"Route toggle error: {e}", "ERROR")
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/network/monitor/start', methods=['POST'])
