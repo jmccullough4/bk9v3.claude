@@ -5737,6 +5737,12 @@ function handleWarhammerUpdate(data) {
         document.getElementById('networkPeerCount').textContent = networkPeers.length;
         document.getElementById('networkOnlineCount').textContent =
             networkPeers.filter(p => p.connected).length;
+
+        // Update BlueK9 peer count
+        const bluek9Count = data.bluek9_count !== undefined ?
+            data.bluek9_count : networkPeers.filter(p => p.is_bluek9).length;
+        const bluek9El = document.getElementById('networkBluek9Count');
+        if (bluek9El) bluek9El.textContent = bluek9Count;
     }
 
     if (data.peer_locations) {
@@ -5767,18 +5773,38 @@ function updatePeerList() {
         return;
     }
 
-    container.innerHTML = networkPeers.map(peer => `
-        <div class="peer-item" onclick="locatePeer('${peer.id}')">
-            <div class="peer-status-dot ${peer.connected ? 'online' : 'offline'}"></div>
-            <div class="peer-info">
-                <div class="peer-name">${peer.hostname || peer.name}</div>
-                <div class="peer-ip">${peer.ip}</div>
+    // Sort: BlueK9 peers first, then by connection status, then by name
+    const sortedPeers = [...networkPeers].sort((a, b) => {
+        if (a.is_bluek9 !== b.is_bluek9) return b.is_bluek9 ? 1 : -1;
+        if (a.connected !== b.connected) return b.connected ? 1 : -1;
+        return (a.hostname || a.name).localeCompare(b.hostname || b.name);
+    });
+
+    container.innerHTML = sortedPeers.map(peer => {
+        const displayName = peer.is_bluek9 ? (peer.system_name || peer.system_id || peer.hostname) : (peer.hostname || peer.name);
+        const peerType = peer.is_bluek9 ? 'bluek9' : 'network';
+        const peerBadge = peer.is_bluek9 ? '<span class="peer-bluek9-badge">BK9</span>' : '';
+        const latencyInfo = peer.latency ? `<span class="peer-latency">${peer.latency}</span>` : '';
+        const connType = peer.connection_type ? `<span class="peer-conn-type">${peer.connection_type}</span>` : '';
+
+        return `
+            <div class="peer-item ${peerType}" onclick="locatePeer('${peer.id}')" data-peer-ip="${peer.ip}">
+                <div class="peer-status-dot ${peer.connected ? 'online' : 'offline'} ${peer.is_bluek9 ? 'bluek9' : ''}"></div>
+                <div class="peer-info">
+                    <div class="peer-name">
+                        ${displayName}
+                        ${peerBadge}
+                    </div>
+                    <div class="peer-details">
+                        <span class="peer-ip">${peer.ip}</span>
+                        ${latencyInfo}
+                        ${connType}
+                    </div>
+                </div>
+                ${peer.is_bluek9 ? `<button class="peer-locate-btn" onclick="event.stopPropagation(); locatePeer('${peer.id}')" title="Locate on map">&#128205;</button>` : ''}
             </div>
-            <button class="peer-locate-btn" onclick="event.stopPropagation(); locatePeer('${peer.id}')" title="Locate on map">
-                &#128205;
-            </button>
-        </div>
-    `).join('');
+        `;
+    }).join('');
 }
 
 /**
