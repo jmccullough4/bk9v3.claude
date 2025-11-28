@@ -5169,6 +5169,11 @@ function handleGeoPing(data) {
     // Update tracking stats panel if this is the manual tracking target
     if (data.bd_address === manualTrackingBd) {
         updateTrackingStats(data);
+
+        // Update direction finder if we have direction data
+        if (data.direction) {
+            updateDirectionFinder(data.direction);
+        }
     }
 
     // Show ping status in log (throttled)
@@ -5178,6 +5183,95 @@ function handleGeoPing(data) {
             data.status === 'error' ? `ERROR: ${data.error}` :
             `RSSI:${data.rssi || '--'}dBm RTT:${data.rtt || '--'}ms`;
         addLogEntry(`GEO ${methods} ${data.bd_address}: ${status}`, 'DEBUG');
+    }
+}
+
+/**
+ * Update direction finder UI with bearing and trend info
+ */
+function updateDirectionFinder(direction) {
+    const finder = document.getElementById('directionFinder');
+    const arrow = document.getElementById('compassArrow');
+    const trendEl = document.getElementById('directionTrend');
+    const bearingEl = document.getElementById('directionBearing');
+    const confEl = document.getElementById('directionConfidence');
+
+    if (!finder) return;
+
+    // Show the direction finder
+    finder.classList.remove('hidden');
+
+    // Update trend class for styling
+    finder.classList.remove('closer', 'farther', 'stable');
+    if (direction.trend) {
+        finder.classList.add(direction.trend);
+    }
+
+    // Update trend text
+    if (trendEl) {
+        if (direction.trend === 'closer') {
+            trendEl.textContent = 'GETTING CLOSER';
+            trendEl.className = 'direction-trend closer';
+        } else if (direction.trend === 'farther') {
+            trendEl.textContent = 'MOVING AWAY';
+            trendEl.className = 'direction-trend farther';
+        } else if (direction.trend === 'stable') {
+            trendEl.textContent = 'SIGNAL STABLE';
+            trendEl.className = 'direction-trend stable';
+        } else {
+            trendEl.textContent = direction.message || 'MOVE TO FIND';
+            trendEl.className = 'direction-trend';
+        }
+    }
+
+    // Update bearing display and rotate arrow
+    if (bearingEl) {
+        if (direction.bearing !== null && direction.bearing !== undefined) {
+            const cardinalDir = getCardinalDirection(direction.bearing);
+            bearingEl.textContent = `${Math.round(direction.bearing)}° ${cardinalDir}`;
+
+            // Rotate the compass arrow
+            if (arrow) {
+                arrow.style.transform = `translate(-50%, -50%) rotate(${direction.bearing}deg)`;
+            }
+        } else {
+            bearingEl.textContent = 'Move around to determine direction';
+            if (arrow) {
+                arrow.style.transform = 'translate(-50%, -50%) rotate(0deg)';
+            }
+        }
+    }
+
+    // Update confidence
+    if (confEl) {
+        if (direction.confidence > 0) {
+            confEl.textContent = `Confidence: ${direction.confidence}%`;
+            if (direction.rssi_delta) {
+                confEl.textContent += ` | RSSI Δ: ${direction.rssi_delta > 0 ? '+' : ''}${direction.rssi_delta}dB`;
+            }
+        } else {
+            confEl.textContent = 'Confidence: --';
+        }
+    }
+}
+
+/**
+ * Get cardinal direction from bearing
+ */
+function getCardinalDirection(bearing) {
+    const directions = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
+    const index = Math.round(bearing / 22.5) % 16;
+    return directions[index];
+}
+
+/**
+ * Hide direction finder when tracking stops
+ */
+function hideDirectionFinder() {
+    const finder = document.getElementById('directionFinder');
+    if (finder) {
+        finder.classList.add('hidden');
+        finder.classList.remove('closer', 'farther', 'stable');
     }
 }
 
@@ -5343,6 +5437,7 @@ function stopTargetTracking() {
         document.getElementById('trackTargetSelect').disabled = false;
         document.getElementById('trackingStatus').textContent = 'STOPPED';
         document.getElementById('trackingStatus').className = 'tracking-status';
+        hideDirectionFinder();  // Hide direction compass when stopping
         addLogEntry(`Target tracking stopped for ${manualTrackingBd}`, 'INFO');
         manualTrackingBd = null;
     })

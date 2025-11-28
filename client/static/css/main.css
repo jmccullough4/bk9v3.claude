@@ -424,11 +424,13 @@ body {
 .map-container {
     flex: 1;
     position: relative;
+    z-index: 1;
 }
 
 #map {
     width: 100%;
     height: 100%;
+    z-index: 1;
 }
 
 .map-overlay-info {
@@ -2058,13 +2060,24 @@ body {
 
 /* Draggable Resize Handles */
 .resize-handle {
-    width: 6px;
+    width: 8px;
     background: var(--border-color);
     cursor: col-resize;
     flex-shrink: 0;
     position: relative;
-    z-index: 100;
+    z-index: 500;
     transition: background 0.2s;
+}
+
+/* Expand the clickable area beyond visible width */
+.resize-handle::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -6px;
+    right: -6px;
+    z-index: 501;
 }
 
 .resize-handle:hover,
@@ -2082,6 +2095,7 @@ body {
     height: 40px;
     background: rgba(255, 255, 255, 0.3);
     border-radius: 1px;
+    z-index: 502;
 }
 
 .resize-handle:hover::before,
@@ -3164,6 +3178,131 @@ body.resizing-vertical * {
     font-size: 12px;
     color: var(--text-muted);
     letter-spacing: 1px;
+}
+
+/* ==================== DIRECTION FINDER ==================== */
+
+.direction-finder {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 15px;
+    margin: 10px 0;
+    display: flex;
+    align-items: center;
+    gap: 20px;
+}
+
+.direction-finder.hidden {
+    display: none;
+}
+
+.direction-compass {
+    position: relative;
+    width: 100px;
+    height: 100px;
+    flex-shrink: 0;
+}
+
+.compass-ring {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    border: 2px solid var(--border-color);
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.3);
+}
+
+.compass-ring span {
+    position: absolute;
+    font-size: 10px;
+    font-weight: bold;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+}
+
+.compass-n { top: 2px; left: 50%; transform: translateX(-50%); color: var(--accent-danger) !important; }
+.compass-e { right: 2px; top: 50%; transform: translateY(-50%); }
+.compass-s { bottom: 2px; left: 50%; transform: translateX(-50%); }
+.compass-w { left: 2px; top: 50%; transform: translateY(-50%); }
+
+.compass-arrow {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 60px;
+    height: 60px;
+    transform: translate(-50%, -50%);
+    transition: transform 0.3s ease-out;
+}
+
+.arrow-pointer {
+    position: absolute;
+    top: 5px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 0;
+    height: 0;
+    border-left: 10px solid transparent;
+    border-right: 10px solid transparent;
+    border-bottom: 40px solid var(--accent-primary);
+    filter: drop-shadow(0 0 5px var(--accent-primary));
+}
+
+.arrow-pointer::after {
+    content: '';
+    position: absolute;
+    top: 30px;
+    left: -5px;
+    width: 10px;
+    height: 15px;
+    background: var(--accent-secondary);
+}
+
+.direction-info {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.direction-trend {
+    font-size: 16px;
+    font-weight: bold;
+    text-transform: uppercase;
+}
+
+.direction-trend.closer {
+    color: var(--accent-success);
+}
+
+.direction-trend.farther {
+    color: var(--accent-danger);
+}
+
+.direction-trend.stable {
+    color: var(--accent-warning);
+}
+
+.direction-bearing {
+    font-family: var(--font-mono);
+    font-size: 14px;
+    color: var(--accent-primary);
+}
+
+.direction-confidence {
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+
+/* Pulsing effect when getting closer */
+.direction-finder.closer .compass-arrow {
+    animation: pulse-closer 1s ease-in-out infinite;
+}
+
+@keyframes pulse-closer {
+    0%, 100% { filter: drop-shadow(0 0 5px var(--accent-success)); }
+    50% { filter: drop-shadow(0 0 15px var(--accent-success)); }
 }
 
 /* ==================== COMMUNICATION VISUAL ==================== */
