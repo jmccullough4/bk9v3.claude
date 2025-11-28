@@ -45,72 +45,84 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
-# GitHub repository for updates
-GITHUB_REPO="your-org/bluek9"  # Change this to actual repository
-VERSION_FILE="$PROJECT_DIR/VERSION"
-CURRENT_VERSION="0.0.0"
+# BlueK9 installation directory for auto-update
+BLUEK9_INSTALL_DIR="/apps/bk9v3.claude"
 
-# Check for updates from GitHub
-check_updates() {
-    log_info "Checking for updates..."
+# Auto-update from GitHub
+auto_update() {
+    log_info "Checking for updates from GitHub..."
 
-    # Get current version
-    if [ -f "$VERSION_FILE" ]; then
-        CURRENT_VERSION=$(cat "$VERSION_FILE" | tr -d '[:space:]')
-    elif command -v git &> /dev/null && [ -d "$PROJECT_DIR/.git" ]; then
-        CURRENT_VERSION=$(git -C "$PROJECT_DIR" describe --tags --always 2>/dev/null || echo "unknown")
-    fi
-
-    log_info "Current version: $CURRENT_VERSION"
-
-    # Try to get latest version from GitHub (requires curl and internet)
-    if ! command -v curl &> /dev/null; then
-        log_warn "curl not found, skipping update check"
+    # Check if install directory exists and is a git repo
+    if [ ! -d "$BLUEK9_INSTALL_DIR/.git" ]; then
+        log_warn "BlueK9 not installed as git repo at $BLUEK9_INSTALL_DIR, skipping auto-update"
         return 0
     fi
 
-    # Try to fetch latest release info from GitHub API (times out after 5 seconds)
-    LATEST_INFO=$(curl -s --connect-timeout 5 -m 10 \
-        "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" 2>/dev/null) || {
-        log_warn "Could not check for updates (offline or repository not found)"
+    cd "$BLUEK9_INSTALL_DIR" || {
+        log_warn "Could not change to $BLUEK9_INSTALL_DIR"
         return 0
     }
 
-    # Parse version from response
-    LATEST_VERSION=$(echo "$LATEST_INFO" | grep -o '"tag_name": *"[^"]*"' | cut -d'"' -f4)
+    # Get current commit hash
+    CURRENT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+    log_info "Current version: $CURRENT_COMMIT"
 
-    if [ -z "$LATEST_VERSION" ]; then
-        log_warn "Could not determine latest version"
+    # Check for network connectivity with timeout
+    if ! git ls-remote --exit-code origin HEAD &>/dev/null; then
+        log_warn "Cannot reach GitHub, continuing with current version"
+        cd - > /dev/null
         return 0
     fi
 
-    log_info "Latest version: $LATEST_VERSION"
+    # Fetch latest changes
+    log_info "Fetching latest changes from GitHub..."
+    if git fetch origin main --quiet 2>/dev/null || git fetch origin master --quiet 2>/dev/null; then
+        # Check if we're behind
+        LOCAL=$(git rev-parse HEAD)
+        REMOTE=$(git rev-parse @{u} 2>/dev/null || git rev-parse origin/main 2>/dev/null || git rev-parse origin/master 2>/dev/null)
 
-    # Compare versions (simple string comparison - works for semver)
-    if [ "$CURRENT_VERSION" != "$LATEST_VERSION" ] && [ "$CURRENT_VERSION" != "unknown" ]; then
-        echo ""
-        echo -e "${YELLOW}================================================"
-        echo "  UPDATE AVAILABLE!"
-        echo "  Current: $CURRENT_VERSION"
-        echo "  Latest:  $LATEST_VERSION"
-        echo ""
-        echo "  To update, run:"
-        echo "    cd $PROJECT_DIR && git pull"
-        echo "  Or download from:"
-        echo "    https://github.com/${GITHUB_REPO}/releases/latest"
-        echo "================================================${NC}"
-        echo ""
+        if [ "$LOCAL" != "$REMOTE" ]; then
+            echo ""
+            echo -e "${CYAN}================================================"
+            echo "  UPDATE AVAILABLE!"
+            echo "  Applying updates from GitHub..."
+            echo "================================================${NC}"
+            echo ""
 
-        # Ask if user wants to continue
-        read -t 10 -p "Continue with current version? [Y/n] " -n 1 -r REPLY || REPLY="Y"
-        echo ""
-        if [[ $REPLY =~ ^[Nn]$ ]]; then
-            log_info "Exiting. Please update and restart."
-            exit 0
+            # Stash any local changes
+            git stash --quiet 2>/dev/null
+
+            # Pull latest changes
+            if git pull origin main --quiet 2>/dev/null || git pull origin master --quiet 2>/dev/null; then
+                NEW_COMMIT=$(git rev-parse --short HEAD)
+                log_info "Updated successfully: $CURRENT_COMMIT -> $NEW_COMMIT"
+
+                # Show recent changes
+                echo ""
+                echo -e "${GREEN}Recent changes:${NC}"
+                git log --oneline -5 2>/dev/null || true
+                echo ""
+
+                # Check if requirements changed
+                if git diff --name-only "$CURRENT_COMMIT" HEAD 2>/dev/null | grep -q "requirements.txt"; then
+                    log_warn "requirements.txt changed - updating dependencies..."
+                    if [ -d "$CLIENT_DIR/venv" ]; then
+                        source "$CLIENT_DIR/venv/bin/activate"
+                        pip install -r "$CLIENT_DIR/requirements.txt" --quiet 2>/dev/null || log_warn "Failed to update dependencies"
+                    fi
+                fi
+            else
+                log_warn "Failed to pull updates, continuing with current version"
+                git stash pop --quiet 2>/dev/null || true
+            fi
+        else
+            log_info "Already running the latest version"
         fi
     else
-        log_info "You are running the latest version"
+        log_warn "Could not fetch from GitHub, continuing with current version"
     fi
+
+    cd - > /dev/null
 }
 
 # Check root
@@ -154,13 +166,34 @@ start_bluetooth() {
     # Unblock Bluetooth
     rfkill unblock bluetooth 2>/dev/null || true
 
-    # Bring up default adapter
-    hciconfig hci0 up 2>/dev/null || log_warn "Could not bring up hci0"
+    # Bring up all available adapters (hci0=UD100, hci1=AX210)
+    log_info "Bringing up Bluetooth adapters..."
+    hciconfig hci0 up 2>/dev/null && log_info "hci0 (UD100) UP" || log_warn "Could not bring up hci0"
+    hciconfig hci1 up 2>/dev/null && log_info "hci1 (AX210) UP" || log_warn "Could not bring up hci1"
+
+    # Configure adapters for optimal scanning
+    for iface in hci0 hci1; do
+        if hciconfig $iface 2>/dev/null | grep -q "UP RUNNING"; then
+            # Enable inquiry scan mode
+            hciconfig $iface iscan 2>/dev/null || true
+            hciconfig $iface pscan 2>/dev/null || true
+        fi
+    done
 
     # List available adapters
     echo ""
     log_info "Available Bluetooth adapters:"
-    hciconfig -a 2>/dev/null | grep -E "^hci|BD Address" || log_warn "No adapters found"
+    hciconfig -a 2>/dev/null | grep -E "^hci|BD Address|UP RUNNING" || log_warn "No adapters found"
+    echo ""
+
+    # Count active adapters
+    ACTIVE_COUNT=$(hciconfig 2>/dev/null | grep -c "UP RUNNING" || echo "0")
+    if [ "$ACTIVE_COUNT" -ge 2 ]; then
+        log_info "Dual-adapter mode enabled: $ACTIVE_COUNT adapters active"
+        echo -e "${GREEN}  Parallel scanning with dual adapters enabled!${NC}"
+    else
+        log_info "Single-adapter mode: $ACTIVE_COUNT adapter(s) active"
+    fi
     echo ""
 }
 
@@ -255,9 +288,9 @@ main() {
 
     check_root
 
-    # Check for updates (unless skipped)
+    # Auto-update from GitHub (unless skipped)
     if [ "$SKIP_UPDATE" = false ]; then
-        check_updates
+        auto_update
     fi
 
     check_dependencies

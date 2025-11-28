@@ -402,6 +402,25 @@
                             <button class="btn btn-map" data-style="streets" onclick="setMapStyle('streets')">STREETS</button>
                             <button class="btn btn-map" data-style="satellite" onclick="setMapStyle('satellite')">SAT</button>
                         </div>
+                        <div class="map-tools mt-10">
+                            <button class="btn btn-secondary btn-sm" onclick="recenterOnSystem()" title="Recenter on system location">
+                                <span>&#8982;</span> RECENTER
+                            </button>
+                            <button class="btn btn-secondary btn-sm" id="measureBtn" onclick="toggleMeasure()" title="Measure distance">
+                                <span>&#128207;</span> MEASURE
+                            </button>
+                        </div>
+                        <div id="measureInfo" class="measure-info hidden">
+                            <div class="measure-result">
+                                <span class="measure-label">Distance:</span>
+                                <span class="measure-value" id="measureDistance">--</span>
+                            </div>
+                            <div class="measure-result">
+                                <span class="measure-label">Bearing:</span>
+                                <span class="measure-value" id="measureBearing">--</span>
+                            </div>
+                            <button class="btn btn-danger btn-sm" onclick="clearMeasure()">CLEAR</button>
+                        </div>
                         <div class="toggle-group mt-10">
                             <label class="toggle">
                                 <input type="checkbox" id="toggleFollowGps" checked onchange="toggleFollowGps()">
@@ -581,33 +600,41 @@
                         <span>STATISTICS</span>
                     </div>
                     <div class="section-content stats-container">
-                        <div class="stats-grid-compact">
-                            <div class="stat-box">
-                                <div class="stat-value" id="statTotalDevices">0</div>
-                                <div class="stat-label">TOTAL</div>
-                            </div>
-                            <div class="stat-box stat-classic">
-                                <div class="stat-value" id="statClassic">0</div>
-                                <div class="stat-label">CLASSIC</div>
-                            </div>
-                            <div class="stat-box stat-ble">
-                                <div class="stat-value" id="statBLE">0</div>
-                                <div class="stat-label">BLE</div>
-                            </div>
-                            <div class="stat-box stat-targets">
-                                <div class="stat-value" id="statTargets">0</div>
-                                <div class="stat-label">TARGETS</div>
-                            </div>
-                            <div class="stat-box">
-                                <div class="stat-value" id="statLocated">0</div>
-                                <div class="stat-label">LOCATED</div>
-                            </div>
-                            <div class="stat-box">
-                                <div class="stat-value" id="statAvgRSSI">--</div>
-                                <div class="stat-label">AVG RSSI</div>
+                        <div class="stats-top-row">
+                            <div id="signalPulseContainer" class="signal-pulse-container"></div>
+                            <div class="stats-grid-compact">
+                                <div class="stat-box">
+                                    <div class="stat-value" id="statTotalDevices">0</div>
+                                    <div class="stat-label">TOTAL</div>
+                                </div>
+                                <div class="stat-box stat-classic">
+                                    <div class="stat-value" id="statClassic">0</div>
+                                    <div class="stat-label">CLASSIC</div>
+                                </div>
+                                <div class="stat-box stat-ble">
+                                    <div class="stat-value" id="statBLE">0</div>
+                                    <div class="stat-label">BLE</div>
+                                </div>
+                                <div class="stat-box stat-targets">
+                                    <div class="stat-value" id="statTargets">0</div>
+                                    <div class="stat-label">TARGETS</div>
+                                </div>
+                                <div class="stat-box">
+                                    <div class="stat-value" id="statLocated">0</div>
+                                    <div class="stat-label">LOCATED</div>
+                                </div>
+                                <div class="stat-box">
+                                    <div class="stat-value" id="statAvgRSSI">--</div>
+                                    <div class="stat-label">AVG RSSI</div>
+                                </div>
                             </div>
                         </div>
                         <div class="chart-wrapper">
+                            <div class="chart-legend">
+                                <span class="legend-item legend-total"><span class="legend-line"></span>TOTAL</span>
+                                <span class="legend-item legend-classic"><span class="legend-line dashed"></span>CL</span>
+                                <span class="legend-item legend-ble"><span class="legend-line dashed"></span>LE</span>
+                            </div>
                             <canvas id="deviceTypeChart"></canvas>
                         </div>
                         <div class="stats-footer">
