@@ -2670,6 +2670,11 @@ def active_geo_track(bd_address, interface='hci0', methods=None):
             if rssi is None:
                 rssi = get_rssi_from_bluetoothctl(bd_address)
 
+            # We have an actual response if:
+            # - Got RTT from l2ping (device responded to echo request)
+            # - Got RSSI from direct query (device is connected)
+            got_response = (rtt is not None) or (rssi is not None)
+
             # Record observation if we have location and RSSI
             if current_location.get('lat') and current_location.get('lon') and rssi:
                 conn = get_db()
@@ -2680,6 +2685,20 @@ def active_geo_track(bd_address, interface='hci0', methods=None):
                 ''', (bd_address, rssi, current_location['lat'], current_location['lon']))
                 conn.commit()
                 conn.close()
+
+                # If device not in survey yet AND we got an actual response, add it now
+                # This is the ONLY place we should add a geo-tracked device to the survey
+                if bd_address not in devices and got_response:
+                    device_type = get_device_type(bd_address)
+                    device_data = {
+                        'bd_address': bd_address,
+                        'device_name': None,
+                        'device_type': device_type if device_type != 'unknown' else 'classic',
+                        'manufacturer': get_manufacturer(bd_address),
+                        'rssi': rssi
+                    }
+                    process_found_device(device_data)
+                    add_log(f"Device {bd_address} confirmed present (response received)", "INFO")
 
                 # Update RSSI in devices dictionary for survey table
                 if bd_address in devices:
@@ -2772,15 +2791,8 @@ def start_active_geo(bd_address, interface='hci0', methods=None):
     active_geo_sessions[bd_address]['thread'] = thread
     thread.start()
 
-    # Also add device to survey if not present
-    if bd_address not in devices:
-        device_data = {
-            'bd_address': bd_address,
-            'device_name': None,
-            'device_type': 'classic',
-            'manufacturer': get_manufacturer(bd_address)
-        }
-        process_found_device(device_data)
+    # NOTE: Do NOT add device to survey here - only add when we get an actual response
+    # This prevents false target alerts when the device isn't actually present
 
     return {'status': 'started', 'bd_address': bd_address, 'methods': methods}
 

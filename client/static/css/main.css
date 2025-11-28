@@ -861,6 +861,15 @@ body {
     color: var(--text-muted);
 }
 
+.context-menu-item.active-op {
+    background: rgba(255, 149, 0, 0.15);
+    color: var(--accent-warning);
+}
+
+.context-menu-item.active-op:hover {
+    background: rgba(255, 149, 0, 0.25);
+}
+
 .context-menu-divider {
     height: 1px;
     background: var(--border-color);
