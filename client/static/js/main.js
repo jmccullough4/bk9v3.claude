@@ -709,7 +709,7 @@ function updateSurveyTable() {
         if (surveySort.column === 'last_seen') {
             aVal = aVal ? new Date(aVal).getTime() : 0;
             bVal = bVal ? new Date(bVal).getTime() : 0;
-        } else if (surveySort.column === 'rssi' || surveySort.column === 'emitter_accuracy') {
+        } else if (surveySort.column === 'rssi' || surveySort.column === 'emitter_accuracy' || surveySort.column === 'packet_count') {
             aVal = aVal || -999;
             bVal = bVal || -999;
         } else {
@@ -753,11 +753,14 @@ function updateSurveyTable() {
         const deviceType = device.device_type || 'unknown';
         const typeBadge = `<span class="device-type-badge ${deviceType}">${deviceType === 'ble' ? 'LE' : deviceType === 'classic' ? 'CL' : '?'}</span>`;
 
+        const packetCount = device.packet_count || 0;
+
         row.innerHTML = `
             <td class="bd-address">${device.bd_address}</td>
             <td title="${device.device_name || 'Unknown'}">${truncate(device.device_name || 'Unknown', 10)}</td>
             <td>${typeBadge}</td>
             <td>${device.rssi || '--'}</td>
+            <td class="packet-count">${packetCount}</td>
             <td class="cep-cell">${cep}</td>
             <td>${lastSeen}</td>
             <td>
@@ -895,6 +898,11 @@ function updateDeviceMarker(device) {
         addCepCircle(device);
     }
 
+    // Update comm line if this device is being tracked
+    if (commLines[bdAddr]) {
+        showCommLine(bdAddr);
+    }
+
     // Click handler
     el.addEventListener('click', () => selectDevice(device));
 }
@@ -1012,6 +1020,9 @@ function updateSystemLocation(location) {
 
     // Update system trail in real-time if enabled
     updateLiveTrail(location.lon, location.lat);
+
+    // Update communication lines for active geo tracking
+    updateCommLines();
 }
 
 /**
@@ -2570,29 +2581,36 @@ function loadGpsConfig() {
     fetch('/api/gps/config')
         .then(response => response.json())
         .then(config => {
-            // Set source dropdown
-            document.getElementById('gpsSource').value = config.source;
+            // Set source dropdown (may not exist on initial page load)
+            const gpsSourceEl = document.getElementById('gpsSource');
+            if (gpsSourceEl) gpsSourceEl.value = config.source;
 
             // Set NMEA settings
-            document.getElementById('nmeaHost').value = config.nmea_host;
-            document.getElementById('nmeaPort').value = config.nmea_port;
+            const nmeaHostEl = document.getElementById('nmeaHost');
+            const nmeaPortEl = document.getElementById('nmeaPort');
+            if (nmeaHostEl) nmeaHostEl.value = config.nmea_host;
+            if (nmeaPortEl) nmeaPortEl.value = config.nmea_port;
 
             // Set GPSD settings
-            document.getElementById('gpsdHost').value = config.gpsd_host;
-            document.getElementById('gpsdPort').value = config.gpsd_port;
+            const gpsdHostEl = document.getElementById('gpsdHost');
+            const gpsdPortEl = document.getElementById('gpsdPort');
+            if (gpsdHostEl) gpsdHostEl.value = config.gpsd_host;
+            if (gpsdPortEl) gpsdPortEl.value = config.gpsd_port;
 
             // Set Serial settings
-            document.getElementById('serialPort').value = config.serial_port;
-            document.getElementById('serialBaud').value = config.serial_baud;
+            const serialPortEl = document.getElementById('serialPort');
+            const serialBaudEl = document.getElementById('serialBaud');
+            if (serialPortEl) serialPortEl.value = config.serial_port;
+            if (serialBaudEl) serialBaudEl.value = config.serial_baud;
 
             // Show correct settings panel
-            updateGpsFields();
+            if (gpsSourceEl) updateGpsFields();
 
             // Update GPS status
             updateGpsStatus(config.current_location);
         })
         .catch(error => {
-            addLogEntry('Failed to load GPS config: ' + error, 'ERROR');
+            console.log('GPS config load issue (normal on page load):', error);
         });
 }
 
@@ -3959,6 +3977,9 @@ function restartSystem() {
 
     addLogEntry('Initiating system restart...', 'INFO');
 
+    // Show restart overlay
+    showRestartOverlay();
+
     fetch('/api/system/restart', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' }
@@ -3966,17 +3987,75 @@ function restartSystem() {
         .then(r => r.json())
         .then(data => {
             if (data.status === 'restarting') {
-                addLogEntry('System restarting - page will reload shortly...', 'INFO');
-                // Wait a few seconds then reload the page
+                updateRestartStatus('Stopping services...');
+                // Start polling for server to come back
                 setTimeout(() => {
-                    window.location.reload();
+                    updateRestartStatus('Waiting for server...');
+                    pollForServerRestart();
                 }, 3000);
             } else {
+                hideRestartOverlay();
                 addLogEntry(data.error || 'Failed to restart system', 'ERROR');
             }
         })
         .catch(e => {
-            addLogEntry(`Restart error: ${e}`, 'ERROR');
+            // Expected - server went down during restart
+            updateRestartStatus('Server stopped, waiting for restart...');
+            setTimeout(() => pollForServerRestart(), 2000);
+        });
+}
+
+function showRestartOverlay() {
+    const overlay = document.getElementById('restartOverlay');
+    if (overlay) {
+        overlay.classList.remove('hidden');
+    }
+}
+
+function hideRestartOverlay() {
+    const overlay = document.getElementById('restartOverlay');
+    if (overlay) {
+        overlay.classList.add('hidden');
+    }
+}
+
+function updateRestartStatus(status) {
+    const statusEl = document.getElementById('restartStatus');
+    if (statusEl) {
+        statusEl.textContent = status;
+    }
+}
+
+let restartPollAttempts = 0;
+const MAX_RESTART_POLL_ATTEMPTS = 60; // 60 seconds max
+
+function pollForServerRestart() {
+    restartPollAttempts++;
+
+    if (restartPollAttempts > MAX_RESTART_POLL_ATTEMPTS) {
+        updateRestartStatus('Restart timeout - please refresh manually');
+        return;
+    }
+
+    updateRestartStatus(`Reconnecting... (${restartPollAttempts}s)`);
+
+    fetch('/api/version', {
+        method: 'GET',
+        cache: 'no-store'
+    })
+        .then(r => {
+            if (r.ok) {
+                updateRestartStatus('Server online! Reloading...');
+                setTimeout(() => {
+                    window.location.reload();
+                }, 1000);
+            } else {
+                setTimeout(pollForServerRestart, 1000);
+            }
+        })
+        .catch(e => {
+            // Server not ready yet
+            setTimeout(pollForServerRestart, 1000);
         });
 }
 
@@ -4789,6 +4868,114 @@ function updateGeoButtonState(bdAddress, active) {
         btn.classList.toggle('active', active);
         btn.title = active ? 'Stop Tracking' : 'Track Location';
     }
+
+    // Update communication visual
+    if (active) {
+        showCommLine(bdAddress);
+    } else {
+        hideCommLine(bdAddress);
+    }
+}
+
+// Communication line visuals for active geo tracking
+const commLines = {}; // bdAddress -> line layer info
+
+function showCommLine(bdAddress) {
+    const device = devices[bdAddress];
+    if (!device || !device.emitter_lat || !device.emitter_lon) return;
+    if (!systemMarker) return;
+
+    const systemPos = systemMarker.getLngLat();
+    const devicePos = [device.emitter_lon, device.emitter_lat];
+    const sourceId = `comm-line-${bdAddress}`;
+
+    // Create line data
+    const lineData = {
+        type: 'Feature',
+        geometry: {
+            type: 'LineString',
+            coordinates: [
+                [systemPos.lng, systemPos.lat],
+                devicePos
+            ]
+        }
+    };
+
+    // Add or update source
+    if (map.getSource(sourceId)) {
+        map.getSource(sourceId).setData(lineData);
+    } else {
+        map.addSource(sourceId, {
+            type: 'geojson',
+            data: lineData
+        });
+
+        // Add animated dashed line layer
+        map.addLayer({
+            id: `${sourceId}-glow`,
+            type: 'line',
+            source: sourceId,
+            paint: {
+                'line-color': '#ff3b30',
+                'line-width': 4,
+                'line-blur': 3,
+                'line-opacity': 0.5
+            }
+        });
+
+        map.addLayer({
+            id: `${sourceId}-line`,
+            type: 'line',
+            source: sourceId,
+            paint: {
+                'line-color': '#ff3b30',
+                'line-width': 2,
+                'line-dasharray': [2, 2]
+            }
+        });
+
+        commLines[bdAddress] = sourceId;
+    }
+}
+
+function hideCommLine(bdAddress) {
+    const sourceId = `comm-line-${bdAddress}`;
+
+    if (map.getLayer(`${sourceId}-line`)) {
+        map.removeLayer(`${sourceId}-line`);
+    }
+    if (map.getLayer(`${sourceId}-glow`)) {
+        map.removeLayer(`${sourceId}-glow`);
+    }
+    if (map.getSource(sourceId)) {
+        map.removeSource(sourceId);
+    }
+    delete commLines[bdAddress];
+}
+
+function updateCommLines() {
+    // Update all active comm lines with current positions
+    Object.keys(commLines).forEach(bdAddress => {
+        const device = devices[bdAddress];
+        if (!device || !device.emitter_lat || !device.emitter_lon) return;
+        if (!systemMarker) return;
+
+        const systemPos = systemMarker.getLngLat();
+        const sourceId = commLines[bdAddress];
+
+        if (map.getSource(sourceId)) {
+            map.getSource(sourceId).setData({
+                type: 'Feature',
+                geometry: {
+                    type: 'LineString',
+                    coordinates: [
+                        [systemPos.lng, systemPos.lat],
+                        [device.emitter_lon, device.emitter_lat]
+                    ]
+                }
+            });
+        }
+    });
 }
 
 /**

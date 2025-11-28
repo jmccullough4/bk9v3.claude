@@ -58,6 +58,23 @@
         </div>
     </div>
 
+    <!-- Restart Overlay -->
+    <div id="restartOverlay" class="restart-overlay hidden">
+        <div class="restart-content">
+            <div class="restart-spinner">
+                <div class="spinner-ring"></div>
+                <div class="spinner-ring"></div>
+                <div class="spinner-ring"></div>
+            </div>
+            <div class="restart-text">SYSTEM RESTARTING</div>
+            <div class="restart-subtext">Please wait while BlueK9 reinitializes...</div>
+            <div class="restart-progress">
+                <div class="restart-progress-bar"></div>
+            </div>
+            <div class="restart-status" id="restartStatus">Stopping services...</div>
+        </div>
+    </div>
+
     <!-- Settings Modal -->
     <div id="settingsModal" class="modal hidden">
         <div class="modal-content modal-large">
@@ -643,6 +660,7 @@
                                     <th class="sortable" data-sort="device_name" onclick="sortSurveyTable('device_name')">NAME <span class="sort-icon"></span></th>
                                     <th class="sortable" data-sort="device_type" onclick="sortSurveyTable('device_type')">TYPE <span class="sort-icon"></span></th>
                                     <th class="sortable" data-sort="rssi" onclick="sortSurveyTable('rssi')">RSSI <span class="sort-icon"></span></th>
+                                    <th class="sortable" data-sort="packet_count" onclick="sortSurveyTable('packet_count')">PKTS <span class="sort-icon"></span></th>
                                     <th class="sortable" data-sort="emitter_accuracy" onclick="sortSurveyTable('emitter_accuracy')">CEP <span class="sort-icon"></span></th>
                                     <th class="sortable" data-sort="last_seen" onclick="sortSurveyTable('last_seen')">LAST <span class="sort-icon"></span></th>
                                     <th>ACT</th>

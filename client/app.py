@@ -3509,9 +3509,12 @@ def process_found_device(device_info):
     if bd_addr in devices:
         devices[bd_addr].update(device_info)
         devices[bd_addr]['last_seen'] = now_str
+        # Increment packet count
+        devices[bd_addr]['packet_count'] = devices[bd_addr].get('packet_count', 0) + 1
     else:
         device_info['first_seen'] = now_str
         device_info['last_seen'] = now_str
+        device_info['packet_count'] = 1  # First packet
         devices[bd_addr] = device_info
 
     # Check if target
@@ -4015,23 +4018,40 @@ def restart_system():
 
         # Schedule a restart - we'll do this via a background thread
         def do_restart():
-            time.sleep(2)  # Brief delay to allow response to be sent
             import os
             import sys
+            import subprocess
 
-            # Get the current script path
+            time.sleep(2)  # Brief delay to allow response to be sent
+
+            # Get the current script path and working directory
             python = sys.executable
             script = os.path.abspath(__file__)
+            cwd = os.path.dirname(script)
 
-            add_log("Executing restart...", "INFO")
+            add_log(f"Executing restart: {python} {script}", "INFO")
 
-            # Replace current process with new instance
-            # This effectively restarts the application
-            os.execv(python, [python, script])
+            try:
+                # Start a new process in the background
+                # Use nohup and redirect output to ensure it survives parent exit
+                restart_cmd = f'cd {cwd} && nohup {python} {script} > /dev/null 2>&1 &'
+                subprocess.Popen(restart_cmd, shell=True, start_new_session=True)
+
+                # Give the new process time to start
+                time.sleep(1)
+
+                # Exit this process - the new one is now running
+                add_log("Old process exiting, new process started", "INFO")
+                os._exit(0)
+
+            except Exception as e:
+                add_log(f"Restart exec failed: {e}", "ERROR")
+                # Fallback: try os.execv
+                os.execv(python, [python, script])
 
         import threading
         restart_thread = threading.Thread(target=do_restart)
-        restart_thread.daemon = True
+        restart_thread.daemon = False  # Not daemon so it completes
         restart_thread.start()
 
         return jsonify({'status': 'restarting'})
