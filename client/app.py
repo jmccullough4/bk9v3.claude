@@ -2713,24 +2713,231 @@ def continuous_name_retrieval(bd_address, interface='hci0'):
 
 # ==================== GEOLOCATION ALGORITHM ====================
 
+# RSSI measurement uncertainty in dBm (typical for Bluetooth)
+RSSI_UNCERTAINTY = 8.0  # ±8 dBm is typical for BT measurements
+
 def calculate_distance_from_rssi(rssi, tx_power=-59):
     """
     Calculate approximate distance from RSSI using log-distance path loss model.
     tx_power: expected RSSI at 1 meter (typically -59 to -65 dBm for BT)
+    Returns (distance_estimate, distance_min, distance_max) for uncertainty bounds.
     """
     if rssi >= 0:
-        return 0.1
+        return (0.1, 0.1, 1.0)
 
     n = 2.5  # Path loss exponent (2-4 for indoor, 2-3 for outdoor)
+
+    # Central estimate
     distance = 10 ** ((tx_power - rssi) / (10 * n))
-    return min(distance, 1000)  # Cap at 1km
+
+    # Uncertainty bounds (RSSI ± uncertainty)
+    dist_min = 10 ** ((tx_power - (rssi + RSSI_UNCERTAINTY)) / (10 * n))
+    dist_max = 10 ** ((tx_power - (rssi - RSSI_UNCERTAINTY)) / (10 * n))
+
+    return (min(distance, 1000), min(dist_min, 1000), min(dist_max, 1000))
+
+
+def haversine_distance(lat1, lon1, lat2, lon2):
+    """Calculate distance between two GPS coordinates in meters."""
+    import math
+    R = 6371000  # Earth radius in meters
+
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    delta_phi = math.radians(lat2 - lat1)
+    delta_lambda = math.radians(lon2 - lon1)
+
+    a = math.sin(delta_phi/2)**2 + math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda/2)**2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+
+    return R * c
+
+
+def calculate_spatial_diversity(observations):
+    """
+    Calculate the spatial spread of observation points in meters.
+    Higher diversity = better geolocation potential.
+    """
+    if len(observations) < 2:
+        return 0
+
+    max_spread = 0
+    for i, obs1 in enumerate(observations):
+        for obs2 in observations[i+1:]:
+            spread = haversine_distance(obs1[0], obs1[1], obs2[0], obs2[1])
+            max_spread = max(max_spread, spread)
+
+    return max_spread
+
+
+def calculate_bearing(lat1, lon1, lat2, lon2):
+    """
+    Calculate bearing from point 1 to point 2 in degrees (0-360).
+    0 = North, 90 = East, 180 = South, 270 = West
+    """
+    import math
+
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    delta_lambda = math.radians(lon2 - lon1)
+
+    x = math.sin(delta_lambda) * math.cos(phi2)
+    y = math.cos(phi1) * math.sin(phi2) - math.sin(phi1) * math.cos(phi2) * math.cos(delta_lambda)
+
+    bearing = math.atan2(x, y)
+    bearing = math.degrees(bearing)
+    bearing = (bearing + 360) % 360
+
+    return bearing
+
+
+# Direction finding state for each tracked device
+direction_history = {}  # bd_address -> list of (lat, lon, rssi, timestamp)
+
+
+def calculate_direction_to_target(bd_address):
+    """
+    Calculate direction to target using RSSI gradient method.
+
+    This works like iPhone Find My without UWB:
+    - Track RSSI changes as the operator moves
+    - Determine which direction leads to stronger signal
+    - Return bearing to target and confidence
+
+    Returns dict with:
+    - bearing: degrees (0=N, 90=E, 180=S, 270=W)
+    - confidence: 0-100%
+    - trend: 'closer', 'farther', 'stable'
+    - rssi_delta: change in RSSI
+    """
+    import math
+    from datetime import datetime, timedelta
+
+    history = direction_history.get(bd_address, [])
+
+    if len(history) < 3:
+        return None
+
+    # Get recent readings (last 30 seconds)
+    cutoff = datetime.now() - timedelta(seconds=30)
+    recent = [(h['lat'], h['lon'], h['rssi'], h['timestamp'])
+              for h in history if h['timestamp'] > cutoff]
+
+    if len(recent) < 3:
+        return None
+
+    # Need sufficient movement to calculate direction
+    first_pos = (recent[0][0], recent[0][1])
+    last_pos = (recent[-1][0], recent[-1][1])
+    movement = haversine_distance(first_pos[0], first_pos[1], last_pos[0], last_pos[1])
+
+    if movement < 2:  # Less than 2m movement - can't determine direction
+        # Return last known direction if we have one
+        return {
+            'bearing': None,
+            'confidence': 0,
+            'trend': 'stable',
+            'rssi_delta': 0,
+            'message': 'Move to determine direction'
+        }
+
+    # Calculate RSSI gradient along movement path
+    # Find direction of movement
+    movement_bearing = calculate_bearing(first_pos[0], first_pos[1], last_pos[0], last_pos[1])
+
+    # Calculate RSSI trend
+    first_rssi = sum(r[2] for r in recent[:3]) / 3  # Average first 3
+    last_rssi = sum(r[2] for r in recent[-3:]) / 3  # Average last 3
+    rssi_delta = last_rssi - first_rssi
+
+    # Determine trend
+    if rssi_delta > 2:
+        trend = 'closer'
+        # Moving in the right direction - target is ahead
+        target_bearing = movement_bearing
+        confidence = min(90, 40 + rssi_delta * 5)
+    elif rssi_delta < -2:
+        trend = 'farther'
+        # Moving away - target is behind us (opposite direction)
+        target_bearing = (movement_bearing + 180) % 360
+        confidence = min(90, 40 + abs(rssi_delta) * 5)
+    else:
+        trend = 'stable'
+        # Signal stable - target might be perpendicular to movement
+        target_bearing = None
+        confidence = 20
+
+    # Build spatial RSSI map for better direction estimate
+    # Cluster readings by position and find direction of strongest cluster
+    if len(recent) >= 5:
+        # Find the reading with strongest RSSI
+        strongest = max(recent, key=lambda r: r[2])
+        strongest_pos = (strongest[0], strongest[1])
+
+        # Calculate bearing to strongest reading position
+        if haversine_distance(last_pos[0], last_pos[1], strongest_pos[0], strongest_pos[1]) > 1:
+            spatial_bearing = calculate_bearing(last_pos[0], last_pos[1], strongest_pos[0], strongest_pos[1])
+
+            # Blend spatial bearing with movement-based bearing
+            if target_bearing is not None:
+                # Weight by confidence
+                target_bearing = (target_bearing * 0.6 + spatial_bearing * 0.4) % 360
+                confidence = min(95, confidence + 10)
+            else:
+                target_bearing = spatial_bearing
+                confidence = 50
+
+    return {
+        'bearing': round(target_bearing, 1) if target_bearing is not None else None,
+        'confidence': round(confidence),
+        'trend': trend,
+        'rssi_delta': round(rssi_delta, 1),
+        'movement': round(movement, 1),
+        'movement_bearing': round(movement_bearing, 1)
+    }
+
+
+def add_direction_reading(bd_address, lat, lon, rssi):
+    """Add a reading to direction history for a device."""
+    from datetime import datetime
+
+    if bd_address not in direction_history:
+        direction_history[bd_address] = []
+
+    direction_history[bd_address].append({
+        'lat': lat,
+        'lon': lon,
+        'rssi': rssi,
+        'timestamp': datetime.now()
+    })
+
+    # Keep only last 60 readings
+    if len(direction_history[bd_address]) > 60:
+        direction_history[bd_address] = direction_history[bd_address][-60:]
+
+
+def clear_direction_history(bd_address=None):
+    """Clear direction history for a device or all devices."""
+    global direction_history
+    if bd_address:
+        direction_history.pop(bd_address, None)
+    else:
+        direction_history = {}
 
 
 def estimate_emitter_location(bd_address):
     """
-    Estimate emitter location using weighted centroid from RSSI history.
-    Returns (lat, lon, accuracy_radius) or None.
+    PASSIVE GEO: Estimate emitter location from scanning data.
+    Returns (lat, lon, cep_radius) or None.
+
+    This is passive geolocation - CEP will typically be 30-150m.
+    For 95% confidence, we need to account for:
+    - RSSI measurement uncertainty (±8 dBm)
+    - Limited spatial diversity from passive scanning
+    - Multipath and environmental factors
     """
+    import math
+
     conn = get_db()
     c = conn.cursor()
 
@@ -2738,33 +2945,55 @@ def estimate_emitter_location(bd_address):
     c.execute('''
         SELECT rssi, system_lat, system_lon, timestamp
         FROM rssi_history
-        WHERE bd_address = ? AND timestamp > datetime('now', '-5 minutes')
+        WHERE bd_address = ? AND timestamp > datetime('now', '-10 minutes')
         ORDER BY timestamp DESC
-        LIMIT 20
+        LIMIT 30
     ''', (bd_address,))
 
     readings = c.fetchall()
     conn.close()
 
-    if len(readings) < 2:
+    if len(readings) < 3:
         return None
 
-    # Weighted centroid calculation
+    # Build observation list: (lat, lon, rssi, timestamp)
+    observations = []
+    for reading in readings:
+        rssi, lat, lon, ts = reading
+        if lat and lon and rssi and rssi < 0:
+            observations.append((lat, lon, rssi, ts))
+
+    if len(observations) < 3:
+        return None
+
+    # Calculate spatial diversity
+    spatial_diversity = calculate_spatial_diversity(observations)
+
+    # If observations are too clustered (< 5m spread), geo is unreliable
+    if spatial_diversity < 5:
+        # Still calculate but with large CEP
+        pass
+
+    # Weighted centroid calculation with uncertainty
     total_weight = 0
     weighted_lat = 0
     weighted_lon = 0
-    distances = []
+    distance_estimates = []
+    distance_uncertainties = []
 
-    for reading in readings:
-        rssi, lat, lon, _ = reading
-        if lat and lon and rssi:
-            distance = calculate_distance_from_rssi(rssi)
-            weight = 1.0 / (distance + 0.1)  # Inverse distance weighting
+    for obs in observations:
+        lat, lon, rssi, _ = obs
+        dist, dist_min, dist_max = calculate_distance_from_rssi(rssi)
 
-            weighted_lat += lat * weight
-            weighted_lon += lon * weight
-            total_weight += weight
-            distances.append(distance)
+        # Weight by inverse distance squared (closer = more weight)
+        weight = 1.0 / (dist * dist + 1)
+
+        weighted_lat += lat * weight
+        weighted_lon += lon * weight
+        total_weight += weight
+
+        distance_estimates.append(dist)
+        distance_uncertainties.append(dist_max - dist_min)
 
     if total_weight == 0:
         return None
@@ -2772,12 +3001,54 @@ def estimate_emitter_location(bd_address):
     est_lat = weighted_lat / total_weight
     est_lon = weighted_lon / total_weight
 
-    # CEP radius (Circular Error Probable) - 50th percentile
-    # Enforce minimum of 10m to ensure containment
-    cep_radius = sorted(distances)[len(distances) // 2] if distances else 50
-    cep_radius = max(10, cep_radius)
+    # === CEP Calculation for 95% Confidence ===
+    #
+    # For passive geo, we need to be conservative. CEP95 should contain
+    # the emitter 95% of the time.
+    #
+    # Factors:
+    # 1. Average distance uncertainty from RSSI measurements
+    # 2. Spatial diversity of observations (more spread = better)
+    # 3. Number of observations (more = better, but diminishing returns)
+    # 4. Base uncertainty floor for passive scanning
 
-    return (est_lat, est_lon, cep_radius)
+    avg_distance = sum(distance_estimates) / len(distance_estimates)
+    avg_uncertainty = sum(distance_uncertainties) / len(distance_uncertainties)
+
+    # Base CEP from average distance uncertainty (this is the dominant factor)
+    base_cep = avg_uncertainty * 1.5  # Scale factor for 95% confidence
+
+    # Spatial diversity factor (better diversity = tighter CEP)
+    # If diversity < 20m, geo is essentially single-point, CEP is large
+    if spatial_diversity < 10:
+        diversity_factor = 3.0  # Very poor - triple the CEP
+    elif spatial_diversity < 30:
+        diversity_factor = 2.0  # Poor
+    elif spatial_diversity < 50:
+        diversity_factor = 1.5  # Moderate
+    elif spatial_diversity < 100:
+        diversity_factor = 1.2  # Good
+    else:
+        diversity_factor = 1.0  # Excellent
+
+    # Observation count factor (more observations = slight improvement)
+    obs_factor = math.sqrt(10 / max(len(observations), 1))
+    obs_factor = max(0.7, min(obs_factor, 1.5))  # Clamp between 0.7 and 1.5
+
+    # Calculate final CEP
+    cep_radius = base_cep * diversity_factor * obs_factor
+
+    # Add floor based on average distance (farther = more uncertainty)
+    distance_floor = avg_distance * 0.3  # 30% of avg distance as minimum
+    cep_radius = max(cep_radius, distance_floor)
+
+    # PASSIVE GEO MINIMUM: 30m (passive scanning cannot reliably do better)
+    cep_radius = max(30, cep_radius)
+
+    # Cap at reasonable maximum
+    cep_radius = min(200, cep_radius)
+
+    return (est_lat, est_lon, round(cep_radius, 1))
 
 
 def update_device_location(bd_address, rssi):
@@ -2997,7 +3268,14 @@ def active_geo_track(bd_address, interface='hci0', methods=None):
                     devices[bd_address]['rssi'] = rssi
                     devices[bd_address]['last_seen'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-                # Emit real-time ping data to UI
+                # Add reading to direction history for direction finding
+                if current_location['lat'] and current_location['lon'] and rssi:
+                    add_direction_reading(bd_address, current_location['lat'], current_location['lon'], rssi)
+
+                # Calculate direction to target
+                direction = calculate_direction_to_target(bd_address)
+
+                # Emit real-time ping data to UI with direction info
                 socketio.emit('geo_ping', {
                     'bd_address': bd_address,
                     'rssi': rssi,
@@ -3008,7 +3286,8 @@ def active_geo_track(bd_address, interface='hci0', methods=None):
                     'avg_rtt': round(sum(rtt_history[-10:]) / len(rtt_history[-10:]), 2) if rtt_history else None,
                     'system_lat': current_location['lat'],
                     'system_lon': current_location['lon'],
-                    'methods': methods
+                    'methods': methods,
+                    'direction': direction  # Direction finding data
                 })
 
                 add_log(f"GEO [{method_str}] {bd_address}: RSSI={rssi}dBm RTT={rtt}ms", "DEBUG")
@@ -3095,6 +3374,8 @@ def stop_active_geo(bd_address):
 
     if bd_address in active_geo_sessions:
         active_geo_sessions[bd_address]['active'] = False
+        # Clear direction history when stopping tracking
+        clear_direction_history(bd_address)
         return {'status': 'stopped', 'bd_address': bd_address}
 
     return {'status': 'not_running'}
@@ -4543,6 +4824,24 @@ def stop_device_geo_track(bd_address):
     return jsonify(result)
 
 
+@app.route('/api/device/<bd_address>/direction')
+@login_required
+def get_device_direction(bd_address):
+    """Get direction finding data for a device being tracked."""
+    bd_address = bd_address.upper()
+
+    direction = calculate_direction_to_target(bd_address)
+    if direction:
+        return jsonify(direction)
+    else:
+        return jsonify({
+            'bearing': None,
+            'confidence': 0,
+            'trend': 'unknown',
+            'message': 'Not enough data - start tracking and move around'
+        })
+
+
 @app.route('/api/device/<bd_address>/type', methods=['POST'])
 @login_required
 def set_device_type(bd_address):
@@ -4676,78 +4975,179 @@ def reset_system_trail():
 
 def calculate_geolocation(observations):
     """
-    Calculate emitter geolocation using RSSI-weighted centroid algorithm.
+    ACTIVE GEO: Calculate emitter geolocation from active tracking data.
+
+    This is used by target tracking (L2PING, connected RSSI) which provides
+    more reliable, frequent measurements. Can achieve 10-50m CEP with good
+    spatial diversity and strong signal.
 
     Algorithm:
-    1. Convert RSSI to estimated distance using path loss model
-    2. Weight each observation inversely by distance (closer = more weight)
+    1. Convert RSSI to estimated distance with uncertainty bounds
+    2. Weight observations by signal quality (stronger = more reliable)
     3. Calculate weighted centroid of all system positions
-    4. Estimate CEP (Circular Error Probable) at 95% confidence
+    4. Estimate CEP95 based on measurement quality and spatial diversity
 
-    Path Loss Model: RSSI = TxPower - 10 * n * log10(d)
-    Where: TxPower ~ -59 dBm at 1m, n ~ 2-4 depending on environment
+    For 95% confidence to achieve 10m CEP, we need:
+    - Strong signal (RSSI > -60 dBm)
+    - Good spatial diversity (>50m spread in observations)
+    - Multiple observations (>10)
+    - Consistent RSSI readings (low variance)
     """
     import math
 
-    # Path loss parameters (can be tuned)
+    if len(observations) < 3:
+        return None
+
+    # Path loss parameters
     TX_POWER = -59  # RSSI at 1 meter (typical for BT)
-    PATH_LOSS_EXP = 2.5  # Path loss exponent (2=free space, 3-4=indoor)
+    PATH_LOSS_EXP = 2.5  # Path loss exponent
 
     weighted_lat = 0
     weighted_lon = 0
     total_weight = 0
     distances = []
+    rssi_values = []
 
     for obs in observations:
         lat, lon, rssi, _ = obs
 
-        # Convert RSSI to distance estimate
-        # d = 10 ^ ((TxPower - RSSI) / (10 * n))
-        try:
-            distance = math.pow(10, (TX_POWER - rssi) / (10 * PATH_LOSS_EXP))
-            distance = max(1, min(distance, 500))  # Clamp to 1-500m
-        except:
-            distance = 50  # Default fallback
+        if rssi >= 0 or not lat or not lon:
+            continue
 
-        distances.append(distance)
+        rssi_values.append(rssi)
 
-        # Weight inversely by distance squared (closer observations matter more)
-        weight = 1.0 / (distance * distance)
+        # Convert RSSI to distance estimate with uncertainty
+        dist, dist_min, dist_max = calculate_distance_from_rssi(rssi, TX_POWER)
+        distances.append((dist, dist_min, dist_max))
+
+        # Weight by inverse distance squared AND signal strength
+        # Stronger signals are more reliable
+        signal_quality = max(0.1, (rssi + 100) / 50)  # -50dBm=1.0, -100dBm=0
+        weight = signal_quality / (dist * dist + 1)
 
         weighted_lat += lat * weight
         weighted_lon += lon * weight
         total_weight += weight
 
-    if total_weight == 0:
+    if total_weight == 0 or len(distances) < 3:
         return None
 
     # Calculate weighted centroid
     est_lat = weighted_lat / total_weight
     est_lon = weighted_lon / total_weight
 
-    # Calculate CEP (Circular Error Probable) at 95% confidence
-    # Use RMS of distances as proxy for uncertainty
-    avg_distance = sum(distances) / len(distances)
-    variance = sum((d - avg_distance) ** 2 for d in distances) / len(distances)
-    std_dev = math.sqrt(variance)
+    # Build observation coordinates for spatial diversity calculation
+    obs_coords = [(o[0], o[1], o[2], o[3]) for o in observations if o[0] and o[1]]
+    spatial_diversity = calculate_spatial_diversity(obs_coords)
 
-    # CEP95 ~ 2.45 * standard deviation for 2D normal distribution
-    # Scale by average distance and observation count
-    cep = min(avg_distance * 0.5 + std_dev * 2.0, 200)
+    # === ACTIVE GEO CEP CALCULATION ===
+    #
+    # Active tracking can achieve tighter CEPs than passive because:
+    # 1. More frequent, controlled measurements
+    # 2. Connected RSSI is more stable than inquiry RSSI
+    # 3. Operator can intentionally create spatial diversity
 
-    # Reduce CEP with more observations (better confidence)
-    cep = cep * math.sqrt(10 / len(observations))
+    avg_distance = sum(d[0] for d in distances) / len(distances)
+    avg_uncertainty = sum(d[2] - d[1] for d in distances) / len(distances)
 
-    # Enforce minimum CEP of 10m to ensure containment
-    cep = max(10, cep)
+    # RSSI consistency (lower variance = more reliable)
+    rssi_mean = sum(rssi_values) / len(rssi_values)
+    rssi_variance = sum((r - rssi_mean) ** 2 for r in rssi_values) / len(rssi_values)
+    rssi_std = math.sqrt(rssi_variance)
+
+    # Base CEP from distance uncertainty
+    base_cep = avg_uncertainty * 0.8  # Active tracking is more reliable
+
+    # RSSI consistency factor (consistent readings = better geo)
+    if rssi_std < 3:
+        consistency_factor = 0.7  # Very consistent
+    elif rssi_std < 6:
+        consistency_factor = 0.85  # Good
+    elif rssi_std < 10:
+        consistency_factor = 1.0  # Normal
+    else:
+        consistency_factor = 1.3  # High variance, less reliable
+
+    # Spatial diversity factor for active tracking
+    if spatial_diversity < 10:
+        diversity_factor = 2.5  # Poor - need to move more
+    elif spatial_diversity < 30:
+        diversity_factor = 1.8
+    elif spatial_diversity < 50:
+        diversity_factor = 1.3
+    elif spatial_diversity < 100:
+        diversity_factor = 1.0  # Good
+    else:
+        diversity_factor = 0.8  # Excellent spread
+
+    # Observation count factor (more observations = better, up to a point)
+    if len(observations) >= 20:
+        obs_factor = 0.7
+    elif len(observations) >= 15:
+        obs_factor = 0.8
+    elif len(observations) >= 10:
+        obs_factor = 0.9
+    else:
+        obs_factor = 1.0 + (10 - len(observations)) * 0.1
+
+    # Signal strength factor (stronger = more accurate distance estimate)
+    strongest_rssi = max(rssi_values)
+    if strongest_rssi > -50:
+        signal_factor = 0.6  # Very strong - excellent
+    elif strongest_rssi > -60:
+        signal_factor = 0.8  # Strong
+    elif strongest_rssi > -70:
+        signal_factor = 1.0  # Normal
+    elif strongest_rssi > -80:
+        signal_factor = 1.3  # Weak
+    else:
+        signal_factor = 1.6  # Very weak
+
+    # Calculate final CEP
+    cep = base_cep * consistency_factor * diversity_factor * obs_factor * signal_factor
+
+    # Distance-based floor (can't be more accurate than ~20% of distance for active)
+    distance_floor = avg_distance * 0.15
+    cep = max(cep, distance_floor)
+
+    # ACTIVE GEO can achieve 10m with excellent conditions
+    # Minimum 10m only achievable with: diversity>100m, obs>15, rssi>-60, variance<5
+    if spatial_diversity > 100 and len(observations) > 15 and strongest_rssi > -60 and rssi_std < 5:
+        min_cep = 10
+    elif spatial_diversity > 50 and len(observations) > 10 and strongest_rssi > -70:
+        min_cep = 15
+    elif spatial_diversity > 30 and len(observations) > 5:
+        min_cep = 20
+    else:
+        min_cep = 25  # Need better data for tighter CEP
+
+    cep = max(min_cep, cep)
+
+    # Cap at reasonable maximum
+    cep = min(150, cep)
+
+    # Calculate confidence level based on data quality
+    confidence = 50
+    if len(observations) >= 10:
+        confidence += 15
+    if spatial_diversity > 50:
+        confidence += 15
+    if rssi_std < 6:
+        confidence += 10
+    if strongest_rssi > -65:
+        confidence += 5
+    confidence = min(95, confidence)
 
     return {
         'lat': est_lat,
         'lon': est_lon,
         'cep': round(cep, 1),
-        'confidence': min(95, 50 + len(observations) * 3),
-        'method': 'rssi_weighted_centroid',
-        'observations': len(observations)
+        'confidence': confidence,
+        'method': 'active_rssi_weighted',
+        'observations': len(observations),
+        'spatial_diversity': round(spatial_diversity, 1),
+        'rssi_std': round(rssi_std, 1),
+        'strongest_rssi': strongest_rssi
     }
 
 

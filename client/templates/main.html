@@ -619,6 +619,24 @@
                         <div class="tracking-stats" id="trackingStats">
                             <!-- Stats populated by JS -->
                         </div>
+                        <div class="direction-finder hidden" id="directionFinder">
+                            <div class="direction-compass">
+                                <div class="compass-ring">
+                                    <span class="compass-n">N</span>
+                                    <span class="compass-e">E</span>
+                                    <span class="compass-s">S</span>
+                                    <span class="compass-w">W</span>
+                                </div>
+                                <div class="compass-arrow" id="compassArrow">
+                                    <div class="arrow-pointer"></div>
+                                </div>
+                            </div>
+                            <div class="direction-info">
+                                <div class="direction-trend" id="directionTrend">--</div>
+                                <div class="direction-bearing" id="directionBearing">--</div>
+                                <div class="direction-confidence" id="directionConfidence">--</div>
+                            </div>
+                        </div>
                         <div class="btn-group mt-10">
                             <button class="btn btn-primary" id="btnStartTrack" onclick="startTargetTracking()">START</button>
                             <button class="btn btn-danger" id="btnStopTrack" onclick="stopTargetTracking()" disabled>STOP</button>
