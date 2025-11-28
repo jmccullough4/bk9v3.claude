@@ -2617,3 +2617,345 @@ body.resizing-vertical * {
 .app-container:has(.docked-bottom) .main-content {
     flex: 1;
 }
+
+/* ==================== DEVICE TYPE CORRECTION UI ==================== */
+
+.device-type-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.device-type-selector {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.device-type-select {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 4px 8px;
+    background: rgba(0, 30, 40, 0.8);
+    border: 1px solid var(--border-color);
+    border-radius: 3px;
+    color: var(--accent-primary);
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.device-type-select:hover {
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 10px rgba(0, 212, 255, 0.2);
+}
+
+.device-type-select:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 15px rgba(0, 212, 255, 0.3);
+}
+
+.device-type-select option {
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+}
+
+.type-edit-hint {
+    font-size: 9px;
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+/* ==================== SOFTWARE UPDATE UI ==================== */
+
+.update-check-container {
+    margin: 15px 0;
+}
+
+#btnCheckUpdates {
+    font-family: var(--font-mono);
+    letter-spacing: 1px;
+}
+
+#btnCheckUpdates .btn-icon {
+    display: inline-block;
+    margin-right: 5px;
+}
+
+.update-status-panel {
+    margin-top: 20px;
+    background: rgba(0, 20, 30, 0.6);
+    border: 1px solid var(--border-color);
+    border-radius: 5px;
+    overflow: hidden;
+}
+
+.update-status-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 15px;
+    background: rgba(0, 0, 0, 0.3);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.update-status-icon {
+    font-size: 24px;
+    width: 40px;
+    text-align: center;
+}
+
+.update-status-icon.checking {
+    color: var(--accent-primary);
+    animation: pulse-icon 1s infinite;
+}
+
+.update-status-icon.update-available {
+    color: var(--accent-warning);
+    animation: glow-icon 1.5s infinite alternate;
+}
+
+.update-status-icon.up-to-date {
+    color: var(--accent-success);
+}
+
+.update-status-icon.applying {
+    color: var(--accent-primary);
+    animation: spin-icon 1s linear infinite;
+}
+
+.update-status-icon.error {
+    color: var(--accent-danger);
+}
+
+@keyframes pulse-icon {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+@keyframes glow-icon {
+    from { text-shadow: 0 0 5px currentColor; }
+    to { text-shadow: 0 0 20px currentColor, 0 0 30px currentColor; }
+}
+
+@keyframes spin-icon {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+.update-status-text {
+    font-family: var(--font-mono);
+    font-size: 14px;
+    letter-spacing: 2px;
+    color: var(--text-primary);
+}
+
+.update-details {
+    padding: 15px;
+}
+
+.update-progress {
+    height: 4px;
+    background: rgba(0, 212, 255, 0.2);
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.update-progress-bar {
+    height: 100%;
+    width: 30%;
+    background: var(--accent-primary);
+    border-radius: 2px;
+    animation: progress-scan 1.5s ease-in-out infinite;
+}
+
+.update-progress.applying .update-progress-bar {
+    animation: progress-apply 2s ease-in-out infinite;
+    background: var(--accent-success);
+}
+
+@keyframes progress-scan {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(400%); }
+}
+
+@keyframes progress-apply {
+    0% { width: 10%; }
+    50% { width: 80%; }
+    100% { width: 100%; }
+}
+
+.update-info-grid {
+    display: grid;
+    gap: 10px;
+}
+
+.update-info-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.update-label {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-muted);
+    min-width: 70px;
+}
+
+.update-value {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text-primary);
+}
+
+.update-value.commit {
+    background: rgba(0, 30, 40, 0.8);
+    padding: 3px 8px;
+    border-radius: 3px;
+    border: 1px solid var(--border-color);
+}
+
+.update-value.commit.new {
+    color: var(--accent-success);
+    border-color: var(--accent-success);
+    box-shadow: 0 0 10px rgba(48, 209, 88, 0.3);
+}
+
+.update-changes {
+    padding: 15px;
+    border-top: 1px solid var(--border-color);
+}
+
+.changes-header {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--accent-primary);
+    letter-spacing: 1px;
+    margin-bottom: 10px;
+}
+
+.changes-list {
+    max-height: 120px;
+    overflow-y: auto;
+}
+
+.change-item {
+    display: flex;
+    gap: 10px;
+    padding: 6px 10px;
+    background: rgba(0, 0, 0, 0.2);
+    border-left: 2px solid var(--accent-primary);
+    margin-bottom: 5px;
+    font-size: 11px;
+}
+
+.change-item.applied {
+    border-left-color: var(--accent-success);
+    background: rgba(48, 209, 88, 0.1);
+}
+
+.change-hash {
+    font-family: var(--font-mono);
+    color: var(--accent-primary);
+    font-size: 10px;
+}
+
+.change-msg {
+    color: var(--text-secondary);
+    flex: 1;
+}
+
+.update-actions {
+    padding: 15px;
+    border-top: 1px solid var(--border-color);
+    text-align: center;
+}
+
+.update-warning {
+    font-size: 10px;
+    color: var(--text-muted);
+    margin-top: 10px;
+    font-style: italic;
+}
+
+.update-error {
+    color: var(--accent-danger);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 10px;
+    background: rgba(255, 59, 48, 0.1);
+    border: 1px solid rgba(255, 59, 48, 0.3);
+    border-radius: 3px;
+}
+
+.update-success {
+    text-align: center;
+    padding: 10px 0;
+}
+
+.success-message {
+    font-family: var(--font-mono);
+    color: var(--accent-success);
+    font-size: 14px;
+    margin-bottom: 15px;
+    text-shadow: 0 0 10px rgba(48, 209, 88, 0.5);
+}
+
+.applied-changes {
+    margin-top: 15px;
+    text-align: left;
+}
+
+.restart-notice {
+    margin-top: 20px;
+    padding: 15px;
+    background: rgba(255, 176, 0, 0.1);
+    border: 1px solid rgba(255, 176, 0, 0.3);
+    border-radius: 5px;
+}
+
+.restart-notice p {
+    font-size: 12px;
+    color: var(--accent-warning);
+    margin-bottom: 10px;
+}
+
+/* System info grid */
+.system-info-grid {
+    display: grid;
+    gap: 8px;
+}
+
+.sysinfo-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 0;
+    border-bottom: 1px solid rgba(0, 212, 255, 0.1);
+}
+
+.sysinfo-row:last-child {
+    border-bottom: none;
+}
+
+.sysinfo-label {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-muted);
+    min-width: 100px;
+}
+
+.sysinfo-value {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-primary);
+}
+
+.sysinfo-value.sysinfo-commit {
+    background: rgba(0, 30, 40, 0.8);
+    padding: 2px 6px;
+    border-radius: 3px;
+    border: 1px solid var(--border-color);
+    color: var(--accent-primary);
+}

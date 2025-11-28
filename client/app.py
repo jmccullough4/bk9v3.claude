@@ -66,6 +66,9 @@ logging.basicConfig(
 logger = logging.getLogger('BlueK9')
 
 # Global state
+import uuid
+SESSION_ID = str(uuid.uuid4())[:8]  # Unique ID for this session, changes on restart
+
 scanning_active = False
 scan_thread = None
 gps_thread = None
@@ -448,6 +451,25 @@ def init_database():
         key TEXT PRIMARY KEY,
         value TEXT,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )''')
+
+    # Device info logs - detailed analysis from hcitool info
+    c.execute('''CREATE TABLE IF NOT EXISTS device_info_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        bd_address TEXT NOT NULL,
+        device_name TEXT,
+        bluetooth_version TEXT,
+        version_description TEXT,
+        manufacturer TEXT,
+        device_class TEXT,
+        device_type_class TEXT,
+        features TEXT,
+        capabilities TEXT,
+        analysis TEXT,
+        raw_output TEXT,
+        system_lat REAL,
+        system_lon REAL,
+        queried_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )''')
 
     # Create default admin user if not exists
@@ -3799,9 +3821,10 @@ def get_config():
 def get_version():
     """Get application version from git."""
     version_info = {
-        'version': 'v3.0.26',
+        'version': 'v3.0.27',
         'commit': None,
-        'branch': None
+        'branch': None,
+        'session_id': SESSION_ID  # Used by frontend to detect restarts
     }
 
     try:
@@ -3829,6 +3852,185 @@ def get_version():
         pass
 
     return jsonify(version_info)
+
+
+@app.route('/api/updates/check', methods=['GET'])
+@login_required
+def check_for_updates():
+    """Check if updates are available from GitHub."""
+    update_info = {
+        'current_commit': None,
+        'remote_commit': None,
+        'update_available': False,
+        'commits_behind': 0,
+        'recent_changes': [],
+        'error': None
+    }
+
+    try:
+        install_dir = '/apps/bk9v3.claude'
+
+        # Get current commit
+        result = subprocess.run(
+            ['git', 'rev-parse', '--short', 'HEAD'],
+            capture_output=True, text=True, timeout=5, cwd=install_dir
+        )
+        if result.returncode == 0:
+            update_info['current_commit'] = result.stdout.strip()
+
+        # Fetch from remote
+        subprocess.run(
+            ['git', 'fetch', 'origin'],
+            capture_output=True, text=True, timeout=30, cwd=install_dir
+        )
+
+        # Get remote commit
+        result = subprocess.run(
+            ['git', 'rev-parse', '--short', 'origin/main'],
+            capture_output=True, text=True, timeout=5, cwd=install_dir
+        )
+        if result.returncode != 0:
+            # Try master branch
+            result = subprocess.run(
+                ['git', 'rev-parse', '--short', 'origin/master'],
+                capture_output=True, text=True, timeout=5, cwd=install_dir
+            )
+        if result.returncode == 0:
+            update_info['remote_commit'] = result.stdout.strip()
+
+        # Check if different
+        if update_info['current_commit'] and update_info['remote_commit']:
+            update_info['update_available'] = update_info['current_commit'] != update_info['remote_commit']
+
+            # Count commits behind
+            result = subprocess.run(
+                ['git', 'rev-list', '--count', f'HEAD..origin/main'],
+                capture_output=True, text=True, timeout=5, cwd=install_dir
+            )
+            if result.returncode == 0:
+                update_info['commits_behind'] = int(result.stdout.strip())
+
+            # Get recent changes on remote
+            if update_info['update_available']:
+                result = subprocess.run(
+                    ['git', 'log', '--oneline', '-10', 'HEAD..origin/main'],
+                    capture_output=True, text=True, timeout=5, cwd=install_dir
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    update_info['recent_changes'] = result.stdout.strip().split('\n')
+
+    except subprocess.TimeoutExpired:
+        update_info['error'] = 'Timeout checking for updates'
+    except Exception as e:
+        update_info['error'] = str(e)
+
+    return jsonify(update_info)
+
+
+@app.route('/api/updates/apply', methods=['POST'])
+@login_required
+def apply_updates():
+    """Apply available updates from GitHub."""
+    result = {
+        'success': False,
+        'old_commit': None,
+        'new_commit': None,
+        'changes': [],
+        'error': None,
+        'restart_required': True
+    }
+
+    try:
+        install_dir = '/apps/bk9v3.claude'
+
+        # Get current commit
+        proc = subprocess.run(
+            ['git', 'rev-parse', '--short', 'HEAD'],
+            capture_output=True, text=True, timeout=5, cwd=install_dir
+        )
+        result['old_commit'] = proc.stdout.strip() if proc.returncode == 0 else None
+
+        # Stash any local changes
+        subprocess.run(['git', 'stash'], capture_output=True, timeout=10, cwd=install_dir)
+
+        # Pull updates
+        proc = subprocess.run(
+            ['git', 'pull', 'origin', 'main'],
+            capture_output=True, text=True, timeout=60, cwd=install_dir
+        )
+        if proc.returncode != 0:
+            # Try master
+            proc = subprocess.run(
+                ['git', 'pull', 'origin', 'master'],
+                capture_output=True, text=True, timeout=60, cwd=install_dir
+            )
+
+        if proc.returncode == 0:
+            result['success'] = True
+
+            # Get new commit
+            proc = subprocess.run(
+                ['git', 'rev-parse', '--short', 'HEAD'],
+                capture_output=True, text=True, timeout=5, cwd=install_dir
+            )
+            result['new_commit'] = proc.stdout.strip() if proc.returncode == 0 else None
+
+            # Get changes made
+            if result['old_commit'] and result['new_commit']:
+                proc = subprocess.run(
+                    ['git', 'log', '--oneline', f"{result['old_commit']}..{result['new_commit']}"],
+                    capture_output=True, text=True, timeout=5, cwd=install_dir
+                )
+                if proc.returncode == 0:
+                    result['changes'] = proc.stdout.strip().split('\n') if proc.stdout.strip() else []
+
+            add_log(f"Updates applied: {result['old_commit']} -> {result['new_commit']}", "INFO")
+        else:
+            result['error'] = proc.stderr or 'Failed to pull updates'
+            add_log(f"Update failed: {result['error']}", "ERROR")
+
+    except subprocess.TimeoutExpired:
+        result['error'] = 'Timeout applying updates'
+    except Exception as e:
+        result['error'] = str(e)
+
+    return jsonify(result)
+
+
+@app.route('/api/system/restart', methods=['POST'])
+@login_required
+def restart_system():
+    """Restart the BlueK9 application."""
+    global scanning_active
+
+    try:
+        # Stop any active scanning
+        scanning_active = False
+
+        # Stop any active geo tracking sessions
+        for bd_addr in list(active_geo_sessions.keys()):
+            stop_active_geo(bd_addr)
+
+        add_log("System restart initiated by operator", "INFO")
+
+        # Schedule a restart - we'll do this via a background thread
+        def do_restart():
+            time.sleep(1)  # Brief delay to allow response to be sent
+            import os
+            import signal
+            # Send SIGHUP to trigger graceful restart
+            os.kill(os.getpid(), signal.SIGHUP)
+
+        import threading
+        restart_thread = threading.Thread(target=do_restart)
+        restart_thread.daemon = True
+        restart_thread.start()
+
+        return jsonify({'status': 'restarting'})
+
+    except Exception as e:
+        add_log(f"Restart failed: {e}", "ERROR")
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/state')
@@ -4120,6 +4322,39 @@ def stop_device_geo_track(bd_address):
 
     result = stop_active_geo(bd_address)
     return jsonify(result)
+
+
+@app.route('/api/device/<bd_address>/type', methods=['POST'])
+@login_required
+def set_device_type(bd_address):
+    """Manually set device type (classic/ble) for a device."""
+    bd_address = bd_address.upper()
+    data = request.get_json() or {}
+    new_type = data.get('device_type', '').lower()
+
+    if new_type not in ['classic', 'ble', 'unknown']:
+        return jsonify({'error': 'Invalid device type. Must be: classic, ble, or unknown'}), 400
+
+    # Update in-memory cache
+    if bd_address in devices:
+        devices[bd_address]['device_type'] = new_type
+        devices[bd_address]['type_manual'] = True  # Flag as manually set
+        socketio.emit('device_update', devices[bd_address])
+        add_log(f"Device type manually set for {bd_address}: {new_type}", "INFO")
+
+        # Update in database
+        try:
+            conn = get_db()
+            c = conn.cursor()
+            c.execute('UPDATE devices SET device_type = ? WHERE bd_address = ?',
+                      (new_type, bd_address))
+            conn.commit()
+        except Exception as e:
+            add_log(f"Failed to update device type in DB: {e}", "WARNING")
+
+        return jsonify({'status': 'updated', 'device_type': new_type})
+
+    return jsonify({'error': 'Device not found'}), 404
 
 
 @app.route('/api/geo/active', methods=['GET'])
@@ -4990,11 +5225,40 @@ def handle_disconnect():
 
 @socketio.on('request_device_info')
 def handle_device_info_request(data):
-    """Handle request for device info."""
+    """Handle request for device info and log to database."""
     bd_address = data.get('bd_address')
     interface = data.get('interface', 'hci0')
     if bd_address:
         info = get_device_info(bd_address, interface)
+
+        # Log the device info analysis to database for post-mission analysis
+        try:
+            conn = get_db()
+            c = conn.cursor()
+            c.execute('''INSERT INTO device_info_logs
+                (bd_address, device_name, bluetooth_version, version_description,
+                 manufacturer, device_class, device_type_class, features,
+                 capabilities, analysis, raw_output, system_lat, system_lon)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''', (
+                bd_address,
+                info.get('device_name'),
+                info.get('bluetooth_version'),
+                info.get('version_description'),
+                info.get('manufacturer_info'),
+                info.get('device_class'),
+                info.get('parsed', {}).get('device_type_class'),
+                json.dumps(info.get('features', [])),
+                json.dumps(info.get('capabilities', {})),
+                json.dumps(info.get('analysis', [])),
+                info.get('raw_info'),
+                current_location.get('lat') if current_location else None,
+                current_location.get('lon') if current_location else None
+            ))
+            conn.commit()
+            add_log(f"Device info logged for {bd_address}", "INFO")
+        except Exception as e:
+            add_log(f"Failed to log device info: {e}", "WARNING")
+
         emit('device_info', info)
 
 

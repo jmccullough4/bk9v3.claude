@@ -74,6 +74,7 @@
                     <button class="settings-tab" onclick="showSettingsTab('radios')">Radios</button>
                     <button class="settings-tab" onclick="showSettingsTab('users')">Users</button>
                     <button class="settings-tab" onclick="showSettingsTab('ui')">UI Layout</button>
+                    <button class="settings-tab" onclick="showSettingsTab('system')">System</button>
                 </div>
 
                 <!-- General Settings Tab -->
@@ -274,6 +275,70 @@
                     <div class="settings-group">
                         <h3>Reset Layout</h3>
                         <button class="btn btn-danger" onclick="resetLayout()">Reset to Default</button>
+                    </div>
+                </div>
+
+                <!-- System Tab -->
+                <div id="settingsSystem" class="settings-content">
+                    <div class="settings-group">
+                        <h3>Software Updates</h3>
+                        <p class="settings-hint">Check for and install updates from GitHub repository.</p>
+                        <div class="update-check-container">
+                            <button class="btn btn-primary" id="btnCheckUpdates" onclick="checkForUpdates()">
+                                <span class="btn-icon">&#8635;</span> CHECK FOR UPDATES
+                            </button>
+                        </div>
+                        <div class="update-status-panel hidden" id="updateStatusPanel">
+                            <div class="update-status-header">
+                                <span class="update-status-icon" id="updateStatusIcon">&#128268;</span>
+                                <span class="update-status-text" id="updateStatusText">Checking...</span>
+                            </div>
+                            <div class="update-details" id="updateDetails">
+                                <!-- Update details populated by JS -->
+                            </div>
+                            <div class="update-changes hidden" id="updateChangesSection">
+                                <div class="changes-header">Recent Changes:</div>
+                                <div class="changes-list" id="updateChangesList">
+                                    <!-- Changes populated by JS -->
+                                </div>
+                            </div>
+                            <div class="update-actions hidden" id="updateActions">
+                                <button class="btn btn-success" id="btnApplyUpdate" onclick="applyUpdates()">
+                                    <span class="btn-icon">&#10003;</span> APPLY UPDATE
+                                </button>
+                                <p class="update-warning">System will restart after update</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="settings-group">
+                        <h3>System Information</h3>
+                        <div class="system-info-grid">
+                            <div class="sysinfo-row">
+                                <span class="sysinfo-label">Current Version:</span>
+                                <span class="sysinfo-value" id="sysInfoVersion">--</span>
+                            </div>
+                            <div class="sysinfo-row">
+                                <span class="sysinfo-label">Current Commit:</span>
+                                <span class="sysinfo-value sysinfo-commit" id="sysInfoCommit">--</span>
+                            </div>
+                            <div class="sysinfo-row">
+                                <span class="sysinfo-label">Branch:</span>
+                                <span class="sysinfo-value" id="sysInfoBranch">--</span>
+                            </div>
+                            <div class="sysinfo-row">
+                                <span class="sysinfo-label">Last Updated:</span>
+                                <span class="sysinfo-value" id="sysInfoLastUpdate">--</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="settings-group">
+                        <h3>Maintenance</h3>
+                        <div class="btn-group">
+                            <button class="btn btn-warning" onclick="restartSystem()">
+                                <span class="btn-icon">&#8634;</span> RESTART SYSTEM
+                            </button>
+                        </div>
+                        <p class="settings-hint" style="margin-top: 10px;">Restart will clear all session data and reinitialize the system.</p>
                     </div>
                 </div>
 
@@ -672,7 +737,7 @@
 
     <!-- Version Footer -->
     <div class="version-footer">
-        <span class="version-text">BlueK9 v3.0.26</span>
+        <span class="version-text">BlueK9 v3.0.27</span>
         <span class="version-divider">|</span>
         <span class="version-id" id="systemIdFooter">--</span>
     </div>
