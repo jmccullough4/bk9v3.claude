@@ -4015,11 +4015,19 @@ def restart_system():
 
         # Schedule a restart - we'll do this via a background thread
         def do_restart():
-            time.sleep(1)  # Brief delay to allow response to be sent
+            time.sleep(2)  # Brief delay to allow response to be sent
             import os
-            import signal
-            # Send SIGHUP to trigger graceful restart
-            os.kill(os.getpid(), signal.SIGHUP)
+            import sys
+
+            # Get the current script path
+            python = sys.executable
+            script = os.path.abspath(__file__)
+
+            add_log("Executing restart...", "INFO")
+
+            # Replace current process with new instance
+            # This effectively restarts the application
+            os.execv(python, [python, script])
 
         import threading
         restart_thread = threading.Thread(target=do_restart)

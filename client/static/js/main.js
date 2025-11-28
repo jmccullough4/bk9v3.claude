@@ -243,7 +243,43 @@ function initWebSocket() {
     });
 
     socket.on('devices_list', (deviceList) => {
-        deviceList.forEach(device => updateDevice(device));
+        // Batch process all devices at once to prevent UI lag on reconnect
+        console.log(`Received devices_list with ${deviceList.length} devices`);
+
+        // Directly set all devices in the cache first (fast)
+        deviceList.forEach(device => {
+            devices[device.bd_address] = device;
+        });
+
+        // Update UI once after all devices are loaded
+        updateSurveyTable();
+        updateStats();
+
+        // Create/update markers in batches with delay to prevent blocking
+        const batchSize = 50;
+        let index = 0;
+
+        function processBatch() {
+            const batch = deviceList.slice(index, index + batchSize);
+            batch.forEach(device => {
+                // Only create marker if device has location
+                if (device.emitter_lat && device.emitter_lon) {
+                    updateDeviceMarker(device);
+                }
+            });
+            index += batchSize;
+            if (index < deviceList.length) {
+                // Process next batch after a short delay
+                setTimeout(processBatch, 10);
+            }
+        }
+
+        // Start batch processing of markers
+        if (deviceList.length > 0) {
+            processBatch();
+        }
+
+        addLogEntry(`Loaded ${deviceList.length} devices from server`, 'INFO');
     });
 
     socket.on('devices_cleared', () => {
@@ -4641,40 +4677,24 @@ function loadPanelLayout() {
 function exportCollection(format = 'json') {
     addLogEntry(`Exporting collection data as ${format.toUpperCase()}...`, 'INFO');
 
-    // Track in operations bar
-    const opId = `export-${Date.now()}`;
-    addOperation(opId, 'EXPORT', `Collection (${format.toUpperCase()})`, { cancellable: false });
+    // Use direct link approach for reliable download
+    // Create a hidden iframe or use window.location for download
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const exportUrl = `/api/logs/export?format=${format}&_t=${Date.now()}`;
 
-    fetch(`/api/logs/export?format=${format}`, {
-        credentials: 'same-origin'
-    })
-    .then(response => {
-        if (!response.ok) {
-            throw new Error(`Export failed: ${response.status} ${response.statusText}`);
-        }
-        return response.blob();
-    })
-    .then(blob => {
-        removeOperation(opId);
-        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-        const filename = `bluek9_collection_${timestamp}.${format}`;
+    // Create hidden link and trigger download
+    const link = document.createElement('a');
+    link.href = exportUrl;
+    link.download = `bluek9_collection_${timestamp}.${format}`;
+    link.style.display = 'none';
+    document.body.appendChild(link);
+    link.click();
 
-        // Create download link
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = filename;
-        document.body.appendChild(link);
-        link.click();
+    // Cleanup after short delay
+    setTimeout(() => {
         document.body.removeChild(link);
-        URL.revokeObjectURL(url);
-
-        addLogEntry(`Collection exported: ${filename}`, 'INFO');
-    })
-    .catch(error => {
-        removeOperation(opId);
-        addLogEntry(`Export failed: ${error.message}`, 'ERROR');
-    });
+        addLogEntry(`Collection export initiated (${format.toUpperCase()})`, 'INFO');
+    }, 100);
 }
 
 // ==================== ACTIVE GEO TRACKING ====================
