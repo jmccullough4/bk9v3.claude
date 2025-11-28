@@ -140,6 +140,9 @@ function initApp() {
     setInterval(updateTime, 1000);
     updateTime();
 
+    // Start session timer
+    startSessionTimer();
+
     // Fetch hardware stats every 5 seconds
     setInterval(fetchSystemStats, 5000);
     fetchSystemStats();
@@ -491,18 +494,26 @@ function initSignalPulse() {
 /**
  * Update detection history for timeline chart
  */
+let lastKnownDeviceCount = 0;
+
 function updateDetectionHistory() {
     let classic = 0;
     let ble = 0;
+    const currentTotal = Object.keys(devices).length;
 
     Object.values(devices).forEach(device => {
         if (device.device_type === 'classic') classic++;
         else if (device.device_type === 'ble') ble++;
     });
 
+    // Use the maximum of current or last known to prevent drops
+    // This creates a "high water mark" effect - count only goes up during session
+    const displayTotal = Math.max(currentTotal, lastKnownDeviceCount);
+    lastKnownDeviceCount = displayTotal;
+
     // Add new data point
     detectionHistory.push({
-        total: Object.keys(devices).length,
+        total: displayTotal,
         classic: classic,
         ble: ble
     });
@@ -512,11 +523,13 @@ function updateDetectionHistory() {
         detectionHistory.shift();
     }
 
-    // Update chart
+    // Update chart data in place (don't replace arrays)
     if (deviceTypeChart) {
-        deviceTypeChart.data.datasets[0].data = detectionHistory.map(d => d.total);
-        deviceTypeChart.data.datasets[1].data = detectionHistory.map(d => d.classic);
-        deviceTypeChart.data.datasets[2].data = detectionHistory.map(d => d.ble);
+        for (let i = 0; i < detectionHistory.length; i++) {
+            deviceTypeChart.data.datasets[0].data[i] = detectionHistory[i].total;
+            deviceTypeChart.data.datasets[1].data[i] = detectionHistory[i].classic;
+            deviceTypeChart.data.datasets[2].data[i] = detectionHistory[i].ble;
+        }
         deviceTypeChart.update('none'); // No animation for smooth update
     }
 }
@@ -959,6 +972,7 @@ function updateStats() {
 
 // Session timer
 let sessionStartTime = Date.now();
+let sessionTimerInterval = null;
 
 function updateSessionTime() {
     const elapsed = Math.floor((Date.now() - sessionStartTime) / 1000);
@@ -969,8 +983,16 @@ function updateSessionTime() {
     if (el) el.textContent = `${hours}:${minutes}:${seconds}`;
 }
 
-// Update session time every second
-setInterval(updateSessionTime, 1000);
+function startSessionTimer() {
+    // Clear any existing interval
+    if (sessionTimerInterval) clearInterval(sessionTimerInterval);
+    // Reset start time
+    sessionStartTime = Date.now();
+    // Update immediately
+    updateSessionTime();
+    // Then update every second
+    sessionTimerInterval = setInterval(updateSessionTime, 1000);
+}
 
 /**
  * Clear all devices
