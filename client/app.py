@@ -5595,7 +5595,15 @@ def send_udp_announcement(peer_ips=None):
 
 
 def parse_netbird_status():
-    """Parse netbird status -d output to get peer information."""
+    """Parse netbird status -d output to get peer information.
+
+    Format expected:
+    Peers detail:
+     hostname.netbird.selfhosted:
+      NetBird IP: 100.74.x.x
+      Status: Connected
+      ...
+    """
     global warhammer_peers
 
     try:
@@ -5612,60 +5620,72 @@ def parse_netbird_status():
         peers = []
         current_peer = None
         our_ip = None
+        in_peers_section = False
 
         lines = output.split('\n')
-        for line in lines:
-            line = line.strip()
+        for raw_line in lines:
+            # Check for "Peers detail:" section start
+            if raw_line.strip() == 'Peers detail:':
+                in_peers_section = True
+                continue
 
-            # Get our NetBird IP
-            if line.startswith('NetBird IP:'):
-                our_ip = line.split(':', 1)[1].strip().split('/')[0]
-
-            # Detect peer block start (hostname followed by colon at start of line)
-            if line and not line.startswith(' ') and ':' in line and not any(
-                line.startswith(x) for x in ['Daemon', 'CLI', 'Management', 'Signal',
-                'Relays', 'Nameservers', 'FQDN', 'NetBird', 'Interface', 'Quantum',
-                'Routes', 'Peer changes', 'Peers count', 'Peers']
-            ):
-                # Save previous peer if exists
+            # Check for end of peers section (lines without leading space that aren't peer names)
+            if in_peers_section and raw_line and not raw_line.startswith(' '):
+                # End of peers section
+                in_peers_section = False
                 if current_peer and current_peer.get('ip'):
                     peers.append(current_peer)
+                    current_peer = None
 
-                # Start new peer
-                hostname = line.rstrip(':')
-                current_peer = {
-                    'id': hostname,
-                    'hostname': hostname,
-                    'name': hostname,
-                    'ip': '',
-                    'connected': False,
-                    'connection_type': '',
-                    'latency': '',
-                    'last_handshake': '',
-                    'transfer_rx': '',
-                    'transfer_tx': '',
-                    'is_bluek9': False
-                }
+            # Get our NetBird IP from the summary section at bottom
+            stripped = raw_line.strip()
+            if stripped.startswith('NetBird IP:') and not in_peers_section:
+                our_ip = stripped.split(':', 1)[1].strip().split('/')[0]
 
-            elif current_peer:
-                # Parse peer details
-                if 'NetBird IP:' in line:
-                    current_peer['ip'] = line.split(':', 1)[1].strip()
-                elif 'Status:' in line:
-                    status = line.split(':', 1)[1].strip().lower()
-                    current_peer['connected'] = status == 'connected'
-                elif 'Connection type:' in line:
-                    current_peer['connection_type'] = line.split(':', 1)[1].strip()
-                elif 'Latency:' in line:
-                    current_peer['latency'] = line.split(':', 1)[1].strip()
-                elif 'Last Wireguard handshake:' in line:
-                    current_peer['last_handshake'] = line.split(':', 1)[1].strip()
-                elif 'Transfer status' in line:
-                    # Parse "Transfer status (received/sent) 1.2 MB/3.4 MB"
-                    match = re.search(r'\(received/sent\)\s*(.+)/(.+)', line)
-                    if match:
-                        current_peer['transfer_rx'] = match.group(1).strip()
-                        current_peer['transfer_tx'] = match.group(2).strip()
+            if in_peers_section:
+                # Peer hostname line: single space + hostname + colon
+                # Example: " wh-00111.netbird.selfhosted:"
+                if raw_line.startswith(' ') and not raw_line.startswith('  ') and raw_line.strip().endswith(':'):
+                    # Save previous peer if exists
+                    if current_peer and current_peer.get('ip'):
+                        peers.append(current_peer)
+
+                    # Start new peer
+                    hostname = raw_line.strip().rstrip(':')
+                    current_peer = {
+                        'id': hostname,
+                        'hostname': hostname,
+                        'name': hostname.split('.')[0],  # Short name (e.g., wh-00111)
+                        'ip': '',
+                        'connected': False,
+                        'connection_type': '',
+                        'latency': '',
+                        'last_handshake': '',
+                        'transfer_rx': '',
+                        'transfer_tx': '',
+                        'is_bluek9': False
+                    }
+
+                # Peer detail lines: two spaces + field
+                elif current_peer and raw_line.startswith('  '):
+                    line = raw_line.strip()
+                    if line.startswith('NetBird IP:'):
+                        current_peer['ip'] = line.split(':', 1)[1].strip()
+                    elif line.startswith('Status:'):
+                        status = line.split(':', 1)[1].strip().lower()
+                        current_peer['connected'] = status == 'connected'
+                    elif line.startswith('Connection type:'):
+                        conn_type = line.split(':', 1)[1].strip()
+                        current_peer['connection_type'] = conn_type if conn_type != '-' else ''
+                    elif line.startswith('Latency:'):
+                        current_peer['latency'] = line.split(':', 1)[1].strip()
+                    elif 'WireGuard handshake:' in line:
+                        current_peer['last_handshake'] = line.split(':', 1)[1].strip()
+                    elif 'Transfer status' in line:
+                        match = re.search(r'\(received/sent\)\s*(.+)/(.+)', line)
+                        if match:
+                            current_peer['transfer_rx'] = match.group(1).strip()
+                            current_peer['transfer_tx'] = match.group(2).strip()
 
         # Don't forget the last peer
         if current_peer and current_peer.get('ip'):
