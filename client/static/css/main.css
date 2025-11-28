@@ -2211,6 +2211,104 @@ body.resizing-vertical * {
     color: var(--accent-warning);
 }
 
+/* Analysis section styling */
+.analysis-section {
+    background: rgba(0, 50, 80, 0.3);
+    border: 1px solid var(--accent-primary);
+    border-radius: 4px;
+    padding: 10px;
+    margin-bottom: 10px;
+}
+
+.analysis-item {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text-primary);
+    padding: 5px 0;
+    padding-left: 15px;
+    position: relative;
+}
+
+.analysis-item::before {
+    content: "▶";
+    position: absolute;
+    left: 0;
+    color: var(--accent-primary);
+    font-size: 8px;
+}
+
+/* Capabilities badges */
+.capabilities-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 5px 0;
+}
+
+.cap-badge {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.cap-badge.cap-edr {
+    background: rgba(0, 122, 255, 0.2);
+    color: #007aff;
+    border: 1px solid #007aff;
+}
+
+.cap-badge.cap-ble {
+    background: rgba(48, 209, 88, 0.2);
+    color: #30d158;
+    border: 1px solid #30d158;
+}
+
+.cap-badge.cap-secure {
+    background: rgba(175, 82, 222, 0.2);
+    color: #af52de;
+    border: 1px solid #af52de;
+}
+
+.cap-badge.cap-afh {
+    background: rgba(255, 159, 10, 0.2);
+    color: #ff9f0a;
+    border: 1px solid #ff9f0a;
+}
+
+.cap-badge.cap-count {
+    background: rgba(0, 212, 255, 0.2);
+    color: var(--accent-primary);
+    border: 1px solid var(--accent-primary);
+}
+
+/* Feature tags */
+.features-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    padding: 5px 0;
+    max-height: 150px;
+    overflow-y: auto;
+}
+
+.feature-tag {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    padding: 3px 8px;
+    background: rgba(0, 30, 40, 0.8);
+    border: 1px solid var(--border-color);
+    border-radius: 3px;
+    color: var(--text-secondary);
+}
+
+.feature-tag:hover {
+    border-color: var(--accent-primary);
+    color: var(--text-primary);
+}
+
 /* ==================== VERSION FOOTER ==================== */
 
 .version-footer {

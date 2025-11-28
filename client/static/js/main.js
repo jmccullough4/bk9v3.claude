@@ -135,6 +135,7 @@ function initApp() {
     loadRadios();
     loadLogs();
     loadGpsConfig();
+    loadTimezone();  // Load timezone before starting time display
 
     // Update time display
     setInterval(updateTime, 1000);
@@ -2505,34 +2506,31 @@ function showDeviceInfo(info) {
 
     let html = '<div class="device-info-content">';
 
-    // Show hcitool raw output prominently at top
-    if (info.raw_info && info.raw_info.trim()) {
-        html += `
-            <div class="info-section-header">HCITOOL INFO OUTPUT</div>
-            <pre class="hcitool-output">${info.raw_info}</pre>
-            <div class="info-section-header" style="margin-top: 15px;">DEVICE SUMMARY</div>
-        `;
-    } else {
-        html += `
-            <div class="info-section-header">HCITOOL INFO OUTPUT</div>
-            <pre class="hcitool-output hcitool-empty">No response from device.
-Device may be out of range or not responding.</pre>
-            <div class="info-section-header" style="margin-top: 15px;">CACHED DATA</div>
-        `;
+    // Show ANALYSIS section first (human-readable summary)
+    if (info.analysis && info.analysis.length > 0) {
+        html += `<div class="info-section-header">ANALYSIS</div>`;
+        html += `<div class="analysis-section">`;
+        info.analysis.forEach(item => {
+            html += `<div class="analysis-item">${item}</div>`;
+        });
+        html += `</div>`;
     }
 
-    // Add summary info
+    // Add summary info section
+    html += `<div class="info-section-header" style="margin-top: 15px;">DEVICE DETAILS</div>`;
+
     const deviceTypeLabel = device.device_type === 'ble' ? 'BLE (Low Energy)' :
                            device.device_type === 'classic' ? 'Classic' : 'Unknown';
-    const mfrDisplay = device.bt_company || device.manufacturer || 'Unknown';
 
+    // Build fields with new parsed data
     const fields = [
         ['BD Address', info.bd_address],
         ['Device Name', info.device_name || device.device_name || 'Unknown'],
+        ['Bluetooth Version', info.bluetooth_version || 'N/A'],
+        ['Version Info', info.version_description || 'N/A'],
         ['Device Type', deviceTypeLabel],
-        ['OUI Manufacturer', device.manufacturer || 'Unknown'],
-        ['BT Company', device.bt_company || 'N/A'],
-        ['Device Class', info.device_class || 'N/A'],
+        ['Device Class', info.parsed?.device_type_class || info.device_class || 'N/A'],
+        ['Manufacturer', info.manufacturer_info || device.bt_company || device.manufacturer || 'Unknown'],
         ['Address Type', device.addr_type || 'N/A'],
         ['RSSI', device.rssi ? `${device.rssi} dBm` : 'N/A'],
         ['TX Power', device.tx_power ? `${device.tx_power} dBm` : 'N/A'],
@@ -2545,18 +2543,72 @@ Device may be out of range or not responding.</pre>
     ];
 
     fields.forEach(([label, value]) => {
-        html += `
-            <div class="info-row">
-                <span class="info-label-modal">${label}:</span>
-                <span class="info-value-modal">${value}</span>
-            </div>
-        `;
+        if (value && value !== 'N/A') {
+            html += `
+                <div class="info-row">
+                    <span class="info-label-modal">${label}:</span>
+                    <span class="info-value-modal">${value}</span>
+                </div>
+            `;
+        }
     });
+
+    // Show capabilities summary if available
+    if (info.capabilities && Object.keys(info.capabilities).length > 0) {
+        html += `<div class="info-section-header" style="margin-top: 15px;">CAPABILITIES</div>`;
+        html += `<div class="capabilities-grid">`;
+        if (info.capabilities.edr) html += `<span class="cap-badge cap-edr">EDR</span>`;
+        if (info.capabilities.ble) html += `<span class="cap-badge cap-ble">BLE</span>`;
+        if (info.capabilities.secure_pairing) html += `<span class="cap-badge cap-secure">Secure Pairing</span>`;
+        if (info.capabilities.afh) html += `<span class="cap-badge cap-afh">AFH</span>`;
+        if (info.capabilities.total_features) {
+            html += `<span class="cap-badge cap-count">${info.capabilities.total_features} Features</span>`;
+        }
+        html += `</div>`;
+    }
+
+    // Show feature list if available
+    if (info.features && info.features.length > 0) {
+        html += `<div class="info-section-header" style="margin-top: 15px;">SUPPORTED FEATURES</div>`;
+        html += `<div class="features-list">`;
+        info.features.forEach(feature => {
+            html += `<span class="feature-tag">${feature}</span>`;
+        });
+        html += `</div>`;
+    }
+
+    // Show raw output at the bottom (collapsed by default)
+    if (info.raw_info && info.raw_info.trim()) {
+        html += `
+            <div class="info-section-header" style="margin-top: 15px;">
+                <span onclick="toggleRawOutput()" style="cursor: pointer;">RAW OUTPUT <span id="rawToggle">[+]</span></span>
+            </div>
+            <pre class="hcitool-output" id="rawOutputPre" style="display: none;">${info.raw_info}</pre>
+        `;
+    } else {
+        html += `
+            <div class="info-section-header" style="margin-top: 15px;">RAW OUTPUT</div>
+            <pre class="hcitool-output hcitool-empty">No response from device.
+Device may be out of range or not responding.</pre>
+        `;
+    }
 
     html += '</div>';
     content.innerHTML = html;
 
     addLogEntry(`Device info loaded for ${info.bd_address}`, 'INFO');
+}
+
+function toggleRawOutput() {
+    const pre = document.getElementById('rawOutputPre');
+    const toggle = document.getElementById('rawToggle');
+    if (pre.style.display === 'none') {
+        pre.style.display = 'block';
+        toggle.textContent = '[-]';
+    } else {
+        pre.style.display = 'none';
+        toggle.textContent = '[+]';
+    }
 }
 
 function closeDeviceInfoModal() {
@@ -2755,6 +2807,23 @@ function updateTime() {
         // Fallback if timezone is invalid
         document.getElementById('sysTime').textContent = now.toLocaleTimeString();
     }
+}
+
+/**
+ * Load timezone setting on startup
+ */
+function loadTimezone() {
+    fetch('/api/settings')
+        .then(r => r.json())
+        .then(data => {
+            if (data.timezone) {
+                currentTimezone = data.timezone;
+                updateTime(); // Immediately update display with correct timezone
+            }
+        })
+        .catch(e => {
+            console.log('Could not load timezone setting:', e);
+        });
 }
 
 function formatTimeInTimezone(date) {
