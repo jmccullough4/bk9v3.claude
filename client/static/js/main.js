@@ -104,11 +104,20 @@ function initApp() {
     // Initialize Mapbox
     mapboxgl.accessToken = MAPBOX_TOKEN;
 
+    // Load saved map style from localStorage or default to dark
+    const savedMapStyle = localStorage.getItem('bluek9_map_style') || 'dark';
+    currentMapStyle = savedMapStyle;
+
     map = new mapboxgl.Map({
         container: 'map',
-        style: MAP_STYLES.dark,
+        style: MAP_STYLES[savedMapStyle],
         center: [-98.5795, 39.8283], // US center as default
         zoom: 4
+    });
+
+    // Update map style button states
+    document.querySelectorAll('.btn-map').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.style === savedMapStyle);
     });
 
     map.addControl(new mapboxgl.NavigationControl());
@@ -279,46 +288,237 @@ function handleNameResult(data) {
 }
 
 /**
- * Initialize statistics chart
+ * Initialize modern statistics visualization
  */
+// Detection history for timeline chart
+let detectionHistory = [];
+const MAX_HISTORY_POINTS = 30;
+let signalPulseAnimation = null;
+
 function initChart() {
     const ctx = document.getElementById('deviceTypeChart').getContext('2d');
+
+    // Create gradient for the line
+    const gradient = ctx.createLinearGradient(0, 0, 0, 100);
+    gradient.addColorStop(0, 'rgba(0, 212, 255, 0.4)');
+    gradient.addColorStop(1, 'rgba(0, 212, 255, 0)');
+
+    // Initialize with empty data
+    for (let i = 0; i < MAX_HISTORY_POINTS; i++) {
+        detectionHistory.push({ total: 0, classic: 0, ble: 0 });
+    }
+
     deviceTypeChart = new Chart(ctx, {
-        type: 'doughnut',
+        type: 'line',
         data: {
-            labels: ['Classic', 'BLE', 'Targets'],
-            datasets: [{
-                data: [0, 0, 0],
-                backgroundColor: [
-                    'rgba(0, 212, 255, 0.8)',
-                    'rgba(48, 209, 88, 0.8)',
-                    'rgba(255, 59, 48, 0.8)'
-                ],
-                borderColor: [
-                    'rgba(0, 212, 255, 1)',
-                    'rgba(48, 209, 88, 1)',
-                    'rgba(255, 59, 48, 1)'
-                ],
-                borderWidth: 1
-            }]
+            labels: Array(MAX_HISTORY_POINTS).fill(''),
+            datasets: [
+                {
+                    label: 'Total',
+                    data: detectionHistory.map(d => d.total),
+                    borderColor: 'rgba(0, 212, 255, 1)',
+                    backgroundColor: gradient,
+                    fill: true,
+                    tension: 0.4,
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    pointHoverRadius: 4
+                },
+                {
+                    label: 'Classic',
+                    data: detectionHistory.map(d => d.classic),
+                    borderColor: 'rgba(0, 122, 255, 0.8)',
+                    backgroundColor: 'transparent',
+                    fill: false,
+                    tension: 0.4,
+                    borderWidth: 1.5,
+                    pointRadius: 0,
+                    borderDash: [3, 3]
+                },
+                {
+                    label: 'BLE',
+                    data: detectionHistory.map(d => d.ble),
+                    borderColor: 'rgba(48, 209, 88, 0.8)',
+                    backgroundColor: 'transparent',
+                    fill: false,
+                    tension: 0.4,
+                    borderWidth: 1.5,
+                    pointRadius: 0,
+                    borderDash: [3, 3]
+                }
+            ]
         },
         options: {
             responsive: true,
             maintainAspectRatio: false,
-            plugins: {
-                legend: {
+            animation: {
+                duration: 500,
+                easing: 'easeOutQuart'
+            },
+            interaction: {
+                mode: 'index',
+                intersect: false
+            },
+            scales: {
+                x: {
+                    display: false
+                },
+                y: {
+                    display: true,
                     position: 'right',
-                    labels: {
-                        color: '#8b949e',
+                    grid: {
+                        color: 'rgba(0, 212, 255, 0.1)',
+                        drawBorder: false
+                    },
+                    ticks: {
+                        color: '#484f58',
                         font: {
                             family: 'Share Tech Mono',
-                            size: 10
-                        }
-                    }
+                            size: 9
+                        },
+                        maxTicksLimit: 4,
+                        padding: 5
+                    },
+                    beginAtZero: true
+                }
+            },
+            plugins: {
+                legend: {
+                    display: false
+                },
+                tooltip: {
+                    enabled: true,
+                    backgroundColor: 'rgba(10, 14, 20, 0.9)',
+                    borderColor: 'rgba(0, 212, 255, 0.5)',
+                    borderWidth: 1,
+                    titleFont: {
+                        family: 'Share Tech Mono',
+                        size: 10
+                    },
+                    bodyFont: {
+                        family: 'Share Tech Mono',
+                        size: 10
+                    },
+                    padding: 8
                 }
             }
         }
     });
+
+    // Initialize signal pulse canvas
+    initSignalPulse();
+
+    // Update detection history every 2 seconds
+    setInterval(updateDetectionHistory, 2000);
+}
+
+/**
+ * Initialize the signal pulse visualization
+ */
+function initSignalPulse() {
+    const container = document.getElementById('signalPulseContainer');
+    if (!container) return;
+
+    // Create canvas for pulse animation
+    const canvas = document.createElement('canvas');
+    canvas.id = 'signalPulseCanvas';
+    canvas.width = 60;
+    canvas.height = 60;
+    container.appendChild(canvas);
+
+    const ctx = canvas.getContext('2d');
+    let pulseRadius = 0;
+    let pulseOpacity = 1;
+
+    function drawPulse() {
+        ctx.clearRect(0, 0, 60, 60);
+
+        const centerX = 30;
+        const centerY = 30;
+        const maxRadius = 25;
+
+        // Draw outer ring
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, maxRadius, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(0, 212, 255, 0.2)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        // Draw pulse rings (multiple for wave effect)
+        for (let i = 0; i < 3; i++) {
+            const offsetRadius = (pulseRadius + (i * 10)) % 30;
+            const offsetOpacity = Math.max(0, 1 - (offsetRadius / 30));
+
+            if (offsetOpacity > 0) {
+                ctx.beginPath();
+                ctx.arc(centerX, centerY, offsetRadius, 0, Math.PI * 2);
+                ctx.strokeStyle = `rgba(0, 212, 255, ${offsetOpacity * 0.5})`;
+                ctx.lineWidth = 2;
+                ctx.stroke();
+            }
+        }
+
+        // Draw center dot with glow
+        const glowGradient = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, 8);
+        glowGradient.addColorStop(0, scanning ? 'rgba(0, 212, 255, 1)' : 'rgba(100, 100, 100, 0.5)');
+        glowGradient.addColorStop(0.5, scanning ? 'rgba(0, 212, 255, 0.5)' : 'rgba(100, 100, 100, 0.2)');
+        glowGradient.addColorStop(1, 'rgba(0, 212, 255, 0)');
+
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, 8, 0, Math.PI * 2);
+        ctx.fillStyle = glowGradient;
+        ctx.fill();
+
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, 4, 0, Math.PI * 2);
+        ctx.fillStyle = scanning ? '#00d4ff' : '#666';
+        ctx.fill();
+
+        // Animate pulse only when scanning
+        if (scanning) {
+            pulseRadius += 0.5;
+            if (pulseRadius > 30) {
+                pulseRadius = 0;
+            }
+        }
+
+        signalPulseAnimation = requestAnimationFrame(drawPulse);
+    }
+
+    drawPulse();
+}
+
+/**
+ * Update detection history for timeline chart
+ */
+function updateDetectionHistory() {
+    let classic = 0;
+    let ble = 0;
+
+    Object.values(devices).forEach(device => {
+        if (device.device_type === 'classic') classic++;
+        else if (device.device_type === 'ble') ble++;
+    });
+
+    // Add new data point
+    detectionHistory.push({
+        total: Object.keys(devices).length,
+        classic: classic,
+        ble: ble
+    });
+
+    // Keep only last N points
+    if (detectionHistory.length > MAX_HISTORY_POINTS) {
+        detectionHistory.shift();
+    }
+
+    // Update chart
+    if (deviceTypeChart) {
+        deviceTypeChart.data.datasets[0].data = detectionHistory.map(d => d.total);
+        deviceTypeChart.data.datasets[1].data = detectionHistory.map(d => d.classic);
+        deviceTypeChart.data.datasets[2].data = detectionHistory.map(d => d.ble);
+        deviceTypeChart.update('none'); // No animation for smooth update
+    }
 }
 
 /**
@@ -901,6 +1101,9 @@ function setMapStyle(style) {
     currentMapStyle = style;
     map.setStyle(MAP_STYLES[style]);
 
+    // Persist map style to localStorage
+    localStorage.setItem('bluek9_map_style', style);
+
     // Update button states
     document.querySelectorAll('.btn-map').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.style === style);
@@ -997,6 +1200,196 @@ function toggleShowCep() {
         });
         cepCircles = {};
     }
+}
+
+// ==================== RECENTER & MEASUREMENT ====================
+
+/**
+ * Recenter map on current system location
+ */
+function recenterOnSystem() {
+    if (systemMarker) {
+        const lngLat = systemMarker.getLngLat();
+        map.flyTo({
+            center: [lngLat.lng, lngLat.lat],
+            zoom: 17,
+            duration: 1000
+        });
+        addLogEntry('Recentered on system location', 'INFO');
+    } else {
+        addLogEntry('No GPS fix available', 'WARNING');
+    }
+}
+
+// Measurement state
+let measureMode = false;
+let measurePoints = [];
+let measureMarkers = [];
+let measureLine = null;
+
+/**
+ * Toggle measurement mode
+ */
+function toggleMeasure() {
+    measureMode = !measureMode;
+    const btn = document.getElementById('measureBtn');
+    const info = document.getElementById('measureInfo');
+
+    if (measureMode) {
+        btn.classList.add('active');
+        info.classList.remove('hidden');
+        map.getCanvas().style.cursor = 'crosshair';
+        addLogEntry('Measurement mode ON - click two points on map', 'INFO');
+
+        // Add click handler for measurement
+        map.on('click', handleMeasureClick);
+    } else {
+        btn.classList.remove('active');
+        info.classList.add('hidden');
+        map.getCanvas().style.cursor = '';
+        map.off('click', handleMeasureClick);
+        clearMeasure();
+    }
+}
+
+/**
+ * Handle map click for measurement
+ */
+function handleMeasureClick(e) {
+    if (!measureMode) return;
+
+    const lngLat = e.lngLat;
+    measurePoints.push([lngLat.lng, lngLat.lat]);
+
+    // Add marker
+    const el = document.createElement('div');
+    el.className = 'measure-marker';
+    const marker = new mapboxgl.Marker(el)
+        .setLngLat([lngLat.lng, lngLat.lat])
+        .addTo(map);
+    measureMarkers.push(marker);
+
+    if (measurePoints.length === 2) {
+        // Calculate and display distance
+        const distance = calculateDistance(
+            measurePoints[0][1], measurePoints[0][0],
+            measurePoints[1][1], measurePoints[1][0]
+        );
+        const bearing = calculateBearing(
+            measurePoints[0][1], measurePoints[0][0],
+            measurePoints[1][1], measurePoints[1][0]
+        );
+
+        // Draw line
+        if (map.getSource('measure-line')) {
+            map.getSource('measure-line').setData({
+                type: 'Feature',
+                geometry: {
+                    type: 'LineString',
+                    coordinates: measurePoints
+                }
+            });
+        } else {
+            map.addSource('measure-line', {
+                type: 'geojson',
+                data: {
+                    type: 'Feature',
+                    geometry: {
+                        type: 'LineString',
+                        coordinates: measurePoints
+                    }
+                }
+            });
+            map.addLayer({
+                id: 'measure-line-layer',
+                type: 'line',
+                source: 'measure-line',
+                paint: {
+                    'line-color': '#ffb000',
+                    'line-width': 3,
+                    'line-dasharray': [2, 1]
+                }
+            });
+        }
+
+        // Display results
+        const meters = distance;
+        const feet = meters * 3.28084;
+        document.getElementById('measureDistance').innerHTML =
+            `${meters.toFixed(1)}m / ${feet.toFixed(1)}ft`;
+        document.getElementById('measureBearing').textContent =
+            `${bearing.toFixed(1)}° ${getBearingDirection(bearing)}`;
+
+        addLogEntry(`Distance: ${meters.toFixed(1)}m (${feet.toFixed(1)}ft), Bearing: ${bearing.toFixed(1)}°`, 'INFO');
+
+        // Remove click handler after second point
+        map.off('click', handleMeasureClick);
+        map.getCanvas().style.cursor = '';
+    }
+}
+
+/**
+ * Clear measurement markers and line
+ */
+function clearMeasure() {
+    measurePoints = [];
+    measureMarkers.forEach(m => m.remove());
+    measureMarkers = [];
+
+    if (map.getLayer('measure-line-layer')) {
+        map.removeLayer('measure-line-layer');
+    }
+    if (map.getSource('measure-line')) {
+        map.removeSource('measure-line');
+    }
+
+    document.getElementById('measureDistance').textContent = '--';
+    document.getElementById('measureBearing').textContent = '--';
+
+    if (measureMode) {
+        map.getCanvas().style.cursor = 'crosshair';
+        map.on('click', handleMeasureClick);
+    }
+}
+
+/**
+ * Calculate distance between two points in meters (Haversine formula)
+ */
+function calculateDistance(lat1, lon1, lat2, lon2) {
+    const R = 6371000; // Earth radius in meters
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+              Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+              Math.sin(dLon/2) * Math.sin(dLon/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return R * c;
+}
+
+/**
+ * Calculate bearing between two points in degrees
+ */
+function calculateBearing(lat1, lon1, lat2, lon2) {
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const lat1Rad = lat1 * Math.PI / 180;
+    const lat2Rad = lat2 * Math.PI / 180;
+
+    const y = Math.sin(dLon) * Math.cos(lat2Rad);
+    const x = Math.cos(lat1Rad) * Math.sin(lat2Rad) -
+              Math.sin(lat1Rad) * Math.cos(lat2Rad) * Math.cos(dLon);
+
+    let bearing = Math.atan2(y, x) * 180 / Math.PI;
+    return (bearing + 360) % 360;
+}
+
+/**
+ * Get cardinal direction from bearing
+ */
+function getBearingDirection(bearing) {
+    const directions = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE',
+                        'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
+    const index = Math.round(bearing / 22.5) % 16;
+    return directions[index];
 }
 
 // ==================== BREADCRUMB / HEATMAP ====================
@@ -1181,18 +1574,92 @@ function loadSystemTrail() {
         .then(points => {
             clearSystemTrail();
 
-            // System trail - show in CYAN (where system has been)
-            points.forEach((point, index) => {
-                if (!point.lat || !point.lon) return;
+            if (points.length === 0) {
+                addLogEntry('No system trail data available', 'INFO');
+                return;
+            }
+
+            // Filter valid points and create coordinates array for line
+            const validPoints = points.filter(p => p.lat && p.lon);
+            const coordinates = validPoints.map(p => [p.lon, p.lat]);
+
+            if (coordinates.length > 1) {
+                // Create GeoJSON for the trail line
+                const lineData = {
+                    type: 'Feature',
+                    geometry: {
+                        type: 'LineString',
+                        coordinates: coordinates
+                    }
+                };
+
+                // Add or update the trail line source
+                if (map.getSource('system-trail-line')) {
+                    map.getSource('system-trail-line').setData(lineData);
+                } else {
+                    map.addSource('system-trail-line', {
+                        type: 'geojson',
+                        data: lineData
+                    });
+
+                    // Add glow effect layer (behind the main line)
+                    map.addLayer({
+                        id: 'system-trail-glow',
+                        type: 'line',
+                        source: 'system-trail-line',
+                        paint: {
+                            'line-color': '#00d4ff',
+                            'line-width': 6,
+                            'line-blur': 4,
+                            'line-opacity': 0.3
+                        }
+                    });
+
+                    // Add main trail line
+                    map.addLayer({
+                        id: 'system-trail-layer',
+                        type: 'line',
+                        source: 'system-trail-line',
+                        paint: {
+                            'line-color': '#00d4ff',
+                            'line-width': 2,
+                            'line-opacity': 0.8
+                        }
+                    });
+                }
+            }
+
+            // Add markers at key points (start, end, every 10th point)
+            validPoints.forEach((point, index) => {
+                // Only show markers at start, end, and every 10th point
+                if (index !== 0 && index !== validPoints.length - 1 && index % 10 !== 0) return;
 
                 const el = document.createElement('div');
                 el.className = 'breadcrumb-marker system-trail';
 
-                // Fade older points
-                const opacity = Math.max(0.2, 1 - (index / points.length) * 0.8);
-                el.style.backgroundColor = `rgba(0, 212, 255, ${opacity})`;
-                el.style.width = '6px';
-                el.style.height = '6px';
+                // Style based on position
+                if (index === 0) {
+                    // Start point - larger, brighter
+                    el.style.backgroundColor = '#00d4ff';
+                    el.style.width = '10px';
+                    el.style.height = '10px';
+                    el.style.border = '2px solid #fff';
+                    el.style.boxShadow = '0 0 10px #00d4ff';
+                    el.title = 'Trail Start';
+                } else if (index === validPoints.length - 1) {
+                    // End point - current position indicator
+                    el.style.backgroundColor = '#00d4ff';
+                    el.style.width = '8px';
+                    el.style.height = '8px';
+                    el.style.border = '2px solid #fff';
+                    el.title = 'Trail End';
+                } else {
+                    // Intermediate points
+                    const opacity = Math.max(0.4, 1 - (index / validPoints.length) * 0.6);
+                    el.style.backgroundColor = `rgba(0, 212, 255, ${opacity})`;
+                    el.style.width = '5px';
+                    el.style.height = '5px';
+                }
 
                 const marker = new mapboxgl.Marker(el)
                     .setLngLat([point.lon, point.lat])
@@ -1201,14 +1668,26 @@ function loadSystemTrail() {
                 systemTrailMarkers.push(marker);
             });
 
-            addLogEntry(`Loaded ${points.length} system trail points`, 'INFO');
+            addLogEntry(`Loaded system trail: ${validPoints.length} points, ${coordinates.length > 1 ? 'line connected' : 'markers only'}`, 'INFO');
         })
         .catch(e => addLogEntry(`Failed to load system trail: ${e}`, 'ERROR'));
 }
 
 function clearSystemTrail() {
+    // Clear markers
     systemTrailMarkers.forEach(m => m.remove());
     systemTrailMarkers = [];
+
+    // Clear line layers and source
+    if (map.getLayer('system-trail-glow')) {
+        map.removeLayer('system-trail-glow');
+    }
+    if (map.getLayer('system-trail-layer')) {
+        map.removeLayer('system-trail-layer');
+    }
+    if (map.getSource('system-trail-line')) {
+        map.removeSource('system-trail-line');
+    }
 }
 
 function resetSystemTrail() {

@@ -3302,27 +3302,72 @@ def process_found_device(device_info):
     return devices[bd_addr]
 
 
+def scan_single_adapter(interface):
+    """Scan using a single Bluetooth adapter. Thread-safe."""
+    try:
+        all_devices = scan_classic_bluetooth(interface)
+        return all_devices
+    except Exception as e:
+        add_log(f"Scan error on {interface}: {str(e)}", "ERROR")
+        return []
+
+
 def scan_loop():
-    """Main scanning loop."""
+    """Main scanning loop with parallel multi-adapter support."""
     global scanning_active, active_radios
 
     add_log("Scanning started", "INFO")
 
     while scanning_active:
         try:
-            # Get active Bluetooth interfaces (default to hci0 if none configured)
+            # Get active Bluetooth interfaces (default to both hci0 and hci1 if available)
             bt_interfaces = active_radios.get('bluetooth', [])
             if not bt_interfaces:
-                bt_interfaces = ['hci0']  # Default fallback
+                # Default: try to use both hci0 (UD100) and hci1 (AX210) in parallel
+                bt_interfaces = []
+                for iface in ['hci0', 'hci1']:
+                    try:
+                        result = subprocess.run(['hciconfig', iface], capture_output=True, text=True, timeout=2)
+                        if 'UP RUNNING' in result.stdout:
+                            bt_interfaces.append(iface)
+                    except:
+                        pass
+                if not bt_interfaces:
+                    bt_interfaces = ['hci0']  # Final fallback
 
-            for iface in bt_interfaces:
-                if not scanning_active:
-                    break
+            if len(bt_interfaces) > 1:
+                # Parallel scanning with multiple adapters
+                from concurrent.futures import ThreadPoolExecutor, as_completed
 
-                # Unified scan - handles both Classic and BLE with bluetoothctl scan on
-                all_devices = scan_classic_bluetooth(iface)
+                all_devices = []
+                with ThreadPoolExecutor(max_workers=len(bt_interfaces)) as executor:
+                    futures = {executor.submit(scan_single_adapter, iface): iface for iface in bt_interfaces}
+                    for future in as_completed(futures, timeout=30):
+                        iface = futures[future]
+                        try:
+                            devices_from_adapter = future.result()
+                            if devices_from_adapter:
+                                for dev in devices_from_adapter:
+                                    dev['adapter'] = iface  # Track which adapter found it
+                                all_devices.extend(devices_from_adapter)
+                        except Exception as e:
+                            add_log(f"Parallel scan error on {iface}: {e}", "WARNING")
+
+                # Process all found devices
                 for dev in all_devices:
+                    if not scanning_active:
+                        break
                     process_found_device(dev)
+            else:
+                # Single adapter mode
+                for iface in bt_interfaces:
+                    if not scanning_active:
+                        break
+
+                    # Unified scan - handles both Classic and BLE
+                    all_devices = scan_classic_bluetooth(iface)
+                    for dev in all_devices:
+                        process_found_device(dev)
 
             time.sleep(CONFIG['SCAN_INTERVAL'])
         except Exception as e:
