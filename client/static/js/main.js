@@ -137,6 +137,9 @@ function initApp() {
     loadGpsConfig();
     loadTimezone();  // Load timezone before starting time display
 
+    // Check for session restart and clear geo data if needed
+    checkSessionAndResetIfNeeded();
+
     // Update time display
     setInterval(updateTime, 1000);
     updateTime();
@@ -153,6 +156,69 @@ function initApp() {
         // Clicked on empty map area
         document.getElementById('selectedDevice').textContent = 'NONE';
     });
+}
+
+/**
+ * Check if server session has changed and reset geo data if needed
+ * This ensures heatmaps, trails, CEPs are cleared on system restart
+ */
+function checkSessionAndResetIfNeeded() {
+    fetch('/api/version')
+        .then(r => r.json())
+        .then(data => {
+            const storedSessionId = localStorage.getItem('bluek9_session_id');
+            const currentSessionId = data.session_id;
+
+            if (storedSessionId && storedSessionId !== currentSessionId) {
+                // Session has changed - server was restarted
+                console.log(`Session changed: ${storedSessionId} -> ${currentSessionId}, resetting geo data`);
+                addLogEntry('System restart detected - clearing geodata', 'INFO');
+
+                // Clear all geodata without prompts
+                resetGeoDataSilently();
+            }
+
+            // Store current session ID
+            if (currentSessionId) {
+                localStorage.setItem('bluek9_session_id', currentSessionId);
+            }
+        })
+        .catch(e => {
+            console.log('Failed to check session ID:', e);
+        });
+}
+
+/**
+ * Silently reset all geodata (called on system restart detection)
+ */
+function resetGeoDataSilently() {
+    // Clear local markers/trails
+    clearBreadcrumbs();
+    clearSystemTrail();
+
+    // Clear all CEP circles
+    Object.keys(cepCircles).forEach(bdAddr => {
+        const sourceId = `cep-${bdAddr}`;
+        if (map.getLayer(sourceId)) map.removeLayer(sourceId);
+        if (map.getSource(sourceId)) map.removeSource(sourceId);
+        delete cepCircles[bdAddr];
+    });
+
+    // Clear device markers
+    Object.keys(markers).forEach(bdAddr => {
+        if (markers[bdAddr]) markers[bdAddr].remove();
+        delete markers[bdAddr];
+    });
+
+    // Reset server-side data
+    fetch('/api/breadcrumbs/reset', { method: 'POST' }).catch(() => {});
+    fetch('/api/geo/reset_all', { method: 'POST' }).catch(() => {});
+    fetch('/api/system_trail/reset', { method: 'POST' }).catch(() => {});
+
+    // Clear local device cache
+    devices = {};
+    updateSurveyTable();
+    updateStats();
 }
 
 /**
@@ -2535,16 +2601,14 @@ function showDeviceInfo(info) {
     // Add summary info section
     html += `<div class="info-section-header" style="margin-top: 15px;">DEVICE DETAILS</div>`;
 
-    const deviceTypeLabel = device.device_type === 'ble' ? 'BLE (Low Energy)' :
-                           device.device_type === 'classic' ? 'Classic' : 'Unknown';
+    const currentDeviceType = device.device_type || 'unknown';
 
-    // Build fields with new parsed data
+    // Build fields with new parsed data - Device Type handled separately with correction UI
     const fields = [
         ['BD Address', info.bd_address],
         ['Device Name', info.device_name || device.device_name || 'Unknown'],
         ['Bluetooth Version', info.bluetooth_version || 'N/A'],
         ['Version Info', info.version_description || 'N/A'],
-        ['Device Type', deviceTypeLabel],
         ['Device Class', info.parsed?.device_type_class || info.device_class || 'N/A'],
         ['Manufacturer', info.manufacturer_info || device.bt_company || device.manufacturer || 'Unknown'],
         ['Address Type', device.addr_type || 'N/A'],
@@ -2568,6 +2632,21 @@ function showDeviceInfo(info) {
             `;
         }
     });
+
+    // Device Type with correction UI
+    html += `
+        <div class="info-row device-type-row">
+            <span class="info-label-modal">Device Type:</span>
+            <div class="device-type-selector">
+                <select id="deviceTypeSelect" class="device-type-select" data-bd="${info.bd_address}" onchange="correctDeviceType(this)">
+                    <option value="classic" ${currentDeviceType === 'classic' ? 'selected' : ''}>Classic</option>
+                    <option value="ble" ${currentDeviceType === 'ble' ? 'selected' : ''}>BLE (Low Energy)</option>
+                    <option value="unknown" ${currentDeviceType === 'unknown' ? 'selected' : ''}>Unknown</option>
+                </select>
+                <span class="type-edit-hint">&#9998; click to correct</span>
+            </div>
+        </div>
+    `;
 
     // Show capabilities summary if available
     if (info.capabilities && Object.keys(info.capabilities).length > 0) {
@@ -2625,6 +2704,34 @@ function toggleRawOutput() {
         pre.style.display = 'none';
         toggle.textContent = '[+]';
     }
+}
+
+function correctDeviceType(selectEl) {
+    const bdAddress = selectEl.dataset.bd;
+    const newType = selectEl.value;
+
+    fetch(`/api/device/${encodeURIComponent(bdAddress)}/type`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ device_type: newType })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'updated') {
+            addLogEntry(`Device type corrected: ${bdAddress} → ${newType.toUpperCase()}`, 'INFO');
+            // Update local device cache
+            if (devices[bdAddress]) {
+                devices[bdAddress].device_type = newType;
+            }
+            // Refresh survey table to reflect change
+            updateSurveyTable();
+        } else if (data.error) {
+            addLogEntry(`Failed to correct device type: ${data.error}`, 'ERROR');
+        }
+    })
+    .catch(e => {
+        addLogEntry(`Error correcting device type: ${e}`, 'ERROR');
+    });
 }
 
 function closeDeviceInfoModal() {
@@ -3253,6 +3360,7 @@ function openSettingsModal() {
     loadUsers();
     loadSmsNumbers();
     loadRadios();
+    loadSystemInfo();
     document.getElementById('settingsModal').classList.remove('hidden');
 }
 
@@ -3507,6 +3615,237 @@ function changePassword() {
             }
         })
         .catch(e => addLogEntry(`Change password error: ${e}`, 'ERROR'));
+}
+
+// ==================== SOFTWARE UPDATES ====================
+
+function checkForUpdates() {
+    const statusPanel = document.getElementById('updateStatusPanel');
+    const statusIcon = document.getElementById('updateStatusIcon');
+    const statusText = document.getElementById('updateStatusText');
+    const details = document.getElementById('updateDetails');
+    const changesSection = document.getElementById('updateChangesSection');
+    const changesList = document.getElementById('updateChangesList');
+    const actions = document.getElementById('updateActions');
+    const checkBtn = document.getElementById('btnCheckUpdates');
+
+    // Show status panel and indicate checking
+    statusPanel.classList.remove('hidden');
+    statusIcon.innerHTML = '&#8987;'; // Hourglass
+    statusIcon.className = 'update-status-icon checking';
+    statusText.textContent = 'SCANNING FOR UPDATES...';
+    details.innerHTML = '<div class="update-progress"><div class="update-progress-bar"></div></div>';
+    changesSection.classList.add('hidden');
+    actions.classList.add('hidden');
+    checkBtn.disabled = true;
+
+    fetch('/api/updates/check')
+        .then(r => r.json())
+        .then(data => {
+            checkBtn.disabled = false;
+
+            if (data.error) {
+                statusIcon.innerHTML = '&#9888;'; // Warning
+                statusIcon.className = 'update-status-icon error';
+                statusText.textContent = 'UPDATE CHECK FAILED';
+                details.innerHTML = `<div class="update-error">${data.error}</div>`;
+                return;
+            }
+
+            // Update system info
+            if (data.current_commit) {
+                document.getElementById('sysInfoCommit').textContent = data.current_commit.substring(0, 8);
+            }
+            if (data.current_branch) {
+                document.getElementById('sysInfoBranch').textContent = data.current_branch;
+            }
+
+            if (data.update_available) {
+                // Update available - show tech UI
+                statusIcon.innerHTML = '&#128229;'; // Inbox arrow
+                statusIcon.className = 'update-status-icon update-available';
+                statusText.textContent = 'UPDATE AVAILABLE';
+
+                let detailsHtml = `
+                    <div class="update-info-grid">
+                        <div class="update-info-item">
+                            <span class="update-label">CURRENT:</span>
+                            <span class="update-value commit">${data.current_commit ? data.current_commit.substring(0, 8) : '--'}</span>
+                        </div>
+                        <div class="update-info-item">
+                            <span class="update-label">LATEST:</span>
+                            <span class="update-value commit new">${data.remote_commit ? data.remote_commit.substring(0, 8) : '--'}</span>
+                        </div>
+                        <div class="update-info-item">
+                            <span class="update-label">BEHIND:</span>
+                            <span class="update-value">${data.commits_behind || 0} commit(s)</span>
+                        </div>
+                    </div>
+                `;
+                details.innerHTML = detailsHtml;
+
+                // Show recent changes if available
+                if (data.recent_changes && data.recent_changes.length > 0) {
+                    changesSection.classList.remove('hidden');
+                    changesList.innerHTML = data.recent_changes.map(change =>
+                        `<div class="change-item">
+                            <span class="change-hash">${change.hash}</span>
+                            <span class="change-msg">${change.message}</span>
+                        </div>`
+                    ).join('');
+                }
+
+                // Show apply button
+                actions.classList.remove('hidden');
+                addLogEntry(`Update available: ${data.commits_behind} commit(s) behind`, 'INFO');
+
+            } else {
+                // Up to date
+                statusIcon.innerHTML = '&#10003;'; // Checkmark
+                statusIcon.className = 'update-status-icon up-to-date';
+                statusText.textContent = 'SYSTEM UP TO DATE';
+                details.innerHTML = `
+                    <div class="update-info-grid">
+                        <div class="update-info-item">
+                            <span class="update-label">COMMIT:</span>
+                            <span class="update-value commit">${data.current_commit ? data.current_commit.substring(0, 8) : '--'}</span>
+                        </div>
+                        <div class="update-info-item">
+                            <span class="update-label">BRANCH:</span>
+                            <span class="update-value">${data.current_branch || 'main'}</span>
+                        </div>
+                    </div>
+                `;
+                addLogEntry('System is up to date', 'INFO');
+            }
+        })
+        .catch(e => {
+            checkBtn.disabled = false;
+            statusIcon.innerHTML = '&#9888;';
+            statusIcon.className = 'update-status-icon error';
+            statusText.textContent = 'CONNECTION ERROR';
+            details.innerHTML = `<div class="update-error">${e.message || 'Failed to check for updates'}</div>`;
+            addLogEntry(`Update check error: ${e}`, 'ERROR');
+        });
+}
+
+function applyUpdates() {
+    const statusIcon = document.getElementById('updateStatusIcon');
+    const statusText = document.getElementById('updateStatusText');
+    const details = document.getElementById('updateDetails');
+    const actions = document.getElementById('updateActions');
+    const applyBtn = document.getElementById('btnApplyUpdate');
+
+    statusIcon.innerHTML = '&#8635;'; // Refresh/spinning
+    statusIcon.className = 'update-status-icon applying';
+    statusText.textContent = 'APPLYING UPDATE...';
+    details.innerHTML = '<div class="update-progress applying"><div class="update-progress-bar"></div></div>';
+    actions.classList.add('hidden');
+    applyBtn.disabled = true;
+
+    addLogEntry('Applying system update...', 'INFO');
+
+    fetch('/api/updates/apply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+    })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                statusIcon.innerHTML = '&#10003;';
+                statusIcon.className = 'update-status-icon up-to-date';
+                statusText.textContent = 'UPDATE COMPLETE';
+
+                let changesHtml = '';
+                if (data.changes && data.changes.length > 0) {
+                    changesHtml = data.changes.map(c => `<div class="change-item applied">${c}</div>`).join('');
+                }
+
+                details.innerHTML = `
+                    <div class="update-success">
+                        <div class="success-message">Update applied successfully!</div>
+                        <div class="update-info-item">
+                            <span class="update-label">NEW COMMIT:</span>
+                            <span class="update-value commit new">${data.new_commit ? data.new_commit.substring(0, 8) : '--'}</span>
+                        </div>
+                        ${changesHtml ? '<div class="applied-changes">' + changesHtml + '</div>' : ''}
+                    </div>
+                    <div class="restart-notice">
+                        <p>Restart required to apply changes.</p>
+                        <button class="btn btn-warning" onclick="restartSystem()">
+                            <span class="btn-icon">&#8634;</span> RESTART NOW
+                        </button>
+                    </div>
+                `;
+                addLogEntry(`Update applied successfully: ${data.new_commit?.substring(0, 8)}`, 'INFO');
+
+            } else {
+                statusIcon.innerHTML = '&#9888;';
+                statusIcon.className = 'update-status-icon error';
+                statusText.textContent = 'UPDATE FAILED';
+                details.innerHTML = `<div class="update-error">${data.error || 'Unknown error during update'}</div>`;
+                actions.classList.remove('hidden');
+                applyBtn.disabled = false;
+                addLogEntry(`Update failed: ${data.error}`, 'ERROR');
+            }
+        })
+        .catch(e => {
+            statusIcon.innerHTML = '&#9888;';
+            statusIcon.className = 'update-status-icon error';
+            statusText.textContent = 'UPDATE ERROR';
+            details.innerHTML = `<div class="update-error">${e.message || 'Failed to apply update'}</div>`;
+            actions.classList.remove('hidden');
+            applyBtn.disabled = false;
+            addLogEntry(`Update error: ${e}`, 'ERROR');
+        });
+}
+
+function loadSystemInfo() {
+    fetch('/api/version')
+        .then(r => r.json())
+        .then(data => {
+            if (data.version) {
+                document.getElementById('sysInfoVersion').textContent = data.version;
+            }
+            if (data.git_commit) {
+                document.getElementById('sysInfoCommit').textContent = data.git_commit.substring(0, 8);
+            }
+            if (data.git_branch) {
+                document.getElementById('sysInfoBranch').textContent = data.git_branch;
+            }
+            if (data.last_updated) {
+                document.getElementById('sysInfoLastUpdate').textContent = data.last_updated;
+            }
+        })
+        .catch(e => console.log('Failed to load system info:', e));
+}
+
+function restartSystem() {
+    if (!confirm('Are you sure you want to restart the BlueK9 system? All active scans will be stopped.')) {
+        return;
+    }
+
+    addLogEntry('Initiating system restart...', 'INFO');
+
+    fetch('/api/system/restart', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+    })
+        .then(r => r.json())
+        .then(data => {
+            if (data.status === 'restarting') {
+                addLogEntry('System restarting - page will reload shortly...', 'INFO');
+                // Wait a few seconds then reload the page
+                setTimeout(() => {
+                    window.location.reload();
+                }, 3000);
+            } else {
+                addLogEntry(data.error || 'Failed to restart system', 'ERROR');
+            }
+        })
+        .catch(e => {
+            addLogEntry(`Restart error: ${e}`, 'ERROR');
+        });
 }
 
 // ==================== CONFIG EXPORT/IMPORT ====================
