@@ -5636,11 +5636,11 @@ def broadcast_location_to_peers():
         'timestamp': datetime.utcnow().isoformat() + 'Z'
     }
 
-    # Update our own location
+    # Update our own location in peer_locations
     peer_locations[location_data['system_id']] = location_data
 
-    # Send to all connected BlueK9 peers
-    for peer_ip, peer_info in bluek9_peers.items():
+    # Send to all connected BlueK9 peers and request their location back
+    for peer_ip, peer_info in list(bluek9_peers.items()):
         try:
             url = f"http://{peer_ip}:5000/api/network/location"
             data = json.dumps(location_data).encode('utf-8')
@@ -5649,8 +5649,14 @@ def broadcast_location_to_peers():
             req.add_header('X-BlueK9-Location', 'true')
 
             with urllib.request.urlopen(req, timeout=2) as response:
-                pass  # Success
-        except Exception:
+                # Parse response which should include their location
+                resp_data = json.loads(response.read().decode('utf-8'))
+                if resp_data.get('location'):
+                    loc = resp_data['location']
+                    if loc.get('lat') and loc.get('lon'):
+                        peer_locations[loc['system_id']] = loc
+                        add_log(f"Received location from {loc.get('system_name', loc['system_id'])}", "DEBUG")
+        except Exception as e:
             pass  # Peer may be offline or unreachable
 
 
@@ -5688,6 +5694,12 @@ def warhammer_monitor_loop():
                             peer['is_bluek9'] = True
                             peer['system_id'] = result.get('system_id')
                             peer['system_name'] = result.get('system_name')
+
+                            # If they returned location in check-in, store it
+                            if result.get('location'):
+                                loc = result['location']
+                                if loc.get('lat') and loc.get('lon'):
+                                    peer_locations[loc['system_id']] = loc
                         else:
                             # Remove stale BlueK9 entry if check failed
                             if peer_ip in bluek9_peers:
@@ -5703,6 +5715,10 @@ def warhammer_monitor_loop():
 
             # Broadcast our location to BlueK9 peers
             broadcast_location_to_peers()
+
+            # Every 6th cycle (30 seconds), sync targets with peers
+            if check_cycle % 6 == 0 and bluek9_peers:
+                broadcast_targets_to_peers()
 
             # Emit updates to connected web clients
             socketio.emit('warhammer_update', {
@@ -5722,26 +5738,71 @@ def warhammer_monitor_loop():
     add_log("WARHAMMER network monitor stopped", "INFO")
 
 
+def get_our_location_data():
+    """Get our current location data for sharing."""
+    if current_location.get('lat') and current_location.get('lon'):
+        return {
+            'system_id': CONFIG.get('SYSTEM_ID', 'BK9-001'),
+            'system_name': CONFIG.get('SYSTEM_NAME', 'BlueK9'),
+            'lat': current_location['lat'],
+            'lon': current_location['lon'],
+            'timestamp': datetime.utcnow().isoformat() + 'Z'
+        }
+    return None
+
+
+def broadcast_targets_to_peers():
+    """Broadcast our targets to all BlueK9 peers."""
+    import urllib.request
+
+    if not targets:
+        return
+
+    targets_data = {
+        'system_id': CONFIG.get('SYSTEM_ID', 'BK9-001'),
+        'targets': list(targets.values())
+    }
+
+    for peer_ip in list(bluek9_peers.keys()):
+        try:
+            url = f"http://{peer_ip}:5000/api/network/targets"
+            data = json.dumps(targets_data).encode('utf-8')
+            req = urllib.request.Request(url, data=data, method='POST')
+            req.add_header('Content-Type', 'application/json')
+            req.add_header('X-BlueK9-Targets', 'true')
+            with urllib.request.urlopen(req, timeout=2) as response:
+                pass
+        except Exception:
+            pass
+
+
 # API endpoint for BlueK9 peer check-in (other BlueK9 instances call this)
 @app.route('/api/network/checkin')
 def network_checkin():
-    """Respond to BlueK9 peer check-in requests."""
+    """Respond to BlueK9 peer check-in requests with our info and location."""
     # No login required - this is for peer discovery
     if request.headers.get('X-BlueK9-Checkin') != 'true':
         return jsonify({'error': 'Invalid request'}), 400
 
-    return jsonify({
+    response_data = {
         'is_bluek9': True,
         'system_id': CONFIG.get('SYSTEM_ID', 'BK9-001'),
         'system_name': CONFIG.get('SYSTEM_NAME', 'BlueK9'),
         'version': 'v3.1.0'
-    })
+    }
+
+    # Include our location if available
+    location = get_our_location_data()
+    if location:
+        response_data['location'] = location
+
+    return jsonify(response_data)
 
 
 # API endpoint to receive location from other BlueK9 peers
 @app.route('/api/network/location', methods=['POST'])
 def receive_peer_location():
-    """Receive location update from a BlueK9 peer."""
+    """Receive location update from a BlueK9 peer and return our location."""
     global peer_locations
 
     if request.headers.get('X-BlueK9-Location') != 'true':
@@ -5751,6 +5812,7 @@ def receive_peer_location():
     if not data or not data.get('system_id'):
         return jsonify({'error': 'Invalid data'}), 400
 
+    # Store their location
     peer_locations[data['system_id']] = {
         'system_id': data['system_id'],
         'system_name': data.get('system_name', data['system_id']),
@@ -5762,7 +5824,59 @@ def receive_peer_location():
     # Emit to web clients
     socketio.emit('peer_location_update', peer_locations[data['system_id']])
 
-    return jsonify({'status': 'received'})
+    # Return our location in response
+    response = {'status': 'received'}
+    our_location = get_our_location_data()
+    if our_location:
+        response['location'] = our_location
+
+    return jsonify(response)
+
+
+# API endpoint to receive targets from other BlueK9 peers
+@app.route('/api/network/targets', methods=['POST'])
+def receive_peer_targets():
+    """Receive shared targets from a BlueK9 peer."""
+    global targets
+
+    if request.headers.get('X-BlueK9-Targets') != 'true':
+        return jsonify({'error': 'Invalid request'}), 400
+
+    data = request.json
+    if not data or not data.get('targets'):
+        return jsonify({'error': 'Invalid data'}), 400
+
+    source_system = data.get('system_id', 'Unknown')
+    new_targets = 0
+
+    for target in data.get('targets', []):
+        bd_addr = target.get('bd_address', '').upper()
+        if bd_addr and bd_addr not in targets:
+            # Add target with source info
+            targets[bd_addr] = {
+                'bd_address': bd_addr,
+                'alias': target.get('alias', ''),
+                'added_timestamp': datetime.utcnow().isoformat() + 'Z',
+                'source': source_system  # Track which system shared this
+            }
+            new_targets += 1
+
+    if new_targets > 0:
+        add_log(f"Received {new_targets} new target(s) from {source_system}", "INFO")
+        # Emit updated targets to web clients
+        socketio.emit('targets_update', list(targets.values()))
+
+    return jsonify({'status': 'received', 'new_targets': new_targets})
+
+
+# API endpoint to manually sync targets with peers
+@app.route('/api/network/sync_targets', methods=['POST'])
+@login_required
+def sync_targets_with_peers():
+    """Manually trigger target sync with all BlueK9 peers."""
+    broadcast_targets_to_peers()
+    add_log("Target sync broadcast sent to peers", "INFO")
+    return jsonify({'status': 'synced', 'peer_count': len(bluek9_peers)})
 
 
 @app.route('/api/network/status')
