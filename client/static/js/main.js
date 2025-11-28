@@ -5687,6 +5687,10 @@ let peerMarkers = {};
 let connectionLines = {};
 let showPeerLocations = true;
 let showPeerConnections = true;
+let showNetworkStats = false;
+let peerLatencyChart = null;
+let peerLatencyHistory = {};  // peer_ip -> [latency values]
+let networkStatsUpdateInterval = null;
 
 /**
  * Start WARHAMMER network monitoring
@@ -5769,6 +5773,11 @@ function handleWarhammerUpdate(data) {
         networkRoutes = data.routes;
         updateRouteList();
         document.getElementById('networkRouteCount').textContent = networkRoutes.length;
+    }
+
+    // Update network statistics if visible
+    if (showNetworkStats) {
+        updateNetworkStatsDisplay();
     }
 }
 
@@ -6224,6 +6233,252 @@ function syncTargetsWithPeers() {
             }
         })
         .catch(e => addLogEntry(`Target sync failed: ${e}`, 'ERROR'));
+}
+
+/**
+ * Toggle network statistics panel visibility
+ */
+function toggleNetworkStats() {
+    showNetworkStats = document.getElementById('toggleShowNetStats').checked;
+    const panel = document.getElementById('networkStatsPanel');
+
+    if (showNetworkStats) {
+        panel.classList.remove('hidden');
+        initPeerLatencyChart();
+        updateNetworkStatsDisplay();
+    } else {
+        panel.classList.add('hidden');
+    }
+}
+
+/**
+ * Initialize the peer latency chart
+ */
+function initPeerLatencyChart() {
+    const ctx = document.getElementById('peerLatencyChart');
+    if (!ctx) return;
+
+    if (peerLatencyChart) {
+        peerLatencyChart.destroy();
+    }
+
+    peerLatencyChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: [],
+            datasets: []
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: { duration: 300 },
+            scales: {
+                x: {
+                    display: false
+                },
+                y: {
+                    beginAtZero: true,
+                    grid: { color: 'rgba(0, 255, 255, 0.1)' },
+                    ticks: {
+                        color: '#00ffff',
+                        font: { size: 10, family: 'monospace' }
+                    }
+                }
+            },
+            plugins: {
+                legend: {
+                    display: true,
+                    position: 'bottom',
+                    labels: {
+                        color: '#00ffff',
+                        font: { size: 10, family: 'monospace' },
+                        boxWidth: 12
+                    }
+                }
+            }
+        }
+    });
+}
+
+/**
+ * Update network statistics display
+ */
+function updateNetworkStatsDisplay() {
+    if (!showNetworkStats) return;
+
+    // Count online BlueK9 nodes
+    const bluek9Nodes = networkPeers.filter(p => p.is_bluek9);
+    document.getElementById('netStatNodesOnline').textContent = bluek9Nodes.length;
+
+    // Calculate average latency
+    let totalLatency = 0;
+    let latencyCount = 0;
+    bluek9Nodes.forEach(peer => {
+        if (peer.latency && peer.latency !== '0s') {
+            const ms = parseLatency(peer.latency);
+            if (ms > 0) {
+                totalLatency += ms;
+                latencyCount++;
+            }
+        }
+    });
+    const avgLatency = latencyCount > 0 ? (totalLatency / latencyCount).toFixed(1) : '--';
+    document.getElementById('netStatAvgLatency').textContent = avgLatency !== '--' ? `${avgLatency}ms` : '--';
+
+    // Calculate data synced (sum of transfer)
+    let totalTransfer = 0;
+    bluek9Nodes.forEach(peer => {
+        if (peer.transfer_rx) totalTransfer += parseTransfer(peer.transfer_rx);
+        if (peer.transfer_tx) totalTransfer += parseTransfer(peer.transfer_tx);
+    });
+    document.getElementById('netStatDataSynced').textContent = formatBytes(totalTransfer);
+
+    // Update peer status list
+    updateNetStatsPeersList(bluek9Nodes);
+
+    // Update latency chart
+    updateLatencyChart(bluek9Nodes);
+}
+
+/**
+ * Parse latency string to milliseconds
+ */
+function parseLatency(latencyStr) {
+    if (!latencyStr || latencyStr === '0s' || latencyStr === '-') return 0;
+
+    // Handle formats like "57.443748ms", "1.5s", etc.
+    const msMatch = latencyStr.match(/([\d.]+)ms/);
+    if (msMatch) return parseFloat(msMatch[1]);
+
+    const sMatch = latencyStr.match(/([\d.]+)s/);
+    if (sMatch) return parseFloat(sMatch[1]) * 1000;
+
+    return 0;
+}
+
+/**
+ * Parse transfer string to bytes
+ */
+function parseTransfer(transferStr) {
+    if (!transferStr || transferStr === '0 B') return 0;
+
+    const match = transferStr.match(/([\d.]+)\s*(B|KiB|MiB|GiB|KB|MB|GB)/i);
+    if (!match) return 0;
+
+    const value = parseFloat(match[1]);
+    const unit = match[2].toUpperCase();
+
+    switch (unit) {
+        case 'B': return value;
+        case 'KIB': case 'KB': return value * 1024;
+        case 'MIB': case 'MB': return value * 1024 * 1024;
+        case 'GIB': case 'GB': return value * 1024 * 1024 * 1024;
+        default: return value;
+    }
+}
+
+/**
+ * Format bytes to human readable
+ */
+function formatBytes(bytes) {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
+/**
+ * Update the BlueK9 peers status list in stats panel
+ */
+function updateNetStatsPeersList(bluek9Nodes) {
+    const container = document.getElementById('netStatsPeersList');
+    if (!container) return;
+
+    if (bluek9Nodes.length === 0) {
+        container.innerHTML = '<div class="net-stats-peer-item no-peers">No BlueK9 nodes connected</div>';
+        return;
+    }
+
+    container.innerHTML = bluek9Nodes.map(peer => {
+        const latency = peer.latency && peer.latency !== '0s' ? peer.latency : '--';
+        const connType = peer.connection_type || 'Unknown';
+        const status = peer.connected ? 'online' : 'offline';
+        const name = peer.system_name || peer.name || peer.hostname;
+
+        return `
+            <div class="net-stats-peer-item">
+                <div class="net-stats-peer-status ${status}"></div>
+                <div class="net-stats-peer-info">
+                    <div class="net-stats-peer-name">${name}</div>
+                    <div class="net-stats-peer-details">
+                        <span class="peer-latency">${latency}</span>
+                        <span class="peer-conn-type">${connType}</span>
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+/**
+ * Update the latency chart with current peer data
+ */
+function updateLatencyChart(bluek9Nodes) {
+    if (!peerLatencyChart || !showNetworkStats) return;
+
+    const maxDataPoints = 30;  // Keep last 30 data points
+    const timestamp = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+    // Update history for each peer
+    bluek9Nodes.forEach(peer => {
+        const peerId = peer.system_id || peer.ip;
+        if (!peerLatencyHistory[peerId]) {
+            peerLatencyHistory[peerId] = [];
+        }
+
+        const latency = parseLatency(peer.latency);
+        peerLatencyHistory[peerId].push(latency);
+
+        // Keep only last N points
+        if (peerLatencyHistory[peerId].length > maxDataPoints) {
+            peerLatencyHistory[peerId].shift();
+        }
+    });
+
+    // Build chart datasets
+    const colors = ['#00ffff', '#ff6b6b', '#4ecdc4', '#ffe66d', '#95e1d3', '#f38181'];
+    const datasets = [];
+    let colorIdx = 0;
+
+    bluek9Nodes.forEach(peer => {
+        const peerId = peer.system_id || peer.ip;
+        const name = peer.system_name || peer.name || peerId;
+        const color = colors[colorIdx % colors.length];
+
+        datasets.push({
+            label: name,
+            data: peerLatencyHistory[peerId] || [],
+            borderColor: color,
+            backgroundColor: color + '20',
+            borderWidth: 2,
+            pointRadius: 0,
+            tension: 0.3,
+            fill: true
+        });
+        colorIdx++;
+    });
+
+    // Update labels (time points)
+    const labels = [];
+    const maxLen = Math.max(...Object.values(peerLatencyHistory).map(h => h.length), 1);
+    for (let i = 0; i < maxLen; i++) {
+        labels.push('');
+    }
+
+    peerLatencyChart.data.labels = labels;
+    peerLatencyChart.data.datasets = datasets;
+    peerLatencyChart.update('none');  // No animation for smooth updates
 }
 
 // Extend the section states to include network section

@@ -3646,6 +3646,174 @@ body.resizing-vertical * {
     text-shadow: 0 0 8px rgba(48, 209, 88, 0.6);
 }
 
+/* Network Statistics Panel */
+.network-stats-panel {
+    background: rgba(0, 20, 30, 0.6);
+    border: 1px solid var(--accent-primary);
+    border-radius: 4px;
+    margin-top: 10px;
+    overflow: hidden;
+}
+
+.network-stats-panel.hidden {
+    display: none;
+}
+
+.net-stats-header {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--accent-primary);
+    letter-spacing: 2px;
+    padding: 8px 10px;
+    background: linear-gradient(180deg, rgba(0, 212, 255, 0.2) 0%, rgba(0, 0, 0, 0.4) 100%);
+    border-bottom: 1px solid var(--accent-primary);
+    text-align: center;
+}
+
+.net-stats-summary {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 2px;
+    padding: 8px;
+    background: rgba(0, 0, 0, 0.3);
+}
+
+.net-stat-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 6px 4px;
+    background: rgba(0, 212, 255, 0.05);
+    border-radius: 3px;
+}
+
+.net-stat-label {
+    font-family: var(--font-mono);
+    font-size: 8px;
+    color: var(--text-muted);
+    letter-spacing: 1px;
+    margin-bottom: 2px;
+}
+
+.net-stat-value {
+    font-family: var(--font-mono);
+    font-size: 14px;
+    font-weight: bold;
+    color: var(--accent-primary);
+    text-shadow: 0 0 10px rgba(0, 212, 255, 0.5);
+}
+
+.net-stats-chart-container {
+    padding: 10px;
+    background: rgba(0, 0, 0, 0.2);
+    border-top: 1px solid rgba(0, 212, 255, 0.2);
+}
+
+.net-stats-chart-title {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--text-muted);
+    letter-spacing: 1px;
+    margin-bottom: 8px;
+    text-align: center;
+}
+
+#peerLatencyChart {
+    max-height: 100px;
+}
+
+.net-stats-peers {
+    border-top: 1px solid rgba(0, 212, 255, 0.2);
+}
+
+.net-stats-peers-header {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--accent-primary);
+    letter-spacing: 1px;
+    padding: 6px 10px;
+    background: rgba(0, 0, 0, 0.3);
+}
+
+.net-stats-peers-list {
+    max-height: 150px;
+    overflow-y: auto;
+}
+
+.net-stats-peer-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border-bottom: 1px solid rgba(0, 212, 255, 0.1);
+}
+
+.net-stats-peer-item:last-child {
+    border-bottom: none;
+}
+
+.net-stats-peer-item.no-peers {
+    color: var(--text-muted);
+    font-style: italic;
+    font-size: 11px;
+    justify-content: center;
+    padding: 15px;
+}
+
+.net-stats-peer-status {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.net-stats-peer-status.online {
+    background: var(--accent-success);
+    box-shadow: 0 0 10px rgba(48, 209, 88, 0.8);
+    animation: pulse-dot 2s ease-in-out infinite;
+}
+
+.net-stats-peer-status.offline {
+    background: var(--accent-danger);
+    box-shadow: 0 0 8px rgba(255, 69, 58, 0.6);
+}
+
+.net-stats-peer-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.net-stats-peer-name {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text-primary);
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.net-stats-peer-details {
+    display: flex;
+    gap: 10px;
+    margin-top: 2px;
+}
+
+.net-stats-peer-details span {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-muted);
+}
+
+.net-stats-peer-details .peer-latency {
+    color: var(--accent-primary);
+}
+
+.net-stats-peer-details .peer-conn-type {
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
 /* Peer List */
 .network-peer-list {
     background: rgba(0, 20, 30, 0.4);
