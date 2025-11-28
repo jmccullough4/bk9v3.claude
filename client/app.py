@@ -5454,117 +5454,316 @@ def clear_ubertooth_data():
 
 # ==================== WARHAMMER NETWORK (MESH NETWORK) ====================
 
-def warhammer_api_request(endpoint, method='GET', data=None):
-    """Make a request to the WARHAMMER network API."""
+# BlueK9 peer discovery - tracks which peers are running BlueK9
+bluek9_peers = {}  # peer_ip -> {system_id, system_name, last_checkin, location}
+
+
+def parse_netbird_status():
+    """Parse netbird status -d output to get peer information."""
+    global warhammer_peers
+
+    try:
+        result = subprocess.run(
+            ['netbird', 'status', '-d'],
+            capture_output=True, text=True, timeout=10
+        )
+
+        if result.returncode != 0:
+            add_log(f"netbird status failed: {result.stderr}", "WARNING")
+            return []
+
+        output = result.stdout
+        peers = []
+        current_peer = None
+        our_ip = None
+
+        lines = output.split('\n')
+        for line in lines:
+            line = line.strip()
+
+            # Get our NetBird IP
+            if line.startswith('NetBird IP:'):
+                our_ip = line.split(':', 1)[1].strip().split('/')[0]
+
+            # Detect peer block start (hostname followed by colon at start of line)
+            if line and not line.startswith(' ') and ':' in line and not any(
+                line.startswith(x) for x in ['Daemon', 'CLI', 'Management', 'Signal',
+                'Relays', 'Nameservers', 'FQDN', 'NetBird', 'Interface', 'Quantum',
+                'Routes', 'Peer changes', 'Peers count', 'Peers']
+            ):
+                # Save previous peer if exists
+                if current_peer and current_peer.get('ip'):
+                    peers.append(current_peer)
+
+                # Start new peer
+                hostname = line.rstrip(':')
+                current_peer = {
+                    'id': hostname,
+                    'hostname': hostname,
+                    'name': hostname,
+                    'ip': '',
+                    'connected': False,
+                    'connection_type': '',
+                    'latency': '',
+                    'last_handshake': '',
+                    'transfer_rx': '',
+                    'transfer_tx': '',
+                    'is_bluek9': False
+                }
+
+            elif current_peer:
+                # Parse peer details
+                if 'NetBird IP:' in line:
+                    current_peer['ip'] = line.split(':', 1)[1].strip()
+                elif 'Status:' in line:
+                    status = line.split(':', 1)[1].strip().lower()
+                    current_peer['connected'] = status == 'connected'
+                elif 'Connection type:' in line:
+                    current_peer['connection_type'] = line.split(':', 1)[1].strip()
+                elif 'Latency:' in line:
+                    current_peer['latency'] = line.split(':', 1)[1].strip()
+                elif 'Last Wireguard handshake:' in line:
+                    current_peer['last_handshake'] = line.split(':', 1)[1].strip()
+                elif 'Transfer status' in line:
+                    # Parse "Transfer status (received/sent) 1.2 MB/3.4 MB"
+                    match = re.search(r'\(received/sent\)\s*(.+)/(.+)', line)
+                    if match:
+                        current_peer['transfer_rx'] = match.group(1).strip()
+                        current_peer['transfer_tx'] = match.group(2).strip()
+
+        # Don't forget the last peer
+        if current_peer and current_peer.get('ip'):
+            peers.append(current_peer)
+
+        # Update global state
+        warhammer_peers = {}
+        for peer in peers:
+            peer_id = peer['hostname']
+            warhammer_peers[peer_id] = peer
+
+            # Check if this peer is a known BlueK9 instance
+            peer_ip = peer['ip']
+            if peer_ip in bluek9_peers:
+                peer['is_bluek9'] = True
+                peer['system_id'] = bluek9_peers[peer_ip].get('system_id')
+                peer['system_name'] = bluek9_peers[peer_ip].get('system_name')
+
+        return peers
+
+    except subprocess.TimeoutExpired:
+        add_log("netbird status timeout", "WARNING")
+        return []
+    except FileNotFoundError:
+        add_log("netbird command not found", "WARNING")
+        return []
+    except Exception as e:
+        add_log(f"netbird status parse error: {e}", "WARNING")
+        return []
+
+
+def get_netbird_routes():
+    """Get routes from netbird status."""
+    global warhammer_routes
+
+    try:
+        result = subprocess.run(
+            ['netbird', 'routes', 'list'],
+            capture_output=True, text=True, timeout=10
+        )
+
+        routes = []
+        if result.returncode == 0:
+            # Parse route list output
+            lines = result.stdout.strip().split('\n')
+            for line in lines:
+                if line and not line.startswith('ID') and not line.startswith('-'):
+                    parts = line.split()
+                    if len(parts) >= 3:
+                        route = {
+                            'id': parts[0] if len(parts) > 0 else '',
+                            'network': parts[1] if len(parts) > 1 else '',
+                            'description': ' '.join(parts[2:]) if len(parts) > 2 else '',
+                            'enabled': True,
+                            'persistent': 'persistent' in line.lower()
+                        }
+                        routes.append(route)
+
+        warhammer_routes = {r['id']: r for r in routes}
+        return routes
+
+    except Exception as e:
+        add_log(f"netbird routes error: {e}", "WARNING")
+        return []
+
+
+def check_bluek9_peer(peer_ip, timeout=2):
+    """Check if a peer is running BlueK9 by attempting to connect."""
     import urllib.request
     import urllib.error
 
-    url = f"{WARHAMMER_CONFIG['API_BASE']}{endpoint}"
-    headers = {
-        'Authorization': f"Token {WARHAMMER_CONFIG['API_TOKEN']}",
-        'Content-Type': 'application/json',
-        'Accept': 'application/json'
+    try:
+        url = f"http://{peer_ip}:5000/api/network/checkin"
+        req = urllib.request.Request(url, method='GET')
+        req.add_header('X-BlueK9-Checkin', 'true')
+
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            data = json.loads(response.read().decode('utf-8'))
+            if data.get('is_bluek9'):
+                return {
+                    'is_bluek9': True,
+                    'system_id': data.get('system_id'),
+                    'system_name': data.get('system_name'),
+                    'version': data.get('version')
+                }
+    except Exception:
+        pass
+
+    return {'is_bluek9': False}
+
+
+def broadcast_location_to_peers():
+    """Broadcast our location to all known BlueK9 peers."""
+    import urllib.request
+    import urllib.error
+
+    if not current_location.get('lat') or not current_location.get('lon'):
+        return
+
+    location_data = {
+        'system_id': CONFIG.get('SYSTEM_ID', 'BK9-001'),
+        'system_name': CONFIG.get('SYSTEM_NAME', 'BlueK9'),
+        'lat': current_location['lat'],
+        'lon': current_location['lon'],
+        'timestamp': datetime.utcnow().isoformat() + 'Z'
     }
 
-    try:
-        if data:
-            data = json.dumps(data).encode('utf-8')
-        req = urllib.request.Request(url, data=data, headers=headers, method=method)
-        with urllib.request.urlopen(req, timeout=10) as response:
-            return json.loads(response.read().decode('utf-8'))
-    except urllib.error.HTTPError as e:
-        error_body = e.read().decode('utf-8') if e.fp else str(e)
-        add_log(f"WARHAMMER API error {e.code}: {error_body}", "ERROR")
-        return None
-    except Exception as e:
-        add_log(f"WARHAMMER API request failed: {e}", "ERROR")
-        return None
+    # Update our own location
+    peer_locations[location_data['system_id']] = location_data
 
+    # Send to all connected BlueK9 peers
+    for peer_ip, peer_info in bluek9_peers.items():
+        try:
+            url = f"http://{peer_ip}:5000/api/network/location"
+            data = json.dumps(location_data).encode('utf-8')
+            req = urllib.request.Request(url, data=data, method='POST')
+            req.add_header('Content-Type', 'application/json')
+            req.add_header('X-BlueK9-Location', 'true')
 
-def get_warhammer_peers():
-    """Get list of peers from WARHAMMER network."""
-    global warhammer_peers
-    peers_data = warhammer_api_request('/peers')
-    if peers_data:
-        warhammer_peers = {}
-        for peer in peers_data:
-            peer_id = peer.get('id')
-            warhammer_peers[peer_id] = {
-                'id': peer_id,
-                'name': peer.get('name', 'Unknown'),
-                'ip': peer.get('ip', ''),
-                'dns_label': peer.get('dns_label', ''),
-                'connected': peer.get('connected', False),
-                'last_seen': peer.get('last_seen'),
-                'os': peer.get('os', ''),
-                'version': peer.get('version', ''),
-                'groups': [g.get('name', '') for g in peer.get('groups', [])],
-                'hostname': peer.get('hostname', peer.get('name', 'Unknown'))
-            }
-        return list(warhammer_peers.values())
-    return []
-
-
-def get_warhammer_routes():
-    """Get list of network routes from WARHAMMER network."""
-    global warhammer_routes
-    routes_data = warhammer_api_request('/routes')
-    if routes_data:
-        warhammer_routes = {}
-        for route in routes_data:
-            route_id = route.get('id')
-            warhammer_routes[route_id] = {
-                'id': route_id,
-                'network': route.get('network', ''),
-                'network_id': route.get('network_id', ''),
-                'description': route.get('description', ''),
-                'network_type': route.get('network_type', ''),
-                'peer': route.get('peer', ''),
-                'peer_groups': route.get('peer_groups', []),
-                'masquerade': route.get('masquerade', False),
-                'metric': route.get('metric', 0),
-                'enabled': route.get('enabled', True),
-                'persistent': 'persistent' in (route.get('description', '') or '').lower()
-            }
-        return list(warhammer_routes.values())
-    return []
+            with urllib.request.urlopen(req, timeout=2) as response:
+                pass  # Success
+        except Exception:
+            pass  # Peer may be offline or unreachable
 
 
 def warhammer_monitor_loop():
     """Background loop to monitor WARHAMMER network status."""
-    global warhammer_running, warhammer_peers, peer_locations, current_location
+    global warhammer_running, warhammer_peers, peer_locations, bluek9_peers
 
     add_log("WARHAMMER network monitor started", "INFO")
+    check_cycle = 0
 
     while warhammer_running:
         try:
-            # Update peer list
-            peers = get_warhammer_peers()
+            # Get peer list from netbird
+            peers = parse_netbird_status()
 
-            # Broadcast our location to all connected peers
-            if current_location.get('lat') and current_location.get('lon'):
-                our_location = {
-                    'system_id': CONFIG.get('SYSTEM_ID', 'BK9-001'),
-                    'system_name': CONFIG.get('SYSTEM_NAME', 'BlueK9'),
-                    'lat': current_location['lat'],
-                    'lon': current_location['lon'],
-                    'timestamp': datetime.utcnow().isoformat() + 'Z'
-                }
-                peer_locations[our_location['system_id']] = our_location
+            # Get routes
+            routes = get_netbird_routes()
 
-            # Emit updates to connected clients
+            # Every 3rd cycle, check for BlueK9 peers (less frequent to reduce load)
+            if check_cycle % 3 == 0:
+                for peer in peers:
+                    if peer.get('connected') and peer.get('ip'):
+                        peer_ip = peer['ip']
+
+                        # Check if peer is running BlueK9
+                        result = check_bluek9_peer(peer_ip)
+                        if result.get('is_bluek9'):
+                            bluek9_peers[peer_ip] = {
+                                'system_id': result.get('system_id'),
+                                'system_name': result.get('system_name'),
+                                'version': result.get('version'),
+                                'last_checkin': datetime.utcnow().isoformat() + 'Z',
+                                'ip': peer_ip
+                            }
+                            peer['is_bluek9'] = True
+                            peer['system_id'] = result.get('system_id')
+                            peer['system_name'] = result.get('system_name')
+                        else:
+                            # Remove stale BlueK9 entry if check failed
+                            if peer_ip in bluek9_peers:
+                                # Keep for a grace period before removing
+                                last_checkin = bluek9_peers[peer_ip].get('last_checkin', '')
+                                if last_checkin:
+                                    try:
+                                        last_dt = datetime.fromisoformat(last_checkin.replace('Z', '+00:00'))
+                                        if (datetime.now(last_dt.tzinfo) - last_dt).total_seconds() > 60:
+                                            del bluek9_peers[peer_ip]
+                                    except Exception:
+                                        pass
+
+            # Broadcast our location to BlueK9 peers
+            broadcast_location_to_peers()
+
+            # Emit updates to connected web clients
             socketio.emit('warhammer_update', {
                 'peers': peers,
                 'peer_locations': list(peer_locations.values()),
-                'routes': list(warhammer_routes.values())
+                'routes': routes,
+                'bluek9_count': sum(1 for p in peers if p.get('is_bluek9'))
             })
+
+            check_cycle += 1
 
         except Exception as e:
             add_log(f"WARHAMMER monitor error: {e}", "WARNING")
 
-        time.sleep(10)  # Update every 10 seconds
+        time.sleep(5)  # Update every 5 seconds
 
     add_log("WARHAMMER network monitor stopped", "INFO")
+
+
+# API endpoint for BlueK9 peer check-in (other BlueK9 instances call this)
+@app.route('/api/network/checkin')
+def network_checkin():
+    """Respond to BlueK9 peer check-in requests."""
+    # No login required - this is for peer discovery
+    if request.headers.get('X-BlueK9-Checkin') != 'true':
+        return jsonify({'error': 'Invalid request'}), 400
+
+    return jsonify({
+        'is_bluek9': True,
+        'system_id': CONFIG.get('SYSTEM_ID', 'BK9-001'),
+        'system_name': CONFIG.get('SYSTEM_NAME', 'BlueK9'),
+        'version': 'v3.1.0'
+    })
+
+
+# API endpoint to receive location from other BlueK9 peers
+@app.route('/api/network/location', methods=['POST'])
+def receive_peer_location():
+    """Receive location update from a BlueK9 peer."""
+    global peer_locations
+
+    if request.headers.get('X-BlueK9-Location') != 'true':
+        return jsonify({'error': 'Invalid request'}), 400
+
+    data = request.json
+    if not data or not data.get('system_id'):
+        return jsonify({'error': 'Invalid data'}), 400
+
+    peer_locations[data['system_id']] = {
+        'system_id': data['system_id'],
+        'system_name': data.get('system_name', data['system_id']),
+        'lat': data.get('lat'),
+        'lon': data.get('lon'),
+        'timestamp': datetime.utcnow().isoformat() + 'Z'
+    }
+
+    # Emit to web clients
+    socketio.emit('peer_location_update', peer_locations[data['system_id']])
+
+    return jsonify({'status': 'received'})
 
 
 @app.route('/api/network/status')
@@ -5576,6 +5775,7 @@ def get_network_status():
         'running': warhammer_running,
         'peer_count': len(warhammer_peers),
         'connected_peers': sum(1 for p in warhammer_peers.values() if p.get('connected')),
+        'bluek9_peers': sum(1 for p in warhammer_peers.values() if p.get('is_bluek9')),
         'route_count': len(warhammer_routes)
     })
 
@@ -5584,10 +5784,11 @@ def get_network_status():
 @login_required
 def get_network_peers():
     """Get list of WARHAMMER network peers."""
-    peers = get_warhammer_peers()
+    peers = parse_netbird_status()
     return jsonify({
         'peers': peers,
-        'peer_locations': list(peer_locations.values())
+        'peer_locations': list(peer_locations.values()),
+        'bluek9_peers': list(bluek9_peers.values())
     })
 
 
@@ -5595,7 +5796,7 @@ def get_network_peers():
 @login_required
 def get_network_routes():
     """Get list of WARHAMMER network routes."""
-    routes = get_warhammer_routes()
+    routes = get_netbird_routes()
     return jsonify({'routes': routes})
 
 

@@ -3641,6 +3641,11 @@ body.resizing-vertical * {
     color: var(--accent-success);
 }
 
+.network-status-bar .status-value.network-bluek9 {
+    color: var(--accent-success);
+    text-shadow: 0 0 8px rgba(48, 209, 88, 0.6);
+}
+
 /* Peer List */
 .network-peer-list {
     background: rgba(0, 20, 30, 0.4);
@@ -3719,6 +3724,67 @@ body.resizing-vertical * {
     font-family: var(--font-mono);
     font-size: 9px;
     color: var(--text-muted);
+}
+
+.peer-details {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.peer-latency {
+    font-family: var(--font-mono);
+    font-size: 8px;
+    color: var(--accent-success);
+    padding: 1px 4px;
+    background: rgba(48, 209, 88, 0.15);
+    border-radius: 2px;
+}
+
+.peer-conn-type {
+    font-family: var(--font-mono);
+    font-size: 8px;
+    color: var(--accent-primary);
+    padding: 1px 4px;
+    background: rgba(0, 212, 255, 0.15);
+    border-radius: 2px;
+}
+
+.peer-bluek9-badge {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: 8px;
+    font-weight: bold;
+    padding: 1px 4px;
+    margin-left: 6px;
+    background: linear-gradient(135deg, var(--accent-success) 0%, #20a040 100%);
+    color: #000;
+    border-radius: 2px;
+    letter-spacing: 1px;
+    box-shadow: 0 0 6px rgba(48, 209, 88, 0.4);
+}
+
+.peer-item.bluek9 {
+    background: rgba(48, 209, 88, 0.05);
+    border-left: 2px solid var(--accent-success);
+}
+
+.peer-item.bluek9:hover {
+    background: rgba(48, 209, 88, 0.12);
+}
+
+.peer-status-dot.bluek9 {
+    background: var(--accent-success);
+    box-shadow: 0 0 10px rgba(48, 209, 88, 0.8);
+}
+
+.peer-item.network {
+    opacity: 0.7;
+}
+
+.peer-item.network:hover {
+    opacity: 1;
 }
 
 .peer-locate-btn {
