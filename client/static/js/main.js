@@ -6185,6 +6185,29 @@ function initNetworkWebSocket() {
         }
     });
     socket.on('cellular_update', handleCellularUpdate);
+
+    // Handle target updates from peers
+    socket.on('targets_update', (targetsData) => {
+        addLogEntry('Targets updated from peer', 'INFO');
+        // Refresh the targets list
+        loadTargets();
+    });
+}
+
+/**
+ * Manually sync targets with all BlueK9 peers
+ */
+function syncTargetsWithPeers() {
+    fetch('/api/network/sync_targets', { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+            if (data.status === 'synced') {
+                addLogEntry(`Targets synced with ${data.peer_count} peer(s)`, 'INFO');
+            } else {
+                addLogEntry(`Target sync failed: ${data.error}`, 'ERROR');
+            }
+        })
+        .catch(e => addLogEntry(`Target sync failed: ${e}`, 'ERROR'));
 }
 
 // Extend the section states to include network section
