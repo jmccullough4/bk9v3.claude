@@ -20,8 +20,8 @@ let currentMapStyle = 'dark';
 let breadcrumbMarkers = [];
 let currentTimezone = 'UTC';
 let contextMenuTarget = null;
-let manualTrackingBd = null;
-const commLines = {}; // bdAddress -> line layer info
+const commLines = {};
+const nameRetrievalActive = {};
 
 // Active operations tracking
 const activeOperations = new Map(); // id -> { type, label, bdAddress?, startTime, cancellable }
@@ -311,6 +311,15 @@ function initWebSocket() {
 
     socket.on('geo_ping', (data) => {
         handleGeoPing(data);
+    });
+
+    socket.on('ubertooth_update', (data) => {
+        // Update piconet count
+        const piconetCount = document.getElementById('ubertoothPiconetCount');
+        if (piconetCount && data.packet_count) {
+            // We'll refresh the full data periodically
+            refreshUbertoothData();
+        }
     });
 }
 
@@ -2744,16 +2753,6 @@ function clearUbertoothData() {
         });
 }
 
-// Handle real-time Ubertooth updates via WebSocket
-socket.on('ubertooth_update', (data) => {
-    // Update piconet count
-    const piconetCount = document.getElementById('ubertoothPiconetCount');
-    if (piconetCount && data.packet_count) {
-        // We'll refresh the full data periodically
-        refreshUbertoothData();
-    }
-});
-
 // ==================== GPS CONFIGURATION ====================
 
 function loadGpsConfig() {
@@ -3596,9 +3595,6 @@ function contextMenuAction(action) {
 
     hideContextMenu();
 }
-
-// Track continuous name retrieval state
-const nameRetrievalActive = {};
 
 function requestDeviceName(bdAddress) {
     // Start continuous name retrieval
@@ -5069,8 +5065,6 @@ function updateGeoButtonState(bdAddress, active) {
         hideCommLine(bdAddress);
     }
 }
-
-// Communication line visuals for active geo tracking
 
 function showCommLine(bdAddress) {
     const device = devices[bdAddress];
