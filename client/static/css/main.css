@@ -424,11 +424,13 @@ body {
 .map-container {
     flex: 1;
     position: relative;
+    z-index: 1;
 }
 
 #map {
     width: 100%;
     height: 100%;
+    z-index: 1;
 }
 
 .map-overlay-info {
@@ -2058,13 +2060,24 @@ body {
 
 /* Draggable Resize Handles */
 .resize-handle {
-    width: 6px;
+    width: 8px;
     background: var(--border-color);
     cursor: col-resize;
     flex-shrink: 0;
     position: relative;
-    z-index: 100;
+    z-index: 500;
     transition: background 0.2s;
+}
+
+/* Expand the clickable area beyond visible width */
+.resize-handle::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -6px;
+    right: -6px;
+    z-index: 501;
 }
 
 .resize-handle:hover,
@@ -2082,6 +2095,7 @@ body {
     height: 40px;
     background: rgba(255, 255, 255, 0.3);
     border-radius: 1px;
+    z-index: 502;
 }
 
 .resize-handle:hover::before,

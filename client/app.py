@@ -5424,7 +5424,7 @@ def export_logs():
 
         # Get targets list
         try:
-            c.execute('SELECT bd_address, notes, added_at FROM targets')
+            c.execute('SELECT bd_address, alias, notes, priority, created_at FROM targets')
             targets_list = [dict(row) for row in c.fetchall()]
         except Exception as e:
             add_log(f"Export: targets query failed: {e}", "WARNING")
