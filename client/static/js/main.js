@@ -294,56 +294,52 @@ function handleNameResult(data) {
 /**
  * Initialize modern statistics visualization
  */
-// Activity tracking for real-time display
-let activityHistory = [];
-const MAX_ACTIVITY_POINTS = 60;
+// RSSI history for real-time display
+let rssiHistory = [];
+const MAX_RSSI_POINTS = 40;
 let signalPulseAnimation = null;
-let activityChart = null;
-let lastDetectionCount = 0;
-let detectionEvents = [];  // Track recent detection events for spikes
+let rssiChart = null;
+let lastDeviceCount = 0;
 
 function initChart() {
     const ctx = document.getElementById('deviceTypeChart').getContext('2d');
 
-    // Create gradients
-    const activityGradient = ctx.createLinearGradient(0, 0, 0, 80);
-    activityGradient.addColorStop(0, 'rgba(0, 212, 255, 0.6)');
-    activityGradient.addColorStop(0.5, 'rgba(0, 212, 255, 0.2)');
-    activityGradient.addColorStop(1, 'rgba(0, 212, 255, 0)');
+    // Create gradient for RSSI area
+    const rssiGradient = ctx.createLinearGradient(0, 0, 0, 80);
+    rssiGradient.addColorStop(0, 'rgba(0, 212, 255, 0.5)');
+    rssiGradient.addColorStop(1, 'rgba(0, 212, 255, 0)');
 
-    // Initialize with baseline activity (small random values to show it's alive)
-    for (let i = 0; i < MAX_ACTIVITY_POINTS; i++) {
-        activityHistory.push({
-            activity: Math.random() * 2,  // Small baseline noise
-            rssi: -80 + Math.random() * 10,
-            detections: 0
-        });
+    // Initialize with null values (no data yet)
+    for (let i = 0; i < MAX_RSSI_POINTS; i++) {
+        rssiHistory.push({ avgRssi: null, maxRssi: null, deviceCount: 0 });
     }
 
-    activityChart = new Chart(ctx, {
+    rssiChart = new Chart(ctx, {
         type: 'line',
         data: {
-            labels: Array(MAX_ACTIVITY_POINTS).fill(''),
+            labels: Array(MAX_RSSI_POINTS).fill(''),
             datasets: [
                 {
-                    label: 'Signal Activity',
-                    data: activityHistory.map(d => d.activity),
+                    label: 'Best RSSI',
+                    data: rssiHistory.map(d => d.maxRssi),
+                    borderColor: 'rgba(48, 209, 88, 1)',
+                    backgroundColor: 'transparent',
+                    fill: false,
+                    tension: 0.3,
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    spanGaps: true
+                },
+                {
+                    label: 'Avg RSSI',
+                    data: rssiHistory.map(d => d.avgRssi),
                     borderColor: 'rgba(0, 212, 255, 1)',
-                    backgroundColor: activityGradient,
+                    backgroundColor: rssiGradient,
                     fill: true,
                     tension: 0.3,
                     borderWidth: 2,
-                    pointRadius: 0
-                },
-                {
-                    label: 'Detection Events',
-                    data: activityHistory.map(d => d.detections * 5),  // Scale up for visibility
-                    borderColor: 'rgba(255, 59, 48, 0.9)',
-                    backgroundColor: 'rgba(255, 59, 48, 0.3)',
-                    fill: true,
-                    tension: 0.1,
-                    borderWidth: 1,
-                    pointRadius: 0
+                    pointRadius: 0,
+                    spanGaps: true
                 }
             ]
         },
@@ -351,8 +347,7 @@ function initChart() {
             responsive: true,
             maintainAspectRatio: false,
             animation: {
-                duration: 150,
-                easing: 'linear'
+                duration: 300
             },
             interaction: {
                 mode: 'index',
@@ -361,15 +356,36 @@ function initChart() {
             scales: {
                 x: { display: false },
                 y: {
-                    display: false,
-                    min: 0,
-                    max: 20,
-                    beginAtZero: true
+                    display: true,
+                    position: 'right',
+                    min: -100,
+                    max: -30,
+                    reverse: false,
+                    grid: {
+                        color: 'rgba(0, 212, 255, 0.1)',
+                        drawBorder: false
+                    },
+                    ticks: {
+                        color: '#484f58',
+                        font: { family: 'Share Tech Mono', size: 8 },
+                        maxTicksLimit: 3,
+                        callback: function(value) { return value + ' dBm'; }
+                    }
                 }
             },
             plugins: {
                 legend: { display: false },
-                tooltip: { enabled: false }
+                tooltip: {
+                    enabled: true,
+                    backgroundColor: 'rgba(10, 14, 20, 0.9)',
+                    borderColor: 'rgba(0, 212, 255, 0.5)',
+                    borderWidth: 1,
+                    callbacks: {
+                        label: function(context) {
+                            return context.dataset.label + ': ' + context.parsed.y + ' dBm';
+                        }
+                    }
+                }
             }
         }
     });
@@ -377,8 +393,8 @@ function initChart() {
     // Initialize signal pulse canvas
     initSignalPulse();
 
-    // Update activity visualization every 500ms for smooth real-time feel
-    setInterval(updateActivityVisualization, 500);
+    // Update RSSI chart every second
+    setInterval(updateRssiChart, 1000);
 
     // Load version info
     loadVersionInfo();
@@ -408,10 +424,22 @@ function initSignalPulse() {
         const centerY = 30;
         const maxRadius = 25;
 
+        // Get current best RSSI for color intensity
+        let bestRssi = -100;
+        Object.values(devices).forEach(d => {
+            if (d.rssi && d.rssi !== '--') {
+                const rssi = parseInt(d.rssi);
+                if (rssi > bestRssi) bestRssi = rssi;
+            }
+        });
+
+        // Calculate intensity based on RSSI (-30 = strongest, -100 = weakest)
+        const intensity = Math.max(0, Math.min(1, (bestRssi + 100) / 70));
+
         // Draw outer ring
         ctx.beginPath();
         ctx.arc(centerX, centerY, maxRadius, 0, Math.PI * 2);
-        ctx.strokeStyle = 'rgba(0, 212, 255, 0.2)';
+        ctx.strokeStyle = `rgba(0, 212, 255, ${0.2 + intensity * 0.3})`;
         ctx.lineWidth = 1;
         ctx.stroke();
 
@@ -420,7 +448,7 @@ function initSignalPulse() {
             const offsetRadius = (pulseRadius + (i * 10)) % 30;
             const offsetOpacity = Math.max(0, 1 - (offsetRadius / 30));
 
-            if (offsetOpacity > 0) {
+            if (offsetOpacity > 0 && scanning) {
                 ctx.beginPath();
                 ctx.arc(centerX, centerY, offsetRadius, 0, Math.PI * 2);
                 ctx.strokeStyle = `rgba(0, 212, 255, ${offsetOpacity * 0.5})`;
@@ -429,14 +457,13 @@ function initSignalPulse() {
             }
         }
 
-        // Draw center dot with glow - color based on recent activity
-        const recentActivity = activityHistory.slice(-5).reduce((sum, d) => sum + d.detections, 0);
-        const isActive = recentActivity > 0 || scanning;
-        const glowColor = recentActivity > 0 ? 'rgba(255, 59, 48, ' : 'rgba(0, 212, 255, ';
+        // Draw center dot with glow - brightness based on signal strength
+        const isActive = scanning || Object.keys(devices).length > 0;
+        const glowColor = intensity > 0.5 ? 'rgba(48, 209, 88, ' : 'rgba(0, 212, 255, ';
 
         const glowGradient = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, 8);
         glowGradient.addColorStop(0, isActive ? glowColor + '1)' : 'rgba(100, 100, 100, 0.5)');
-        glowGradient.addColorStop(0.5, isActive ? glowColor + '0.5)' : 'rgba(100, 100, 100, 0.2)');
+        glowGradient.addColorStop(0.5, isActive ? glowColor + (0.3 + intensity * 0.4) + ')' : 'rgba(100, 100, 100, 0.2)');
         glowGradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
 
         ctx.beginPath();
@@ -444,9 +471,15 @@ function initSignalPulse() {
         ctx.fillStyle = glowGradient;
         ctx.fill();
 
+        // Center dot color based on signal strength
+        let dotColor = '#666';
+        if (scanning) {
+            dotColor = intensity > 0.6 ? '#30d158' : '#00d4ff';
+        }
+
         ctx.beginPath();
         ctx.arc(centerX, centerY, 4, 0, Math.PI * 2);
-        ctx.fillStyle = isActive ? (recentActivity > 0 ? '#ff3b30' : '#00d4ff') : '#666';
+        ctx.fillStyle = dotColor;
         ctx.fill();
 
         // Animate pulse only when scanning
@@ -464,61 +497,43 @@ function initSignalPulse() {
 }
 
 /**
- * Update activity visualization - called frequently for smooth updates
+ * Update RSSI chart with real signal strength data
  */
-function updateActivityVisualization() {
-    const currentCount = Object.keys(devices).length;
-    const newDetections = Math.max(0, currentCount - lastDetectionCount);
+function updateRssiChart() {
+    let totalRssi = 0;
+    let rssiCount = 0;
+    let maxRssi = -100;
 
-    // Calculate activity level based on recent events
-    let activityLevel = 1 + Math.random() * 1.5;  // Base noise
-
-    if (scanning) {
-        activityLevel += 2;  // Boost when scanning
-    }
-
-    if (newDetections > 0) {
-        activityLevel += newDetections * 4;  // Big spike for new detections
-        detectionEvents.push({ time: Date.now(), count: newDetections });
-    }
-
-    // Calculate average RSSI activity
-    let rssiActivity = 0;
-    const recentDevices = Object.values(devices).slice(-10);
-    recentDevices.forEach(d => {
+    // Calculate current RSSI stats from all devices
+    Object.values(devices).forEach(d => {
         if (d.rssi && d.rssi !== '--') {
-            // Convert RSSI to positive activity value
-            rssiActivity += Math.max(0, (100 + parseInt(d.rssi)) / 20);
+            const rssi = parseInt(d.rssi);
+            totalRssi += rssi;
+            rssiCount++;
+            if (rssi > maxRssi) maxRssi = rssi;
         }
     });
 
-    if (rssiActivity > 0) {
-        activityLevel += rssiActivity / recentDevices.length;
-    }
-
-    // Clean old detection events (older than 5 seconds)
-    const now = Date.now();
-    detectionEvents = detectionEvents.filter(e => now - e.time < 5000);
+    const avgRssi = rssiCount > 0 ? Math.round(totalRssi / rssiCount) : null;
+    const bestRssi = rssiCount > 0 ? maxRssi : null;
 
     // Add new data point
-    activityHistory.push({
-        activity: Math.min(18, activityLevel),
-        rssi: rssiActivity,
-        detections: newDetections
+    rssiHistory.push({
+        avgRssi: avgRssi,
+        maxRssi: bestRssi,
+        deviceCount: Object.keys(devices).length
     });
 
     // Keep only last N points
-    if (activityHistory.length > MAX_ACTIVITY_POINTS) {
-        activityHistory.shift();
+    if (rssiHistory.length > MAX_RSSI_POINTS) {
+        rssiHistory.shift();
     }
 
-    lastDetectionCount = currentCount;
-
     // Update chart
-    if (activityChart) {
-        activityChart.data.datasets[0].data = activityHistory.map(d => d.activity);
-        activityChart.data.datasets[1].data = activityHistory.map(d => d.detections * 5);
-        activityChart.update('none');
+    if (rssiChart) {
+        rssiChart.data.datasets[0].data = rssiHistory.map(d => d.maxRssi);
+        rssiChart.data.datasets[1].data = rssiHistory.map(d => d.avgRssi);
+        rssiChart.update('none');
     }
 }
 
@@ -947,10 +962,6 @@ function updateStats() {
             manufacturerCounts[mfr] = (manufacturerCounts[mfr] || 0) + 1;
         }
     });
-
-    // Update chart
-    deviceTypeChart.data.datasets[0].data = [classic, ble, targetCount];
-    deviceTypeChart.update();
 
     // Update stat boxes
     const totalDevices = Object.keys(devices).length;
