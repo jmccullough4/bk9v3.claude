@@ -3270,10 +3270,17 @@ def active_geo_track(bd_address, interface='hci0', methods=None):
 
                 # Add reading to direction history for direction finding
                 if current_location['lat'] and current_location['lon'] and rssi:
-                    add_direction_reading(bd_address, current_location['lat'], current_location['lon'], rssi)
+                    try:
+                        add_direction_reading(bd_address, current_location['lat'], current_location['lon'], rssi)
+                    except Exception as dir_err:
+                        add_log(f"Direction history error: {dir_err}", "DEBUG")
 
                 # Calculate direction to target
-                direction = calculate_direction_to_target(bd_address)
+                direction = None
+                try:
+                    direction = calculate_direction_to_target(bd_address)
+                except Exception as dir_err:
+                    add_log(f"Direction calculation error: {dir_err}", "DEBUG")
 
                 # Emit real-time ping data to UI with direction info
                 socketio.emit('geo_ping', {
@@ -4493,6 +4500,7 @@ def restart_system():
             import os
             import sys
             import subprocess
+            import signal
 
             time.sleep(2)  # Brief delay to allow response to be sent
 
@@ -4504,16 +4512,55 @@ def restart_system():
             add_log(f"Executing restart: {python} {script}", "INFO")
 
             try:
-                # Start a new process in the background
-                # Use nohup and redirect output to ensure it survives parent exit
-                restart_cmd = f'cd {cwd} && nohup {python} {script} > /dev/null 2>&1 &'
-                subprocess.Popen(restart_cmd, shell=True, start_new_session=True)
+                # Create a restart script that waits for this process to die
+                # then starts the new one
+                restart_script = f'''
+import time
+import os
+import subprocess
+import sys
 
-                # Give the new process time to start
-                time.sleep(1)
+# Wait for the old process to exit (check if port is free)
+import socket
+max_wait = 30
+for i in range(max_wait):
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(1)
+        result = s.connect_ex(('127.0.0.1', 5000))
+        s.close()
+        if result != 0:
+            # Port is free
+            break
+    except:
+        break
+    time.sleep(1)
 
-                # Exit this process - the new one is now running
-                add_log("Old process exiting, new process started", "INFO")
+# Small additional delay to ensure cleanup
+time.sleep(1)
+
+# Start the new process
+os.chdir("{cwd}")
+subprocess.Popen(["{python}", "{script}"])
+'''
+                # Write restart script to temp file
+                restart_script_path = '/tmp/bluek9_restart.py'
+                with open(restart_script_path, 'w') as f:
+                    f.write(restart_script)
+
+                # Launch the restart script in background
+                subprocess.Popen(
+                    [python, restart_script_path],
+                    start_new_session=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+
+                # Give it a moment to start
+                time.sleep(0.5)
+
+                # Now exit this process - the restart script will wait and start a new one
+                add_log("Old process exiting, restart script will start new instance", "INFO")
                 os._exit(0)
 
             except Exception as e:
