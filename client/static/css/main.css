@@ -1224,12 +1224,12 @@ body {
     border-radius: 1px;
 }
 
-.legend-activity .legend-line {
-    background: linear-gradient(90deg, rgba(0, 212, 255, 0.5), rgba(0, 212, 255, 1));
+.legend-best .legend-line {
+    background: linear-gradient(90deg, rgba(48, 209, 88, 0.5), rgba(48, 209, 88, 1));
 }
 
-.legend-detect .legend-line {
-    background: linear-gradient(90deg, rgba(255, 59, 48, 0.5), rgba(255, 59, 48, 1));
+.legend-avg .legend-line {
+    background: linear-gradient(90deg, rgba(0, 212, 255, 0.5), rgba(0, 212, 255, 1));
 }
 
 .stats-footer {
