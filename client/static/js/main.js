@@ -4178,23 +4178,47 @@ function applyUpdates() {
                     changesHtml = data.changes.map(c => `<div class="change-item applied">${c}</div>`).join('');
                 }
 
-                details.innerHTML = `
-                    <div class="update-success">
-                        <div class="success-message">Update applied successfully!</div>
-                        <div class="update-info-item">
-                            <span class="update-label">NEW COMMIT:</span>
-                            <span class="update-value commit new">${data.new_commit ? data.new_commit.substring(0, 8) : '--'}</span>
+                // Check if auto-restart is happening
+                if (data.auto_restart) {
+                    details.innerHTML = `
+                        <div class="update-success">
+                            <div class="success-message">Update applied successfully!</div>
+                            <div class="update-info-item">
+                                <span class="update-label">NEW COMMIT:</span>
+                                <span class="update-value commit new">${data.new_commit ? data.new_commit.substring(0, 8) : '--'}</span>
+                            </div>
+                            ${changesHtml ? '<div class="applied-changes">' + changesHtml + '</div>' : ''}
                         </div>
-                        ${changesHtml ? '<div class="applied-changes">' + changesHtml + '</div>' : ''}
-                    </div>
-                    <div class="restart-notice">
-                        <p>Restart required to apply changes.</p>
-                        <button class="btn btn-warning" onclick="restartSystem()">
-                            <span class="btn-icon">&#8634;</span> RESTART NOW
-                        </button>
-                    </div>
-                `;
-                addLogEntry(`Update applied successfully: ${data.new_commit?.substring(0, 8)}`, 'INFO');
+                        <div class="restart-notice auto-restart">
+                            <p>System is restarting automatically...</p>
+                            <div class="restart-spinner"></div>
+                        </div>
+                    `;
+                    addLogEntry(`Update applied successfully: ${data.new_commit?.substring(0, 8)} - Auto-restarting...`, 'INFO');
+
+                    // Show the restart overlay and start polling
+                    showRestartOverlay();
+                    updateRestartStatus('Applying update and restarting...');
+                    pollForServerRestart();
+                } else {
+                    details.innerHTML = `
+                        <div class="update-success">
+                            <div class="success-message">Update applied successfully!</div>
+                            <div class="update-info-item">
+                                <span class="update-label">NEW COMMIT:</span>
+                                <span class="update-value commit new">${data.new_commit ? data.new_commit.substring(0, 8) : '--'}</span>
+                            </div>
+                            ${changesHtml ? '<div class="applied-changes">' + changesHtml + '</div>' : ''}
+                        </div>
+                        <div class="restart-notice">
+                            <p>Restart required to apply changes.</p>
+                            <button class="btn btn-warning" onclick="restartSystem()">
+                                <span class="btn-icon">&#8634;</span> RESTART NOW
+                            </button>
+                        </div>
+                    `;
+                    addLogEntry(`Update applied successfully: ${data.new_commit?.substring(0, 8)}`, 'INFO');
+                }
 
             } else {
                 statusIcon.innerHTML = '&#9888;';
