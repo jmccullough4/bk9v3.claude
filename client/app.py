@@ -118,6 +118,260 @@ BT_COMPANY_IDS = {
     0x0822: "Meta Platforms",
 }
 
+# LMP Version to Bluetooth Core Spec version mapping
+LMP_VERSION_MAP = {
+    0x00: ("1.0b", "Original Bluetooth"),
+    0x01: ("1.1", "IEEE 802.15.1-2002"),
+    0x02: ("1.2", "AFH, eSCO, faster connection"),
+    0x03: ("2.0+EDR", "Enhanced Data Rate 3Mbps"),
+    0x04: ("2.1+EDR", "Secure Simple Pairing"),
+    0x05: ("3.0+HS", "High Speed (WiFi), Enhanced Power Control"),
+    0x06: ("4.0", "Bluetooth Low Energy (BLE) introduced"),
+    0x07: ("4.1", "Coexistence with LTE, LE privacy"),
+    0x08: ("4.2", "LE Data Packet Length Extension, LE Secure Connections"),
+    0x09: ("5.0", "2x speed, 4x range, 8x broadcast capacity"),
+    0x0a: ("5.1", "Direction Finding (AoA/AoD)"),
+    0x0b: ("5.2", "LE Audio, EATT, LE Power Control"),
+    0x0c: ("5.3", "Enhanced Periodic Advertising, Connection Subrating"),
+    0x0d: ("5.4", "Advertising Coding Selection, PAwR"),
+    0x0e: ("6.0", "Bluetooth Channel Sounding for distance measurement"),
+}
+
+# Bluetooth Feature Byte Descriptions (Page 0)
+# Reference: Bluetooth Core Spec Vol 2 Part C Section 3.3
+BT_FEATURES_PAGE0 = {
+    # Byte 0
+    (0, 0): "3-slot packets",
+    (0, 1): "5-slot packets",
+    (0, 2): "Encryption",
+    (0, 3): "Slot offset",
+    (0, 4): "Timing accuracy",
+    (0, 5): "Role switch",
+    (0, 6): "Hold mode",
+    (0, 7): "Sniff mode",
+    # Byte 1
+    (1, 1): "Power control requests",
+    (1, 2): "Channel quality driven",
+    (1, 3): "SCO link",
+    (1, 4): "HV2 packets",
+    (1, 5): "HV3 packets",
+    (1, 6): "μ-law log",
+    (1, 7): "A-law log",
+    # Byte 2
+    (2, 0): "CVSD synchronous",
+    (2, 1): "Paging parameter negotiation",
+    (2, 2): "Power control",
+    (2, 3): "Transparent SCO data",
+    (2, 4): "Flow control lag (LSB)",
+    (2, 5): "Flow control lag (mid)",
+    (2, 6): "Flow control lag (MSB)",
+    (2, 7): "Broadcast Encryption",
+    # Byte 3
+    (3, 1): "Enhanced Data Rate ACL 2 Mbps",
+    (3, 2): "Enhanced Data Rate ACL 3 Mbps",
+    (3, 3): "Enhanced inquiry scan",
+    (3, 4): "Interlaced inquiry scan",
+    (3, 5): "Interlaced page scan",
+    (3, 6): "RSSI with inquiry results",
+    (3, 7): "EV3 packets (eSCO)",
+    # Byte 4
+    (4, 0): "EV4 packets",
+    (4, 1): "EV5 packets",
+    (4, 3): "AFH capable slave",
+    (4, 4): "AFH classification slave",
+    (4, 5): "BR/EDR Not Supported (BLE only)",
+    (4, 6): "LE Supported (Controller)",
+    (4, 7): "3-slot EDR ACL packets",
+    # Byte 5
+    (5, 0): "5-slot EDR ACL packets",
+    (5, 1): "Sniff subrating",
+    (5, 2): "Pause encryption",
+    (5, 3): "AFH capable master",
+    (5, 4): "AFH classification master",
+    (5, 5): "EDR eSCO 2 Mbps",
+    (5, 6): "EDR eSCO 3 Mbps",
+    (5, 7): "3-slot EDR eSCO",
+    # Byte 6
+    (6, 0): "Extended inquiry response",
+    (6, 1): "Simultaneous LE and BR/EDR (Controller)",
+    (6, 3): "Secure Simple Pairing (Controller)",
+    (6, 4): "Encapsulated PDU",
+    (6, 5): "Erroneous data reporting",
+    (6, 6): "Non-flushable packet boundary",
+    # Byte 7
+    (7, 0): "Link Supervision Timeout Event",
+    (7, 1): "Inquiry TX Power Level",
+    (7, 2): "Enhanced Power Control",
+}
+
+
+def decode_lmp_version(lmp_version):
+    """Decode LMP version to human-readable Bluetooth version."""
+    if isinstance(lmp_version, str):
+        # Parse hex string like "0xe" or "14"
+        try:
+            if lmp_version.startswith('0x'):
+                lmp_version = int(lmp_version, 16)
+            else:
+                lmp_version = int(lmp_version)
+        except ValueError:
+            return {"version": "Unknown", "description": f"Could not parse: {lmp_version}"}
+
+    version_info = LMP_VERSION_MAP.get(lmp_version)
+    if version_info:
+        return {
+            "lmp_version": lmp_version,
+            "bt_version": version_info[0],
+            "description": version_info[1]
+        }
+    return {
+        "lmp_version": lmp_version,
+        "bt_version": f"Unknown (LMP {lmp_version})",
+        "description": "Version not recognized"
+    }
+
+
+def decode_feature_bytes(feature_hex_string):
+    """
+    Decode Bluetooth feature bytes into human-readable capabilities.
+    Input: "0xbf 0xfe 0x2d 0xfe 0xdb 0xff 0x7b 0x87" or similar
+    """
+    features = []
+
+    # Parse hex bytes
+    try:
+        # Handle various formats
+        hex_values = feature_hex_string.replace(',', ' ').split()
+        bytes_list = []
+        for val in hex_values:
+            val = val.strip()
+            if val.startswith('0x'):
+                bytes_list.append(int(val, 16))
+            elif val:
+                try:
+                    bytes_list.append(int(val, 16))
+                except ValueError:
+                    continue
+    except Exception:
+        return ["Could not parse features"]
+
+    # Decode each bit
+    for byte_idx, byte_val in enumerate(bytes_list):
+        for bit_idx in range(8):
+            if byte_val & (1 << bit_idx):
+                feature_name = BT_FEATURES_PAGE0.get((byte_idx, bit_idx))
+                if feature_name:
+                    features.append(feature_name)
+
+    return features
+
+
+def parse_device_info_output(raw_output):
+    """
+    Parse hcitool info output and return structured, human-readable data.
+    """
+    result = {
+        'raw': raw_output,
+        'parsed': {},
+        'analysis': []
+    }
+
+    if not raw_output or 'Timeout' in raw_output or 'Error' in raw_output:
+        result['analysis'].append("Device did not respond to info request")
+        return result
+
+    # Parse BD Address
+    addr_match = re.search(r'BD Address:\s*([0-9A-Fa-f:]{17})', raw_output)
+    if addr_match:
+        result['parsed']['bd_address'] = addr_match.group(1).upper()
+
+    # Parse Device Name
+    name_match = re.search(r'Device Name:\s*(.+?)(?:\n|$)', raw_output)
+    if name_match:
+        result['parsed']['device_name'] = name_match.group(1).strip()
+        result['analysis'].append(f"Device identifies as: {result['parsed']['device_name']}")
+
+    # Parse LMP Version
+    lmp_match = re.search(r'LMP Version:\s*.*?\((0x[0-9a-fA-F]+)\)\s*LMP Subversion:\s*(0x[0-9a-fA-F]+)', raw_output)
+    if lmp_match:
+        lmp_version = lmp_match.group(1)
+        lmp_subversion = lmp_match.group(2)
+        version_info = decode_lmp_version(lmp_version)
+        result['parsed']['lmp_version'] = lmp_version
+        result['parsed']['lmp_subversion'] = lmp_subversion
+        result['parsed']['bluetooth_version'] = version_info['bt_version']
+        result['parsed']['version_description'] = version_info['description']
+        result['analysis'].append(f"Bluetooth {version_info['bt_version']}: {version_info['description']}")
+
+    # Parse Manufacturer
+    mfr_match = re.search(r'Manufacturer:\s*(.+?)(?:\n|$)', raw_output)
+    if mfr_match:
+        result['parsed']['manufacturer'] = mfr_match.group(1).strip()
+        result['analysis'].append(f"Made by: {result['parsed']['manufacturer']}")
+
+    # Parse Features Page 0
+    features_match = re.search(r'Features page 0:\s*([0-9a-fA-Fx\s]+)', raw_output)
+    if features_match:
+        features_hex = features_match.group(1).strip()
+        features_list = decode_feature_bytes(features_hex)
+        result['parsed']['features_hex'] = features_hex
+        result['parsed']['features'] = features_list
+
+        # Categorize features for analysis
+        if features_list:
+            # Check for key capabilities
+            has_edr = any('EDR' in f for f in features_list)
+            has_ble = any('LE' in f or 'BLE' in f for f in features_list)
+            has_ssp = any('Simple Pairing' in f for f in features_list)
+            has_afh = any('AFH' in f for f in features_list)
+
+            if has_edr:
+                result['analysis'].append("Supports Enhanced Data Rate (EDR) - faster Classic BT transfers")
+            if has_ble:
+                result['analysis'].append("Supports Bluetooth Low Energy (BLE)")
+            if has_ssp:
+                result['analysis'].append("Supports Secure Simple Pairing (modern pairing)")
+            if has_afh:
+                result['analysis'].append("Supports Adaptive Frequency Hopping (better interference handling)")
+
+            # Add capability summary
+            result['parsed']['capabilities_summary'] = {
+                'edr': has_edr,
+                'ble': has_ble,
+                'secure_pairing': has_ssp,
+                'afh': has_afh,
+                'total_features': len(features_list)
+            }
+
+    # Parse Device Class if present
+    class_match = re.search(r'Class:\s*(0x[0-9A-Fa-f]+)', raw_output)
+    if class_match:
+        device_class = class_match.group(1)
+        result['parsed']['device_class'] = device_class
+        # Decode device class (Major Device Class is bits 8-12)
+        try:
+            class_val = int(device_class, 16)
+            major_class = (class_val >> 8) & 0x1F
+            major_classes = {
+                0: "Miscellaneous",
+                1: "Computer",
+                2: "Phone",
+                3: "LAN/Network",
+                4: "Audio/Video",
+                5: "Peripheral",
+                6: "Imaging",
+                7: "Wearable",
+                8: "Toy",
+                9: "Health"
+            }
+            device_type = major_classes.get(major_class, f"Unknown ({major_class})")
+            result['parsed']['device_type_class'] = device_type
+            result['analysis'].append(f"Device type: {device_type}")
+        except ValueError:
+            pass
+
+    return result
+
 
 def init_database():
     """Initialize SQLite database for device logging."""
@@ -2293,23 +2547,32 @@ def get_device_info(bd_address, interface='hci0'):
         )
         info['raw_info'] = result.stdout
 
-        # Parse device name if available
-        name_match = re.search(r'Device Name:\s*(.+)', result.stdout)
-        if name_match:
-            info['device_name'] = name_match.group(1).strip()
+        # Use the comprehensive parser for human-readable output
+        parsed_info = parse_device_info_output(result.stdout)
+        info['parsed'] = parsed_info['parsed']
+        info['analysis'] = parsed_info['analysis']
+
+        # Extract key fields for backward compatibility
+        if parsed_info['parsed'].get('device_name'):
+            info['device_name'] = parsed_info['parsed']['device_name']
             device_responded = True
 
-        # Parse device class if available
-        class_match = re.search(r'Class:\s*(0x[0-9A-Fa-f]+)', result.stdout)
-        if class_match:
-            info['device_class'] = class_match.group(1)
+        if parsed_info['parsed'].get('device_class'):
+            info['device_class'] = parsed_info['parsed']['device_class']
             device_responded = True
 
-        # Parse manufacturer
-        mfr_match = re.search(r'Manufacturer:\s*(.+)', result.stdout)
-        if mfr_match:
-            info['manufacturer_info'] = mfr_match.group(1).strip()
+        if parsed_info['parsed'].get('manufacturer'):
+            info['manufacturer_info'] = parsed_info['parsed']['manufacturer']
             device_responded = True
+
+        if parsed_info['parsed'].get('bluetooth_version'):
+            info['bluetooth_version'] = parsed_info['parsed']['bluetooth_version']
+            info['version_description'] = parsed_info['parsed'].get('version_description', '')
+            device_responded = True
+
+        if parsed_info['parsed'].get('features'):
+            info['features'] = parsed_info['parsed']['features']
+            info['capabilities'] = parsed_info['parsed'].get('capabilities_summary', {})
 
         add_log(f"hcitool info complete for {bd_address}", "INFO")
 
@@ -2327,6 +2590,7 @@ def get_device_info(bd_address, interface='hci0'):
     except subprocess.TimeoutExpired:
         add_log(f"hcitool info timeout for {bd_address} (10s)", "WARNING")
         info['raw_info'] = "Timeout after 10 seconds - device not responding"
+        info['analysis'] = ["Device did not respond within 10 seconds"]
     except Exception as e:
         add_log(f"hcitool info error for {bd_address}: {e}", "ERROR")
         info['raw_info'] = f"Error: {str(e)}"
