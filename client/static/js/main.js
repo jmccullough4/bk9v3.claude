@@ -4391,7 +4391,16 @@ function initPanelResizers() {
     const leftHandle = document.getElementById('resizeHandleLeft');
     const rightHandle = document.getElementById('resizeHandleRight');
 
-    if (!leftHandle || !rightHandle) return;
+    console.log('initPanelResizers called');
+    console.log('leftHandle:', leftHandle);
+    console.log('rightHandle:', rightHandle);
+    console.log('leftPanel:', leftPanel);
+    console.log('rightPanel:', rightPanel);
+
+    if (!leftHandle || !rightHandle) {
+        console.error('Panel resize handles not found!');
+        return;
+    }
 
     let isResizing = false;
     let currentHandle = null;
@@ -4400,6 +4409,7 @@ function initPanelResizers() {
 
     // Left handle - resizes left panel
     leftHandle.addEventListener('mousedown', (e) => {
+        console.log('Left resize handle mousedown');
         isResizing = true;
         currentHandle = 'left';
         startX = e.clientX;
@@ -4407,10 +4417,12 @@ function initPanelResizers() {
         leftHandle.classList.add('dragging');
         document.body.classList.add('resizing');
         e.preventDefault();
+        e.stopPropagation();
     });
 
     // Right handle - resizes right panel
     rightHandle.addEventListener('mousedown', (e) => {
+        console.log('Right resize handle mousedown');
         isResizing = true;
         currentHandle = 'right';
         startX = e.clientX;
@@ -4418,7 +4430,10 @@ function initPanelResizers() {
         rightHandle.classList.add('dragging');
         document.body.classList.add('resizing');
         e.preventDefault();
+        e.stopPropagation();
     });
+
+    console.log('Panel resize handlers attached successfully');
 
     document.addEventListener('mousemove', (e) => {
         if (!isResizing) return;
