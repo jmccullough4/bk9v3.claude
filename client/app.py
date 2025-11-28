@@ -91,6 +91,33 @@ ubertooth_thread = None
 ubertooth_running = False
 ubertooth_data = {}  # LAP -> piconet info (UAP, channel, clock)
 
+# WARHAMMER Network state (NetBird-based mesh network)
+WARHAMMER_CONFIG = {
+    'API_TOKEN': 'nbp_P936c4V7F5bkiEZjn1mi7bJ0zAEGT83xIS2r',
+    'API_BASE': 'https://api.netbird.io/api',
+    'NETWORK_NAME': 'WARHAMMER'
+}
+warhammer_peers = {}  # peer_id -> peer info (name, ip, location, status)
+warhammer_routes = {}  # route_id -> route info
+warhammer_monitor_thread = None
+warhammer_running = False
+peer_locations = {}  # system_id -> {lat, lon, timestamp}
+
+# Cellular signal state
+cellular_signal = {
+    'bars': 0,
+    'rssi': None,
+    'quality': 0,
+    'technology': None,
+    'operator': None,
+    'imei': None,
+    'imsi': None,
+    'iccid': None,
+    'phone_number': None
+}
+cellular_monitor_thread = None
+cellular_running = False
+
 # Bluetooth Company Identifiers (common ones)
 # Full list at: https://www.bluetooth.com/specifications/assigned-numbers/company-identifiers/
 BT_COMPANY_IDS = {
@@ -4309,7 +4336,7 @@ def get_config():
 def get_version():
     """Get application version from git."""
     version_info = {
-        'version': 'v3.0.27',
+        'version': 'v3.1.0',
         'commit': None,
         'branch': None,
         'session_id': SESSION_ID  # Used by frontend to detect restarts
@@ -4325,7 +4352,7 @@ def get_version():
         if result.returncode == 0:
             commit = result.stdout.strip()
             version_info['commit'] = commit
-            version_info['version'] = f'v3.0.26-{commit}'
+            version_info['version'] = f'v3.1.0-{commit}'
 
         # Get branch name
         result = subprocess.run(
@@ -5423,6 +5450,449 @@ def clear_ubertooth_data():
     ubertooth_data = {}
     add_log("Ubertooth data cleared", "INFO")
     return jsonify({'status': 'cleared'})
+
+
+# ==================== WARHAMMER NETWORK (MESH NETWORK) ====================
+
+def warhammer_api_request(endpoint, method='GET', data=None):
+    """Make a request to the WARHAMMER network API."""
+    import urllib.request
+    import urllib.error
+
+    url = f"{WARHAMMER_CONFIG['API_BASE']}{endpoint}"
+    headers = {
+        'Authorization': f"Token {WARHAMMER_CONFIG['API_TOKEN']}",
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+    }
+
+    try:
+        if data:
+            data = json.dumps(data).encode('utf-8')
+        req = urllib.request.Request(url, data=data, headers=headers, method=method)
+        with urllib.request.urlopen(req, timeout=10) as response:
+            return json.loads(response.read().decode('utf-8'))
+    except urllib.error.HTTPError as e:
+        error_body = e.read().decode('utf-8') if e.fp else str(e)
+        add_log(f"WARHAMMER API error {e.code}: {error_body}", "ERROR")
+        return None
+    except Exception as e:
+        add_log(f"WARHAMMER API request failed: {e}", "ERROR")
+        return None
+
+
+def get_warhammer_peers():
+    """Get list of peers from WARHAMMER network."""
+    global warhammer_peers
+    peers_data = warhammer_api_request('/peers')
+    if peers_data:
+        warhammer_peers = {}
+        for peer in peers_data:
+            peer_id = peer.get('id')
+            warhammer_peers[peer_id] = {
+                'id': peer_id,
+                'name': peer.get('name', 'Unknown'),
+                'ip': peer.get('ip', ''),
+                'dns_label': peer.get('dns_label', ''),
+                'connected': peer.get('connected', False),
+                'last_seen': peer.get('last_seen'),
+                'os': peer.get('os', ''),
+                'version': peer.get('version', ''),
+                'groups': [g.get('name', '') for g in peer.get('groups', [])],
+                'hostname': peer.get('hostname', peer.get('name', 'Unknown'))
+            }
+        return list(warhammer_peers.values())
+    return []
+
+
+def get_warhammer_routes():
+    """Get list of network routes from WARHAMMER network."""
+    global warhammer_routes
+    routes_data = warhammer_api_request('/routes')
+    if routes_data:
+        warhammer_routes = {}
+        for route in routes_data:
+            route_id = route.get('id')
+            warhammer_routes[route_id] = {
+                'id': route_id,
+                'network': route.get('network', ''),
+                'network_id': route.get('network_id', ''),
+                'description': route.get('description', ''),
+                'network_type': route.get('network_type', ''),
+                'peer': route.get('peer', ''),
+                'peer_groups': route.get('peer_groups', []),
+                'masquerade': route.get('masquerade', False),
+                'metric': route.get('metric', 0),
+                'enabled': route.get('enabled', True),
+                'persistent': 'persistent' in (route.get('description', '') or '').lower()
+            }
+        return list(warhammer_routes.values())
+    return []
+
+
+def warhammer_monitor_loop():
+    """Background loop to monitor WARHAMMER network status."""
+    global warhammer_running, warhammer_peers, peer_locations, current_location
+
+    add_log("WARHAMMER network monitor started", "INFO")
+
+    while warhammer_running:
+        try:
+            # Update peer list
+            peers = get_warhammer_peers()
+
+            # Broadcast our location to all connected peers
+            if current_location.get('lat') and current_location.get('lon'):
+                our_location = {
+                    'system_id': CONFIG.get('SYSTEM_ID', 'BK9-001'),
+                    'system_name': CONFIG.get('SYSTEM_NAME', 'BlueK9'),
+                    'lat': current_location['lat'],
+                    'lon': current_location['lon'],
+                    'timestamp': datetime.utcnow().isoformat() + 'Z'
+                }
+                peer_locations[our_location['system_id']] = our_location
+
+            # Emit updates to connected clients
+            socketio.emit('warhammer_update', {
+                'peers': peers,
+                'peer_locations': list(peer_locations.values()),
+                'routes': list(warhammer_routes.values())
+            })
+
+        except Exception as e:
+            add_log(f"WARHAMMER monitor error: {e}", "WARNING")
+
+        time.sleep(10)  # Update every 10 seconds
+
+    add_log("WARHAMMER network monitor stopped", "INFO")
+
+
+@app.route('/api/network/status')
+@login_required
+def get_network_status():
+    """Get WARHAMMER network status."""
+    return jsonify({
+        'network_name': WARHAMMER_CONFIG['NETWORK_NAME'],
+        'running': warhammer_running,
+        'peer_count': len(warhammer_peers),
+        'connected_peers': sum(1 for p in warhammer_peers.values() if p.get('connected')),
+        'route_count': len(warhammer_routes)
+    })
+
+
+@app.route('/api/network/peers')
+@login_required
+def get_network_peers():
+    """Get list of WARHAMMER network peers."""
+    peers = get_warhammer_peers()
+    return jsonify({
+        'peers': peers,
+        'peer_locations': list(peer_locations.values())
+    })
+
+
+@app.route('/api/network/routes')
+@login_required
+def get_network_routes():
+    """Get list of WARHAMMER network routes."""
+    routes = get_warhammer_routes()
+    return jsonify({'routes': routes})
+
+
+@app.route('/api/network/routes', methods=['POST'])
+@login_required
+def add_network_route():
+    """Add a new network route."""
+    data = request.json
+    if not data:
+        return jsonify({'error': 'No data provided'}), 400
+
+    # Create route via API
+    route_data = {
+        'network': data.get('network'),
+        'network_id': data.get('network_id'),
+        'description': data.get('description', ''),
+        'peer': data.get('peer'),
+        'peer_groups': data.get('peer_groups', []),
+        'masquerade': data.get('masquerade', True),
+        'metric': data.get('metric', 9999),
+        'enabled': data.get('enabled', True)
+    }
+
+    result = warhammer_api_request('/routes', method='POST', data=route_data)
+    if result:
+        add_log(f"WARHAMMER route added: {route_data.get('network')}", "INFO")
+        return jsonify({'status': 'created', 'route': result})
+    return jsonify({'error': 'Failed to create route'}), 500
+
+
+@app.route('/api/network/routes/<route_id>', methods=['DELETE'])
+@login_required
+def delete_network_route(route_id):
+    """Delete a network route (non-persistent only)."""
+    # Check if route is persistent
+    route = warhammer_routes.get(route_id)
+    if route and route.get('persistent'):
+        return jsonify({'error': 'Cannot delete persistent routes'}), 403
+
+    result = warhammer_api_request(f'/routes/{route_id}', method='DELETE')
+    if result is not None:
+        warhammer_routes.pop(route_id, None)
+        add_log(f"WARHAMMER route deleted: {route_id}", "INFO")
+        return jsonify({'status': 'deleted'})
+    return jsonify({'error': 'Failed to delete route'}), 500
+
+
+@app.route('/api/network/routes/<route_id>/toggle', methods=['POST'])
+@login_required
+def toggle_network_route(route_id):
+    """Toggle a network route enabled/disabled (non-persistent only)."""
+    route = warhammer_routes.get(route_id)
+    if not route:
+        return jsonify({'error': 'Route not found'}), 404
+
+    if route.get('persistent'):
+        return jsonify({'error': 'Cannot modify persistent routes'}), 403
+
+    new_state = not route.get('enabled', True)
+    result = warhammer_api_request(f'/routes/{route_id}', method='PUT', data={'enabled': new_state})
+    if result:
+        route['enabled'] = new_state
+        add_log(f"WARHAMMER route {'enabled' if new_state else 'disabled'}: {route_id}", "INFO")
+        return jsonify({'status': 'toggled', 'enabled': new_state})
+    return jsonify({'error': 'Failed to toggle route'}), 500
+
+
+@app.route('/api/network/monitor/start', methods=['POST'])
+@login_required
+def start_network_monitor():
+    """Start WARHAMMER network monitoring."""
+    global warhammer_running, warhammer_monitor_thread
+
+    if warhammer_running:
+        return jsonify({'status': 'already_running'})
+
+    warhammer_running = True
+    warhammer_monitor_thread = threading.Thread(target=warhammer_monitor_loop, daemon=True)
+    warhammer_monitor_thread.start()
+
+    # Initial data fetch
+    get_warhammer_peers()
+    get_warhammer_routes()
+
+    add_log("WARHAMMER network monitoring started", "INFO")
+    return jsonify({'status': 'started'})
+
+
+@app.route('/api/network/monitor/stop', methods=['POST'])
+@login_required
+def stop_network_monitor():
+    """Stop WARHAMMER network monitoring."""
+    global warhammer_running
+
+    if not warhammer_running:
+        return jsonify({'status': 'not_running'})
+
+    warhammer_running = False
+    add_log("WARHAMMER network monitoring stopped", "INFO")
+    return jsonify({'status': 'stopped'})
+
+
+@app.route('/api/network/peer_location', methods=['POST'])
+@login_required
+def update_peer_location():
+    """Receive location update from a peer."""
+    global peer_locations
+    data = request.json
+    if not data or not data.get('system_id'):
+        return jsonify({'error': 'Invalid data'}), 400
+
+    peer_locations[data['system_id']] = {
+        'system_id': data['system_id'],
+        'system_name': data.get('system_name', data['system_id']),
+        'lat': data.get('lat'),
+        'lon': data.get('lon'),
+        'timestamp': datetime.utcnow().isoformat() + 'Z'
+    }
+
+    # Broadcast to all connected clients
+    socketio.emit('peer_location_update', peer_locations[data['system_id']])
+
+    return jsonify({'status': 'updated'})
+
+
+# ==================== CELLULAR SIGNAL MONITORING ====================
+
+def get_cellular_modem_info():
+    """Get cellular modem information using mmcli."""
+    global cellular_signal
+
+    try:
+        # Find modem
+        result = subprocess.run(['mmcli', '-L'], capture_output=True, text=True, timeout=5)
+        modem_match = re.search(r'/org/freedesktop/ModemManager1/Modem/(\d+)', result.stdout)
+
+        if not modem_match:
+            return None
+
+        modem_id = modem_match.group(1)
+
+        # Get modem info
+        result = subprocess.run(['mmcli', '-m', modem_id], capture_output=True, text=True, timeout=5)
+        modem_output = result.stdout
+
+        # Parse modem info
+        info = {
+            'modem_id': modem_id,
+            'bars': 0,
+            'rssi': None,
+            'quality': 0,
+            'technology': None,
+            'operator': None,
+            'imei': None,
+            'phone_number': None,
+            'state': None
+        }
+
+        # Parse state
+        state_match = re.search(r'state:\s*\'([^\']+)\'', modem_output, re.IGNORECASE)
+        if state_match:
+            info['state'] = state_match.group(1)
+
+        # Parse signal quality
+        quality_match = re.search(r'signal quality:\s*\'?(\d+)\'?', modem_output, re.IGNORECASE)
+        if quality_match:
+            info['quality'] = int(quality_match.group(1))
+            # Convert quality percentage to bars (0-5)
+            quality = info['quality']
+            if quality >= 80:
+                info['bars'] = 5
+            elif quality >= 60:
+                info['bars'] = 4
+            elif quality >= 40:
+                info['bars'] = 3
+            elif quality >= 20:
+                info['bars'] = 2
+            elif quality > 0:
+                info['bars'] = 1
+            else:
+                info['bars'] = 0
+
+        # Parse access technology
+        tech_match = re.search(r'access tech(?:nologies)?:\s*\'?([^\'\\n]+)\'?', modem_output, re.IGNORECASE)
+        if tech_match:
+            info['technology'] = tech_match.group(1).strip()
+
+        # Parse operator
+        operator_match = re.search(r'operator name:\s*\'?([^\'\\n]+)\'?', modem_output, re.IGNORECASE)
+        if operator_match:
+            info['operator'] = operator_match.group(1).strip()
+
+        # Parse IMEI
+        imei_match = re.search(r'imei:\s*\'?(\d+)\'?', modem_output, re.IGNORECASE)
+        if imei_match:
+            info['imei'] = imei_match.group(1)
+
+        # Get SIM info
+        result = subprocess.run(['mmcli', '-m', modem_id, '--sim=0'], capture_output=True, text=True, timeout=5)
+        sim_output = result.stdout
+
+        # Parse phone number
+        phone_match = re.search(r'own number:\s*\'?([^\'\\n]+)\'?', sim_output, re.IGNORECASE)
+        if not phone_match:
+            phone_match = re.search(r'number:\s*\'?(\+?\d+)\'?', sim_output, re.IGNORECASE)
+        if phone_match:
+            info['phone_number'] = phone_match.group(1).strip()
+
+        # Parse IMSI
+        imsi_match = re.search(r'imsi:\s*\'?(\d+)\'?', sim_output, re.IGNORECASE)
+        if imsi_match:
+            info['imsi'] = imsi_match.group(1)
+
+        # Parse ICCID
+        iccid_match = re.search(r'iccid:\s*\'?(\d+)\'?', sim_output, re.IGNORECASE)
+        if iccid_match:
+            info['iccid'] = iccid_match.group(1)
+
+        # Get signal details
+        result = subprocess.run(['mmcli', '-m', modem_id, '--signal-get'], capture_output=True, text=True, timeout=5)
+        signal_output = result.stdout
+
+        # Parse RSSI
+        rssi_match = re.search(r'rssi:\s*(-?\d+(?:\.\d+)?)', signal_output, re.IGNORECASE)
+        if rssi_match:
+            info['rssi'] = float(rssi_match.group(1))
+
+        return info
+
+    except subprocess.TimeoutExpired:
+        add_log("Cellular modem query timeout", "WARNING")
+        return None
+    except Exception as e:
+        add_log(f"Cellular modem query error: {e}", "WARNING")
+        return None
+
+
+def cellular_monitor_loop():
+    """Background loop to monitor cellular signal."""
+    global cellular_running, cellular_signal
+
+    add_log("Cellular signal monitoring started", "INFO")
+
+    while cellular_running:
+        try:
+            modem_info = get_cellular_modem_info()
+            if modem_info:
+                cellular_signal.update(modem_info)
+                socketio.emit('cellular_update', cellular_signal)
+        except Exception as e:
+            add_log(f"Cellular monitor error: {e}", "WARNING")
+
+        time.sleep(5)  # Update every 5 seconds
+
+    add_log("Cellular signal monitoring stopped", "INFO")
+
+
+@app.route('/api/cellular/status')
+@login_required
+def get_cellular_status():
+    """Get cellular modem status and signal quality."""
+    modem_info = get_cellular_modem_info()
+    if modem_info:
+        cellular_signal.update(modem_info)
+        return jsonify(cellular_signal)
+    return jsonify(cellular_signal)
+
+
+@app.route('/api/cellular/monitor/start', methods=['POST'])
+@login_required
+def start_cellular_monitor():
+    """Start cellular signal monitoring."""
+    global cellular_running, cellular_monitor_thread
+
+    if cellular_running:
+        return jsonify({'status': 'already_running'})
+
+    cellular_running = True
+    cellular_monitor_thread = threading.Thread(target=cellular_monitor_loop, daemon=True)
+    cellular_monitor_thread.start()
+
+    add_log("Cellular monitoring started", "INFO")
+    return jsonify({'status': 'started'})
+
+
+@app.route('/api/cellular/monitor/stop', methods=['POST'])
+@login_required
+def stop_cellular_monitor():
+    """Stop cellular signal monitoring."""
+    global cellular_running
+
+    if not cellular_running:
+        return jsonify({'status': 'not_running'})
+
+    cellular_running = False
+    add_log("Cellular monitoring stopped", "INFO")
+    return jsonify({'status': 'stopped'})
 
 
 @app.route('/api/gps')

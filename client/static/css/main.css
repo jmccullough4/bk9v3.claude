@@ -3450,3 +3450,550 @@ body.resizing-vertical * {
     0% { transform: translate(0, 0) scale(1); opacity: 1; }
     100% { transform: translate(var(--dx), var(--dy)) scale(0.5); opacity: 0; }
 }
+
+/* ==================== CELLULAR SIGNAL INDICATOR ==================== */
+
+.cellular-signal-container {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    margin-right: 10px;
+    background: rgba(0, 30, 40, 0.6);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.cellular-signal-container:hover {
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 10px rgba(0, 212, 255, 0.2);
+}
+
+.cellular-signal-bars {
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
+    height: 16px;
+}
+
+.signal-bar {
+    width: 3px;
+    background: var(--text-muted);
+    border-radius: 1px;
+    transition: all 0.3s ease;
+}
+
+.signal-bar[data-bar="1"] { height: 4px; }
+.signal-bar[data-bar="2"] { height: 6px; }
+.signal-bar[data-bar="3"] { height: 9px; }
+.signal-bar[data-bar="4"] { height: 12px; }
+.signal-bar[data-bar="5"] { height: 16px; }
+
+.signal-bar.active {
+    background: var(--accent-success);
+    box-shadow: 0 0 4px rgba(48, 209, 88, 0.5);
+}
+
+.signal-bar.warning {
+    background: var(--accent-warning);
+    box-shadow: 0 0 4px rgba(255, 176, 0, 0.5);
+}
+
+.signal-bar.danger {
+    background: var(--accent-danger);
+    box-shadow: 0 0 4px rgba(255, 59, 48, 0.5);
+}
+
+.cellular-tech {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--accent-primary);
+    letter-spacing: 1px;
+    font-weight: bold;
+}
+
+/* Cellular Tooltip */
+.cellular-tooltip {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin-top: 10px;
+    min-width: 220px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--accent-primary);
+    border-radius: 5px;
+    padding: 12px;
+    opacity: 0;
+    visibility: hidden;
+    transition: all 0.2s ease;
+    z-index: 1000;
+    box-shadow: 0 5px 20px rgba(0, 0, 0, 0.5), 0 0 15px rgba(0, 212, 255, 0.2);
+}
+
+.cellular-signal-container:hover .cellular-tooltip {
+    opacity: 1;
+    visibility: visible;
+}
+
+.cellular-tooltip::before {
+    content: '';
+    position: absolute;
+    top: -8px;
+    right: 20px;
+    border-left: 8px solid transparent;
+    border-right: 8px solid transparent;
+    border-bottom: 8px solid var(--accent-primary);
+}
+
+.tooltip-title {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--accent-primary);
+    letter-spacing: 2px;
+    margin-bottom: 10px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.tooltip-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 4px 0;
+}
+
+.tooltip-label {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-muted);
+}
+
+.tooltip-value {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-primary);
+}
+
+.tooltip-divider {
+    height: 1px;
+    background: var(--border-color);
+    margin: 8px 0;
+}
+
+/* ==================== WARHAMMER NETWORK PANEL ==================== */
+
+.network-status-badge {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    padding: 2px 6px;
+    border-radius: 3px;
+    background: rgba(255, 59, 48, 0.2);
+    color: var(--accent-danger);
+    margin-left: auto;
+    margin-right: 10px;
+}
+
+.network-status-badge.online {
+    background: rgba(48, 209, 88, 0.2);
+    color: var(--accent-success);
+    animation: status-glow 2s ease-in-out infinite;
+}
+
+@keyframes status-glow {
+    0%, 100% { box-shadow: 0 0 5px rgba(48, 209, 88, 0.3); }
+    50% { box-shadow: 0 0 15px rgba(48, 209, 88, 0.6); }
+}
+
+.network-status-bar {
+    display: flex;
+    justify-content: space-around;
+    padding: 8px;
+    background: rgba(0, 20, 30, 0.6);
+    border-radius: 4px;
+    margin-bottom: 10px;
+}
+
+.network-status-bar .status-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+}
+
+.network-status-bar .status-label {
+    font-family: var(--font-mono);
+    font-size: 8px;
+    color: var(--text-muted);
+    letter-spacing: 1px;
+}
+
+.network-status-bar .status-value {
+    font-family: var(--font-mono);
+    font-size: 16px;
+    font-weight: bold;
+    color: var(--accent-primary);
+}
+
+.network-status-bar .status-value.network-online {
+    color: var(--accent-success);
+}
+
+/* Peer List */
+.network-peer-list {
+    background: rgba(0, 20, 30, 0.4);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.peer-list-header {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--accent-primary);
+    letter-spacing: 2px;
+    padding: 6px 10px;
+    background: rgba(0, 0, 0, 0.3);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.peer-list-container {
+    max-height: 150px;
+    overflow-y: auto;
+}
+
+.peer-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border-bottom: 1px solid rgba(0, 212, 255, 0.1);
+    cursor: pointer;
+    transition: background 0.2s ease;
+}
+
+.peer-item:last-child {
+    border-bottom: none;
+}
+
+.peer-item:hover {
+    background: rgba(0, 212, 255, 0.1);
+}
+
+.peer-status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--text-muted);
+    flex-shrink: 0;
+}
+
+.peer-status-dot.online {
+    background: var(--accent-success);
+    box-shadow: 0 0 8px rgba(48, 209, 88, 0.6);
+    animation: pulse-dot 2s ease-in-out infinite;
+}
+
+.peer-status-dot.offline {
+    background: var(--accent-danger);
+    opacity: 0.6;
+}
+
+.peer-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.peer-name {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.peer-ip {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--text-muted);
+}
+
+.peer-locate-btn {
+    background: none;
+    border: none;
+    color: var(--accent-primary);
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 3px;
+    transition: all 0.2s ease;
+    opacity: 0;
+}
+
+.peer-item:hover .peer-locate-btn {
+    opacity: 1;
+}
+
+.peer-locate-btn:hover {
+    background: rgba(0, 212, 255, 0.2);
+}
+
+/* Route List */
+.network-route-list {
+    background: rgba(0, 20, 30, 0.4);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.route-list-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--accent-primary);
+    letter-spacing: 2px;
+    padding: 6px 10px;
+    background: rgba(0, 0, 0, 0.3);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.route-list-header .btn-sm {
+    padding: 2px 8px;
+    font-size: 12px;
+}
+
+.route-list-container {
+    max-height: 120px;
+    overflow-y: auto;
+}
+
+.route-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border-bottom: 1px solid rgba(0, 212, 255, 0.1);
+}
+
+.route-item:last-child {
+    border-bottom: none;
+}
+
+.route-item.persistent {
+    background: rgba(255, 176, 0, 0.05);
+}
+
+.route-item.disabled {
+    opacity: 0.5;
+}
+
+.route-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.route-network {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-primary);
+}
+
+.route-desc {
+    font-size: 9px;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.route-actions {
+    display: flex;
+    gap: 4px;
+}
+
+.route-action-btn {
+    background: none;
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 10px;
+    transition: all 0.2s ease;
+}
+
+.route-action-btn:hover:not(:disabled) {
+    border-color: var(--accent-primary);
+    color: var(--accent-primary);
+}
+
+.route-action-btn:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+}
+
+.route-action-btn.delete:hover:not(:disabled) {
+    border-color: var(--accent-danger);
+    color: var(--accent-danger);
+}
+
+.route-persistent-badge {
+    font-family: var(--font-mono);
+    font-size: 8px;
+    padding: 1px 4px;
+    background: rgba(255, 176, 0, 0.2);
+    color: var(--accent-warning);
+    border-radius: 2px;
+    margin-left: 6px;
+}
+
+/* ==================== PEER MAP MARKERS ==================== */
+
+.peer-marker {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    cursor: pointer;
+    transition: transform 0.2s ease;
+}
+
+.peer-marker:hover {
+    transform: scale(1.1);
+}
+
+.peer-marker-icon {
+    width: 32px;
+    height: 32px;
+    background: linear-gradient(135deg, var(--accent-primary) 0%, var(--accent-secondary) 100%);
+    border: 2px solid var(--accent-primary);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 0 15px rgba(0, 212, 255, 0.5), 0 3px 10px rgba(0, 0, 0, 0.4);
+    position: relative;
+}
+
+.peer-marker-icon::after {
+    content: '';
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    border: 2px solid var(--accent-primary);
+    animation: peer-pulse 2s ease-out infinite;
+}
+
+@keyframes peer-pulse {
+    0% { transform: scale(1); opacity: 0.8; }
+    100% { transform: scale(2); opacity: 0; }
+}
+
+.peer-marker-icon svg {
+    width: 18px;
+    height: 18px;
+    fill: var(--bg-primary);
+}
+
+.peer-marker-label {
+    margin-top: 4px;
+    padding: 2px 6px;
+    background: rgba(0, 20, 30, 0.9);
+    border: 1px solid var(--accent-primary);
+    border-radius: 3px;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--accent-primary);
+    white-space: nowrap;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+
+.peer-marker.self .peer-marker-icon {
+    background: linear-gradient(135deg, var(--accent-success) 0%, #20a040 100%);
+    border-color: var(--accent-success);
+    box-shadow: 0 0 15px rgba(48, 209, 88, 0.5), 0 3px 10px rgba(0, 0, 0, 0.4);
+}
+
+.peer-marker.self .peer-marker-icon::after {
+    border-color: var(--accent-success);
+}
+
+.peer-marker.self .peer-marker-label {
+    border-color: var(--accent-success);
+    color: var(--accent-success);
+}
+
+/* Network Info Grid (Settings) */
+.network-info-grid {
+    display: grid;
+    gap: 8px;
+    background: rgba(0, 20, 30, 0.4);
+    padding: 12px;
+    border-radius: 4px;
+    border: 1px solid var(--border-color);
+}
+
+.network-info-grid .info-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.network-info-grid .info-label {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-muted);
+}
+
+.network-info-grid .info-value {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-primary);
+}
+
+/* Routes Settings List */
+.routes-settings-list {
+    max-height: 200px;
+    overflow-y: auto;
+    background: rgba(0, 20, 30, 0.4);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+}
+
+.routes-settings-list .route-item {
+    padding: 10px 12px;
+}
+
+.routes-settings-list .route-network {
+    font-size: 11px;
+}
+
+.routes-settings-list .route-desc {
+    font-size: 10px;
+    margin-top: 2px;
+}
+
+/* Add Route Modal styling */
+#addRouteModal .modal-body {
+    padding: 20px;
+}
+
+#addRouteModal .form-row {
+    margin-bottom: 15px;
+}
+
+#addRouteModal .form-row label {
+    display: block;
+    margin-bottom: 5px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+
+#addRouteModal .input {
+    width: 100%;
+}

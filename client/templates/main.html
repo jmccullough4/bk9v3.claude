@@ -75,6 +75,47 @@
         </div>
     </div>
 
+    <!-- Add Route Modal -->
+    <div id="addRouteModal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span>ADD NETWORK ROUTE</span>
+                <button class="modal-close" onclick="closeAddRouteModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-row">
+                    <label>Network CIDR:</label>
+                    <input type="text" id="routeNetwork" placeholder="10.0.0.0/24" class="input">
+                </div>
+                <div class="form-row">
+                    <label>Description:</label>
+                    <input type="text" id="routeDescription" placeholder="Route description" class="input">
+                </div>
+                <div class="form-row">
+                    <label>Peer:</label>
+                    <select id="routePeer" class="input">
+                        <option value="">-- Select Peer --</option>
+                    </select>
+                </div>
+                <div class="form-row">
+                    <label>Metric:</label>
+                    <input type="number" id="routeMetric" value="9999" min="0" max="99999" class="input">
+                </div>
+                <div class="form-row">
+                    <label class="toggle">
+                        <input type="checkbox" id="routeMasquerade" checked>
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-label">Masquerade</span>
+                    </label>
+                </div>
+                <div class="btn-group mt-10">
+                    <button class="btn btn-primary" onclick="submitAddRoute()">ADD ROUTE</button>
+                    <button class="btn btn-secondary" onclick="closeAddRouteModal()">CANCEL</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Settings Modal -->
     <div id="settingsModal" class="modal hidden">
         <div class="modal-content modal-large">
@@ -89,6 +130,7 @@
                     <button class="settings-tab" onclick="showSettingsTab('gps')">GPS</button>
                     <button class="settings-tab" onclick="showSettingsTab('sms')">SMS</button>
                     <button class="settings-tab" onclick="showSettingsTab('radios')">Radios</button>
+                    <button class="settings-tab" onclick="showSettingsTab('network')">Network</button>
                     <button class="settings-tab" onclick="showSettingsTab('users')">Users</button>
                     <button class="settings-tab" onclick="showSettingsTab('ui')">UI Layout</button>
                     <button class="settings-tab" onclick="showSettingsTab('system')">System</button>
@@ -258,6 +300,60 @@
                                     <!-- Piconet data will be populated here -->
                                 </tbody>
                             </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Network Settings Tab -->
+                <div id="settingsNetwork" class="settings-content">
+                    <div class="settings-group">
+                        <h3>WARHAMMER Network Status</h3>
+                        <p class="settings-hint">Mesh network connectivity for BlueK9 systems.</p>
+                        <div class="network-info-grid">
+                            <div class="info-row">
+                                <span class="info-label">Network:</span>
+                                <span class="info-value" id="settingsNetworkName">WARHAMMER</span>
+                            </div>
+                            <div class="info-row">
+                                <span class="info-label">Status:</span>
+                                <span class="info-value" id="settingsNetworkStatus">--</span>
+                            </div>
+                            <div class="info-row">
+                                <span class="info-label">Connected Peers:</span>
+                                <span class="info-value" id="settingsNetworkPeers">--</span>
+                            </div>
+                            <div class="info-row">
+                                <span class="info-label">Active Routes:</span>
+                                <span class="info-value" id="settingsNetworkRoutes">--</span>
+                            </div>
+                        </div>
+                        <div class="btn-group mt-10">
+                            <button class="btn btn-secondary" onclick="refreshNetworkSettings()">Refresh Status</button>
+                        </div>
+                    </div>
+                    <div class="settings-group">
+                        <h3>Peer Location Sharing</h3>
+                        <p class="settings-hint">Share your GPS position with other WARHAMMER nodes.</p>
+                        <div class="toggle-group">
+                            <label class="toggle">
+                                <input type="checkbox" id="settingsShareLocation" checked>
+                                <span class="toggle-slider"></span>
+                                <span class="toggle-label">Share Location with Peers</span>
+                            </label>
+                        </div>
+                        <div class="toggle-group">
+                            <label class="toggle">
+                                <input type="checkbox" id="settingsAutoConnect" checked>
+                                <span class="toggle-slider"></span>
+                                <span class="toggle-label">Auto-connect on Startup</span>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="settings-group">
+                        <h3>Route Management</h3>
+                        <p class="settings-hint">Manage network routes. Routes marked as "persistent" cannot be modified.</p>
+                        <div class="routes-settings-list" id="routesSettingsList">
+                            <!-- Routes populated by JS -->
                         </div>
                     </div>
                 </div>
@@ -455,6 +551,54 @@
                 </div>
             </div>
             <div class="header-right">
+                <!-- Cellular Signal Indicator -->
+                <div class="cellular-signal-container" id="cellularSignalContainer" title="Cellular Signal">
+                    <div class="cellular-signal-bars" id="cellularSignalBars">
+                        <div class="signal-bar" data-bar="1"></div>
+                        <div class="signal-bar" data-bar="2"></div>
+                        <div class="signal-bar" data-bar="3"></div>
+                        <div class="signal-bar" data-bar="4"></div>
+                        <div class="signal-bar" data-bar="5"></div>
+                    </div>
+                    <span class="cellular-tech" id="cellularTech">--</span>
+                    <!-- Hover tooltip with detailed info -->
+                    <div class="cellular-tooltip" id="cellularTooltip">
+                        <div class="tooltip-title">CELLULAR STATUS</div>
+                        <div class="tooltip-row">
+                            <span class="tooltip-label">Operator:</span>
+                            <span class="tooltip-value" id="cellularOperator">--</span>
+                        </div>
+                        <div class="tooltip-row">
+                            <span class="tooltip-label">Technology:</span>
+                            <span class="tooltip-value" id="cellularTechnology">--</span>
+                        </div>
+                        <div class="tooltip-row">
+                            <span class="tooltip-label">Signal:</span>
+                            <span class="tooltip-value" id="cellularQuality">--%</span>
+                        </div>
+                        <div class="tooltip-row">
+                            <span class="tooltip-label">RSSI:</span>
+                            <span class="tooltip-value" id="cellularRssi">-- dBm</span>
+                        </div>
+                        <div class="tooltip-divider"></div>
+                        <div class="tooltip-row">
+                            <span class="tooltip-label">Phone:</span>
+                            <span class="tooltip-value" id="cellularPhone">--</span>
+                        </div>
+                        <div class="tooltip-row">
+                            <span class="tooltip-label">IMEI:</span>
+                            <span class="tooltip-value" id="cellularImei">--</span>
+                        </div>
+                        <div class="tooltip-row">
+                            <span class="tooltip-label">ICCID:</span>
+                            <span class="tooltip-value" id="cellularIccid">--</span>
+                        </div>
+                        <div class="tooltip-row">
+                            <span class="tooltip-label">State:</span>
+                            <span class="tooltip-value" id="cellularState">--</span>
+                        </div>
+                    </div>
+                </div>
                 <button class="settings-btn" onclick="openSettingsModal()" title="Settings">&#9881;</button>
                 <span class="operator-info">OP: {{ username }}</span>
                 <a href="{{ url_for('logout') }}" class="logout-btn">LOGOUT</a>
@@ -673,6 +817,71 @@
                     </div>
                 </div>
 
+                <!-- WARHAMMER Network -->
+                <div class="panel-section" id="sectionNetwork">
+                    <div class="section-header collapsible" onclick="toggleSection('sectionNetwork')">
+                        <span class="section-icon">&#128279;</span>
+                        <span>WARHAMMER</span>
+                        <span class="network-status-badge" id="networkStatusBadge">OFFLINE</span>
+                        <span class="section-toggle">&#9660;</span>
+                    </div>
+                    <div class="section-content">
+                        <div class="network-status-bar">
+                            <div class="status-item">
+                                <span class="status-label">PEERS:</span>
+                                <span class="status-value" id="networkPeerCount">0</span>
+                            </div>
+                            <div class="status-item">
+                                <span class="status-label">ONLINE:</span>
+                                <span class="status-value network-online" id="networkOnlineCount">0</span>
+                            </div>
+                            <div class="status-item">
+                                <span class="status-label">ROUTES:</span>
+                                <span class="status-value" id="networkRouteCount">0</span>
+                            </div>
+                        </div>
+                        <div class="btn-group mt-10">
+                            <button class="btn btn-success" id="btnStartNetwork" onclick="startNetworkMonitor()">
+                                <span>&#9654;</span> CONNECT
+                            </button>
+                            <button class="btn btn-danger" id="btnStopNetwork" onclick="stopNetworkMonitor()" disabled>
+                                <span>&#9632;</span> DISCONNECT
+                            </button>
+                        </div>
+                        <div class="toggle-group mt-10">
+                            <label class="toggle">
+                                <input type="checkbox" id="toggleShowPeers" checked onchange="toggleShowPeers()">
+                                <span class="toggle-slider"></span>
+                                <span class="toggle-label">Show Peer Locations</span>
+                            </label>
+                        </div>
+                        <div class="toggle-group">
+                            <label class="toggle">
+                                <input type="checkbox" id="toggleShowConnections" checked onchange="toggleShowConnections()">
+                                <span class="toggle-slider"></span>
+                                <span class="toggle-label">Show Connections</span>
+                            </label>
+                        </div>
+                        <!-- Peer List -->
+                        <div class="network-peer-list mt-10" id="networkPeerList">
+                            <div class="peer-list-header">CONNECTED PEERS</div>
+                            <div class="peer-list-container" id="peerListContainer">
+                                <!-- Peers populated by JS -->
+                            </div>
+                        </div>
+                        <!-- Route Management -->
+                        <div class="network-route-list mt-10" id="networkRouteList">
+                            <div class="route-list-header">
+                                <span>NETWORK ROUTES</span>
+                                <button class="btn btn-sm btn-secondary" onclick="openAddRouteModal()" title="Add Route">+</button>
+                            </div>
+                            <div class="route-list-container" id="routeListContainer">
+                                <!-- Routes populated by JS -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
             </aside>
 
             <!-- Left Resize Handle -->
@@ -822,7 +1031,7 @@
 
     <!-- Version Footer -->
     <div class="version-footer">
-        <span class="version-text">BlueK9 v3.0.27</span>
+        <span class="version-text">BlueK9 v3.1.0</span>
         <span class="version-divider">|</span>
         <span class="version-id" id="systemIdFooter">--</span>
     </div>
