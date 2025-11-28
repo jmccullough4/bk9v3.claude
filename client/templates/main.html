@@ -58,6 +58,23 @@
         </div>
     </div>
 
+    <!-- Restart Overlay -->
+    <div id="restartOverlay" class="restart-overlay hidden">
+        <div class="restart-content">
+            <div class="restart-spinner">
+                <div class="spinner-ring"></div>
+                <div class="spinner-ring"></div>
+                <div class="spinner-ring"></div>
+            </div>
+            <div class="restart-text">SYSTEM RESTARTING</div>
+            <div class="restart-subtext">Please wait while BlueK9 reinitializes...</div>
+            <div class="restart-progress">
+                <div class="restart-progress-bar"></div>
+            </div>
+            <div class="restart-status" id="restartStatus">Stopping services...</div>
+        </div>
+    </div>
+
     <!-- Settings Modal -->
     <div id="settingsModal" class="modal hidden">
         <div class="modal-content modal-large">
@@ -203,6 +220,45 @@
                             <!-- Radios will be populated here -->
                         </div>
                         <button class="btn btn-secondary mt-10" onclick="refreshRadiosInSettings()">Refresh Radios</button>
+                    </div>
+
+                    <div class="settings-group">
+                        <h3>Ubertooth Piconet Scanner</h3>
+                        <p class="settings-hint">Passive Bluetooth piconet detection using Ubertooth hardware.</p>
+                        <div id="ubertoothStatus" class="ubertooth-status">
+                            <div class="status-indicator">
+                                <span class="status-label">Status:</span>
+                                <span id="ubertoothStatusText" class="status-value">Checking...</span>
+                            </div>
+                            <div class="status-indicator">
+                                <span class="status-label">Piconets Detected:</span>
+                                <span id="ubertoothPiconetCount" class="status-value">0</span>
+                            </div>
+                        </div>
+                        <div class="ubertooth-controls">
+                            <button id="ubertoothStartBtn" class="btn btn-success" onclick="startUbertooth()">Start Scanner</button>
+                            <button id="ubertoothStopBtn" class="btn btn-danger" onclick="stopUbertooth()" disabled>Stop Scanner</button>
+                            <button class="btn btn-secondary" onclick="refreshUbertoothData()">Refresh Data</button>
+                            <button class="btn btn-warning" onclick="clearUbertoothData()">Clear Data</button>
+                        </div>
+                        <div id="ubertoothDataContainer" class="ubertooth-data">
+                            <table class="ubertooth-table">
+                                <thead>
+                                    <tr>
+                                        <th>LAP</th>
+                                        <th>UAP</th>
+                                        <th>BD Partial</th>
+                                        <th>Channels</th>
+                                        <th>Packets</th>
+                                        <th>First Seen</th>
+                                        <th>Last Seen</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="ubertoothDataTable">
+                                    <!-- Piconet data will be populated here -->
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 </div>
 
@@ -643,6 +699,7 @@
                                     <th class="sortable" data-sort="device_name" onclick="sortSurveyTable('device_name')">NAME <span class="sort-icon"></span></th>
                                     <th class="sortable" data-sort="device_type" onclick="sortSurveyTable('device_type')">TYPE <span class="sort-icon"></span></th>
                                     <th class="sortable" data-sort="rssi" onclick="sortSurveyTable('rssi')">RSSI <span class="sort-icon"></span></th>
+                                    <th class="sortable" data-sort="packet_count" onclick="sortSurveyTable('packet_count')">PKTS <span class="sort-icon"></span></th>
                                     <th class="sortable" data-sort="emitter_accuracy" onclick="sortSurveyTable('emitter_accuracy')">CEP <span class="sort-icon"></span></th>
                                     <th class="sortable" data-sort="last_seen" onclick="sortSurveyTable('last_seen')">LAST <span class="sort-icon"></span></th>
                                     <th>ACT</th>

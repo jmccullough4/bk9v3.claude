@@ -709,7 +709,7 @@ function updateSurveyTable() {
         if (surveySort.column === 'last_seen') {
             aVal = aVal ? new Date(aVal).getTime() : 0;
             bVal = bVal ? new Date(bVal).getTime() : 0;
-        } else if (surveySort.column === 'rssi' || surveySort.column === 'emitter_accuracy') {
+        } else if (surveySort.column === 'rssi' || surveySort.column === 'emitter_accuracy' || surveySort.column === 'packet_count') {
             aVal = aVal || -999;
             bVal = bVal || -999;
         } else {
@@ -753,11 +753,14 @@ function updateSurveyTable() {
         const deviceType = device.device_type || 'unknown';
         const typeBadge = `<span class="device-type-badge ${deviceType}">${deviceType === 'ble' ? 'LE' : deviceType === 'classic' ? 'CL' : '?'}</span>`;
 
+        const packetCount = device.packet_count || 0;
+
         row.innerHTML = `
             <td class="bd-address">${device.bd_address}</td>
             <td title="${device.device_name || 'Unknown'}">${truncate(device.device_name || 'Unknown', 10)}</td>
             <td>${typeBadge}</td>
             <td>${device.rssi || '--'}</td>
+            <td class="packet-count">${packetCount}</td>
             <td class="cep-cell">${cep}</td>
             <td>${lastSeen}</td>
             <td>
@@ -895,6 +898,11 @@ function updateDeviceMarker(device) {
         addCepCircle(device);
     }
 
+    // Update comm line if this device is being tracked
+    if (commLines[bdAddr]) {
+        showCommLine(bdAddr);
+    }
+
     // Click handler
     el.addEventListener('click', () => selectDevice(device));
 }
@@ -1012,6 +1020,9 @@ function updateSystemLocation(location) {
 
     // Update system trail in real-time if enabled
     updateLiveTrail(location.lon, location.lat);
+
+    // Update communication lines for active geo tracking
+    updateCommLines();
 }
 
 /**
@@ -2519,7 +2530,8 @@ function updateRadioListSettings(radios) {
     if (!list) return;
     list.innerHTML = '';
 
-    if (radios.bluetooth.length === 0 && radios.wifi.length === 0) {
+    const ubertoothList = radios.ubertooth || [];
+    if (radios.bluetooth.length === 0 && radios.wifi.length === 0 && ubertoothList.length === 0) {
         list.innerHTML = '<div class="settings-hint">No radios detected</div>';
         return;
     }
@@ -2557,6 +2569,21 @@ function updateRadioListSettings(radios) {
         `;
         list.appendChild(item);
     });
+
+    // Ubertooth devices
+    ubertoothList.forEach(radio => {
+        const item = document.createElement('div');
+        const statusClass = radio.status === 'running' ? 'status-up' : (radio.status === 'ready' ? '' : 'status-down');
+        item.className = `radio-item`;
+        item.innerHTML = `
+            <div class="item-info">
+                <span class="item-primary">${radio.interface} (Ubertooth)</span>
+                <span class="item-secondary">${radio.version || 'Unknown firmware'}</span>
+                <span class="item-status ${statusClass}">${radio.status.toUpperCase()}</span>
+            </div>
+        `;
+        list.appendChild(item);
+    });
 }
 
 function refreshRadiosInSettings() {
@@ -2564,35 +2591,202 @@ function refreshRadiosInSettings() {
     addLogEntry('Radio list refreshed', 'INFO');
 }
 
+// ==================== UBERTOOTH FUNCTIONS ====================
+
+let ubertoothRunning = false;
+
+function loadUbertoothStatus() {
+    fetch('/api/ubertooth/status')
+        .then(response => response.json())
+        .then(data => {
+            updateUbertoothUI(data);
+        })
+        .catch(error => {
+            console.error('Error loading Ubertooth status:', error);
+            const statusText = document.getElementById('ubertoothStatusText');
+            if (statusText) {
+                statusText.textContent = 'Error checking status';
+                statusText.className = 'status-value not-available';
+            }
+        });
+}
+
+function updateUbertoothUI(data) {
+    const statusText = document.getElementById('ubertoothStatusText');
+    const piconetCount = document.getElementById('ubertoothPiconetCount');
+    const startBtn = document.getElementById('ubertoothStartBtn');
+    const stopBtn = document.getElementById('ubertoothStopBtn');
+
+    if (statusText) {
+        if (!data.available) {
+            statusText.textContent = data.error || 'Not Available';
+            statusText.className = 'status-value not-available';
+        } else if (data.running) {
+            statusText.textContent = 'Running';
+            statusText.className = 'status-value running';
+        } else {
+            statusText.textContent = 'Ready';
+            statusText.className = 'status-value';
+        }
+    }
+
+    if (piconetCount) {
+        piconetCount.textContent = data.piconets_detected || 0;
+    }
+
+    ubertoothRunning = data.running || false;
+
+    if (startBtn) {
+        startBtn.disabled = !data.available || data.running;
+    }
+    if (stopBtn) {
+        stopBtn.disabled = !data.running;
+    }
+}
+
+function startUbertooth() {
+    fetch('/api/ubertooth/start', { method: 'POST' })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'started') {
+                addLogEntry('Ubertooth scanner started', 'INFO');
+                loadUbertoothStatus();
+            } else {
+                addLogEntry(`Failed to start Ubertooth: ${data.message}`, 'ERROR');
+            }
+        })
+        .catch(error => {
+            addLogEntry('Error starting Ubertooth: ' + error, 'ERROR');
+        });
+}
+
+function stopUbertooth() {
+    fetch('/api/ubertooth/stop', { method: 'POST' })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'stopped') {
+                addLogEntry('Ubertooth scanner stopped', 'INFO');
+                loadUbertoothStatus();
+            } else {
+                addLogEntry(`Failed to stop Ubertooth: ${data.message}`, 'ERROR');
+            }
+        })
+        .catch(error => {
+            addLogEntry('Error stopping Ubertooth: ' + error, 'ERROR');
+        });
+}
+
+function refreshUbertoothData() {
+    fetch('/api/ubertooth/data')
+        .then(response => response.json())
+        .then(data => {
+            updateUbertoothTable(data.piconets || []);
+            const piconetCount = document.getElementById('ubertoothPiconetCount');
+            if (piconetCount) {
+                piconetCount.textContent = data.piconets ? data.piconets.length : 0;
+            }
+        })
+        .catch(error => {
+            addLogEntry('Error refreshing Ubertooth data: ' + error, 'ERROR');
+        });
+}
+
+function updateUbertoothTable(piconets) {
+    const tableBody = document.getElementById('ubertoothDataTable');
+    if (!tableBody) return;
+
+    tableBody.innerHTML = '';
+
+    if (piconets.length === 0) {
+        const row = document.createElement('tr');
+        row.innerHTML = '<td colspan="7" style="text-align: center; color: var(--text-secondary);">No piconets detected</td>';
+        tableBody.appendChild(row);
+        return;
+    }
+
+    piconets.forEach(piconet => {
+        const row = document.createElement('tr');
+        const firstSeen = piconet.first_seen ? new Date(piconet.first_seen).toLocaleTimeString() : '-';
+        const lastSeen = piconet.last_seen ? new Date(piconet.last_seen).toLocaleTimeString() : '-';
+        const channels = piconet.channels ? piconet.channels.sort((a, b) => a - b).join(', ') : '-';
+
+        row.innerHTML = `
+            <td class="lap-cell">${piconet.lap || '-'}</td>
+            <td class="uap-cell">${piconet.uap || '??'}</td>
+            <td class="bd-partial-cell">${piconet.bd_partial || '-'}</td>
+            <td>${channels}</td>
+            <td>${piconet.packet_count || 0}</td>
+            <td>${firstSeen}</td>
+            <td>${lastSeen}</td>
+        `;
+        tableBody.appendChild(row);
+    });
+}
+
+function clearUbertoothData() {
+    if (!confirm('Clear all captured Ubertooth data?')) return;
+
+    fetch('/api/ubertooth/clear', { method: 'POST' })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'cleared') {
+                addLogEntry('Ubertooth data cleared', 'INFO');
+                updateUbertoothTable([]);
+                const piconetCount = document.getElementById('ubertoothPiconetCount');
+                if (piconetCount) piconetCount.textContent = '0';
+            }
+        })
+        .catch(error => {
+            addLogEntry('Error clearing Ubertooth data: ' + error, 'ERROR');
+        });
+}
+
+// Handle real-time Ubertooth updates via WebSocket
+socket.on('ubertooth_update', (data) => {
+    // Update piconet count
+    const piconetCount = document.getElementById('ubertoothPiconetCount');
+    if (piconetCount && data.packet_count) {
+        // We'll refresh the full data periodically
+        refreshUbertoothData();
+    }
+});
+
 // ==================== GPS CONFIGURATION ====================
 
 function loadGpsConfig() {
     fetch('/api/gps/config')
         .then(response => response.json())
         .then(config => {
-            // Set source dropdown
-            document.getElementById('gpsSource').value = config.source;
+            // Set source dropdown (may not exist on initial page load)
+            const gpsSourceEl = document.getElementById('gpsSource');
+            if (gpsSourceEl) gpsSourceEl.value = config.source;
 
             // Set NMEA settings
-            document.getElementById('nmeaHost').value = config.nmea_host;
-            document.getElementById('nmeaPort').value = config.nmea_port;
+            const nmeaHostEl = document.getElementById('nmeaHost');
+            const nmeaPortEl = document.getElementById('nmeaPort');
+            if (nmeaHostEl) nmeaHostEl.value = config.nmea_host;
+            if (nmeaPortEl) nmeaPortEl.value = config.nmea_port;
 
             // Set GPSD settings
-            document.getElementById('gpsdHost').value = config.gpsd_host;
-            document.getElementById('gpsdPort').value = config.gpsd_port;
+            const gpsdHostEl = document.getElementById('gpsdHost');
+            const gpsdPortEl = document.getElementById('gpsdPort');
+            if (gpsdHostEl) gpsdHostEl.value = config.gpsd_host;
+            if (gpsdPortEl) gpsdPortEl.value = config.gpsd_port;
 
             // Set Serial settings
-            document.getElementById('serialPort').value = config.serial_port;
-            document.getElementById('serialBaud').value = config.serial_baud;
+            const serialPortEl = document.getElementById('serialPort');
+            const serialBaudEl = document.getElementById('serialBaud');
+            if (serialPortEl) serialPortEl.value = config.serial_port;
+            if (serialBaudEl) serialBaudEl.value = config.serial_baud;
 
             // Show correct settings panel
-            updateGpsFields();
+            if (gpsSourceEl) updateGpsFields();
 
             // Update GPS status
             updateGpsStatus(config.current_location);
         })
         .catch(error => {
-            addLogEntry('Failed to load GPS config: ' + error, 'ERROR');
+            console.log('GPS config load issue (normal on page load):', error);
         });
 }
 
@@ -3493,6 +3687,7 @@ function openSettingsModal() {
     loadSmsNumbers();
     loadRadios();
     loadSystemInfo();
+    loadUbertoothStatus();
     document.getElementById('settingsModal').classList.remove('hidden');
 }
 
@@ -3959,6 +4154,9 @@ function restartSystem() {
 
     addLogEntry('Initiating system restart...', 'INFO');
 
+    // Show restart overlay
+    showRestartOverlay();
+
     fetch('/api/system/restart', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' }
@@ -3966,17 +4164,75 @@ function restartSystem() {
         .then(r => r.json())
         .then(data => {
             if (data.status === 'restarting') {
-                addLogEntry('System restarting - page will reload shortly...', 'INFO');
-                // Wait a few seconds then reload the page
+                updateRestartStatus('Stopping services...');
+                // Start polling for server to come back
                 setTimeout(() => {
-                    window.location.reload();
+                    updateRestartStatus('Waiting for server...');
+                    pollForServerRestart();
                 }, 3000);
             } else {
+                hideRestartOverlay();
                 addLogEntry(data.error || 'Failed to restart system', 'ERROR');
             }
         })
         .catch(e => {
-            addLogEntry(`Restart error: ${e}`, 'ERROR');
+            // Expected - server went down during restart
+            updateRestartStatus('Server stopped, waiting for restart...');
+            setTimeout(() => pollForServerRestart(), 2000);
+        });
+}
+
+function showRestartOverlay() {
+    const overlay = document.getElementById('restartOverlay');
+    if (overlay) {
+        overlay.classList.remove('hidden');
+    }
+}
+
+function hideRestartOverlay() {
+    const overlay = document.getElementById('restartOverlay');
+    if (overlay) {
+        overlay.classList.add('hidden');
+    }
+}
+
+function updateRestartStatus(status) {
+    const statusEl = document.getElementById('restartStatus');
+    if (statusEl) {
+        statusEl.textContent = status;
+    }
+}
+
+let restartPollAttempts = 0;
+const MAX_RESTART_POLL_ATTEMPTS = 60; // 60 seconds max
+
+function pollForServerRestart() {
+    restartPollAttempts++;
+
+    if (restartPollAttempts > MAX_RESTART_POLL_ATTEMPTS) {
+        updateRestartStatus('Restart timeout - please refresh manually');
+        return;
+    }
+
+    updateRestartStatus(`Reconnecting... (${restartPollAttempts}s)`);
+
+    fetch('/api/version', {
+        method: 'GET',
+        cache: 'no-store'
+    })
+        .then(r => {
+            if (r.ok) {
+                updateRestartStatus('Server online! Reloading...');
+                setTimeout(() => {
+                    window.location.reload();
+                }, 1000);
+            } else {
+                setTimeout(pollForServerRestart, 1000);
+            }
+        })
+        .catch(e => {
+            // Server not ready yet
+            setTimeout(pollForServerRestart, 1000);
         });
 }
 
@@ -4789,6 +5045,114 @@ function updateGeoButtonState(bdAddress, active) {
         btn.classList.toggle('active', active);
         btn.title = active ? 'Stop Tracking' : 'Track Location';
     }
+
+    // Update communication visual
+    if (active) {
+        showCommLine(bdAddress);
+    } else {
+        hideCommLine(bdAddress);
+    }
+}
+
+// Communication line visuals for active geo tracking
+const commLines = {}; // bdAddress -> line layer info
+
+function showCommLine(bdAddress) {
+    const device = devices[bdAddress];
+    if (!device || !device.emitter_lat || !device.emitter_lon) return;
+    if (!systemMarker) return;
+
+    const systemPos = systemMarker.getLngLat();
+    const devicePos = [device.emitter_lon, device.emitter_lat];
+    const sourceId = `comm-line-${bdAddress}`;
+
+    // Create line data
+    const lineData = {
+        type: 'Feature',
+        geometry: {
+            type: 'LineString',
+            coordinates: [
+                [systemPos.lng, systemPos.lat],
+                devicePos
+            ]
+        }
+    };
+
+    // Add or update source
+    if (map.getSource(sourceId)) {
+        map.getSource(sourceId).setData(lineData);
+    } else {
+        map.addSource(sourceId, {
+            type: 'geojson',
+            data: lineData
+        });
+
+        // Add animated dashed line layer
+        map.addLayer({
+            id: `${sourceId}-glow`,
+            type: 'line',
+            source: sourceId,
+            paint: {
+                'line-color': '#ff3b30',
+                'line-width': 4,
+                'line-blur': 3,
+                'line-opacity': 0.5
+            }
+        });
+
+        map.addLayer({
+            id: `${sourceId}-line`,
+            type: 'line',
+            source: sourceId,
+            paint: {
+                'line-color': '#ff3b30',
+                'line-width': 2,
+                'line-dasharray': [2, 2]
+            }
+        });
+
+        commLines[bdAddress] = sourceId;
+    }
+}
+
+function hideCommLine(bdAddress) {
+    const sourceId = `comm-line-${bdAddress}`;
+
+    if (map.getLayer(`${sourceId}-line`)) {
+        map.removeLayer(`${sourceId}-line`);
+    }
+    if (map.getLayer(`${sourceId}-glow`)) {
+        map.removeLayer(`${sourceId}-glow`);
+    }
+    if (map.getSource(sourceId)) {
+        map.removeSource(sourceId);
+    }
+    delete commLines[bdAddress];
+}
+
+function updateCommLines() {
+    // Update all active comm lines with current positions
+    Object.keys(commLines).forEach(bdAddress => {
+        const device = devices[bdAddress];
+        if (!device || !device.emitter_lat || !device.emitter_lon) return;
+        if (!systemMarker) return;
+
+        const systemPos = systemMarker.getLngLat();
+        const sourceId = commLines[bdAddress];
+
+        if (map.getSource(sourceId)) {
+            map.getSource(sourceId).setData({
+                type: 'Feature',
+                geometry: {
+                    type: 'LineString',
+                    coordinates: [
+                        [systemPos.lng, systemPos.lat],
+                        [device.emitter_lon, device.emitter_lat]
+                    ]
+                }
+            });
+        }
+    });
 }
 
 /**
