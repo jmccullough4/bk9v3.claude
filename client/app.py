@@ -6127,8 +6127,8 @@ def get_network_status():
 
 
 @app.route('/api/network/diagnostic')
-@login_required
 def get_network_diagnostic():
+    # No login required - diagnostic endpoint for troubleshooting
     """Get detailed diagnostic info for WARHAMMER network troubleshooting."""
     # Get fresh netbird status
     peers = parse_netbird_status()
@@ -6158,8 +6158,8 @@ def get_network_diagnostic():
 
 
 @app.route('/api/network/test_udp', methods=['POST'])
-@login_required
 def test_udp_send():
+    # No login required - diagnostic endpoint for troubleshooting
     """Test UDP announcement to all peers."""
     peers = parse_netbird_status()
     connected_ips = [p['ip'] for p in peers if p.get('connected') and p.get('ip')]
