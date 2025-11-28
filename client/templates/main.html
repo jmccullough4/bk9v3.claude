@@ -483,10 +483,11 @@
                     </div>
                 </div>
                 <!-- Scan Controls -->
-                <div class="panel-section">
-                    <div class="section-header">
+                <div class="panel-section" id="sectionScan">
+                    <div class="section-header collapsible" onclick="toggleSection('sectionScan')">
                         <span class="section-icon">&#128225;</span>
                         <span>SCAN CONTROL</span>
+                        <span class="section-toggle">&#9660;</span>
                     </div>
                     <div class="section-content">
                         <div class="btn-group">
@@ -512,10 +513,11 @@
                 </div>
 
                 <!-- Map Controls -->
-                <div class="panel-section">
-                    <div class="section-header">
+                <div class="panel-section" id="sectionMap">
+                    <div class="section-header collapsible" onclick="toggleSection('sectionMap')">
                         <span class="section-icon">&#127758;</span>
                         <span>MAP CONTROL</span>
+                        <span class="section-toggle">&#9660;</span>
                     </div>
                     <div class="section-content">
                         <div class="map-style-btns">
@@ -584,19 +586,23 @@
                                 <span class="toggle-label">3D Buildings</span>
                             </label>
                         </div>
-                        <div class="btn-group mt-10">
-                            <button class="btn btn-secondary btn-sm" onclick="resetBreadcrumbs()">RESET ALL</button>
-                            <button class="btn btn-secondary btn-sm" onclick="resetAllGeo()">RESET GEO</button>
+                        <div class="reset-group mt-10">
+                            <span class="reset-label">RESET:</span>
+                            <button class="btn btn-reset btn-sm" onclick="resetHeatmap()" title="Clear target heatmap data">HEATMAP</button>
+                            <button class="btn btn-reset btn-sm" onclick="resetSystemTrail()" title="Clear system trail history">TRAIL</button>
+                            <button class="btn btn-reset btn-sm" onclick="resetAllGeo()" title="Clear all device geo estimates">GEO</button>
+                            <button class="btn btn-reset btn-sm" onclick="resetCepCircles()" title="Clear CEP circles only">CEP</button>
                         </div>
                     </div>
                 </div>
 
                 <!-- Active Geo Tracking -->
-                <div class="panel-section">
-                    <div class="section-header">
+                <div class="panel-section" id="sectionTracking">
+                    <div class="section-header collapsible" onclick="toggleSection('sectionTracking')">
                         <span class="section-icon">&#128205;</span>
                         <span>TARGET TRACKING</span>
                         <span class="tracking-status" id="trackingStatus">--</span>
+                        <span class="section-toggle">&#9660;</span>
                     </div>
                     <div class="section-content">
                         <div class="input-group">
@@ -645,10 +651,11 @@
                 </div>
 
                 <!-- Target Management -->
-                <div class="panel-section">
-                    <div class="section-header">
+                <div class="panel-section" id="sectionTargets">
+                    <div class="section-header collapsible" onclick="toggleSection('sectionTargets')">
                         <span class="section-icon">&#127919;</span>
                         <span>TARGETS</span>
+                        <span class="section-toggle">&#9660;</span>
                     </div>
                     <div class="section-content">
                         <div class="input-group">
@@ -699,10 +706,11 @@
                 </div>
                 <!-- Survey Table -->
                 <div class="panel-section survey-section" id="surveySection">
-                    <div class="section-header">
+                    <div class="section-header collapsible" onclick="toggleSection('surveySection')">
                         <span class="section-icon">&#128200;</span>
                         <span>BLUETOOTH SURVEY</span>
                         <span class="device-counter" id="surveyCount">0</span>
+                        <span class="section-toggle">&#9660;</span>
                     </div>
                     <!-- Search/Filter Bar -->
                     <div class="survey-search">
@@ -735,9 +743,10 @@
 
                 <!-- Stats Charts -->
                 <div class="panel-section chart-section" id="statsSection">
-                    <div class="section-header">
+                    <div class="section-header collapsible" onclick="toggleSection('statsSection')">
                         <span class="section-icon">&#128202;</span>
                         <span>STATISTICS</span>
+                        <span class="section-toggle">&#9660;</span>
                     </div>
                     <div class="section-content stats-container">
                         <div class="stats-top-row">
@@ -794,13 +803,14 @@
 
                 <!-- Live Logs -->
                 <div class="panel-section log-section" id="logsSection">
-                    <div class="section-header">
+                    <div class="section-header collapsible" onclick="toggleSection('logsSection')">
                         <span class="section-icon">&#128196;</span>
                         <span>LIVE LOG</span>
                         <div class="header-controls">
-                            <button class="btn btn-sm" onclick="exportCollection('json')" title="Export JSON">&#128190;</button>
-                            <button class="btn btn-sm" onclick="exportCollection('csv')" title="Export CSV">&#128195;</button>
+                            <button class="btn btn-sm" onclick="event.stopPropagation(); exportCollection('json')" title="Export JSON">&#128190;</button>
+                            <button class="btn btn-sm" onclick="event.stopPropagation(); exportCollection('csv')" title="Export CSV">&#128195;</button>
                         </div>
+                        <span class="section-toggle">&#9660;</span>
                     </div>
                     <div class="section-content log-container" id="logContainer">
                         <!-- Logs will be populated here -->

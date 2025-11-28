@@ -4501,6 +4501,9 @@ def restart_system():
 
         add_log("System restart initiated by operator", "INFO")
 
+        # Notify all clients to reset their UI
+        socketio.emit('system_restart')
+
         # Schedule a restart via start.sh script
         def do_restart():
             import os
@@ -4949,6 +4952,10 @@ def reset_all_geo():
         socketio.emit('device_update', devices[bd_addr])
 
     add_log(f"All geo data reset: {deleted} observations cleared", "INFO")
+
+    # Notify clients to clear geo visuals
+    socketio.emit('data_cleared', {'type': 'geo'})
+
     return jsonify({'status': 'reset', 'cleared': deleted})
 
 
@@ -4975,7 +4982,7 @@ def get_breadcrumbs():
 @app.route('/api/breadcrumbs/reset', methods=['POST'])
 @login_required
 def reset_breadcrumbs():
-    """Clear all breadcrumb data."""
+    """Clear all breadcrumb/heatmap data."""
     conn = get_db()
     c = conn.cursor()
     c.execute('DELETE FROM rssi_history')
@@ -4984,6 +4991,10 @@ def reset_breadcrumbs():
     conn.close()
 
     add_log(f"Breadcrumbs reset: {deleted} points cleared", "INFO")
+
+    # Notify clients to clear heatmap visuals
+    socketio.emit('data_cleared', {'type': 'heatmap'})
+
     return jsonify({'status': 'reset', 'cleared': deleted})
 
 
@@ -5010,8 +5021,12 @@ def get_system_trail():
 @app.route('/api/system_trail/reset', methods=['POST'])
 @login_required
 def reset_system_trail():
-    """Clear system trail data (same as breadcrumbs reset)."""
-    return reset_breadcrumbs()
+    """Clear system trail data."""
+    # System trail is derived from rssi_history, but we only clear the trail visualization
+    # The actual data is shared with breadcrumbs, so we notify clients to clear trail only
+    socketio.emit('data_cleared', {'type': 'trail'})
+    add_log("System trail reset", "INFO")
+    return jsonify({'status': 'reset'})
 
 
 def calculate_geolocation(observations):

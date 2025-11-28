@@ -321,6 +321,78 @@ function initWebSocket() {
             refreshUbertoothData();
         }
     });
+
+    // Handle system restart/update - auto-reset UI
+    socket.on('system_restart', () => {
+        addLogEntry('System restart detected - resetting UI state', 'WARNING');
+        resetUIState();
+    });
+
+    // Handle server-side data clear - reset relevant UI
+    socket.on('data_cleared', (data) => {
+        addLogEntry(`Server data cleared: ${data.type || 'all'}`, 'INFO');
+        if (data.type === 'devices' || data.type === 'all') {
+            clearAllDevices();
+        }
+        if (data.type === 'geo' || data.type === 'all') {
+            resetCepCircles();
+            Object.keys(markers).forEach(bdAddr => {
+                if (markers[bdAddr]) markers[bdAddr].remove();
+                delete markers[bdAddr];
+            });
+        }
+        if (data.type === 'trail' || data.type === 'all') {
+            clearSystemTrail();
+            liveTrailCoordinates = [];
+        }
+        if (data.type === 'heatmap' || data.type === 'all') {
+            clearBreadcrumbs();
+        }
+    });
+}
+
+/**
+ * Reset UI state (called on system restart/update)
+ */
+function resetUIState() {
+    // Clear all device data
+    devices = {};
+    markers = {};
+    cepCircles = {};
+
+    // Clear visual elements
+    clearBreadcrumbs();
+    clearSystemTrail();
+    liveTrailCoordinates = [];
+
+    // Reset operations bar
+    activeOperations.clear();
+    updateOperationsBar();
+
+    // Reset scan status
+    updateScanStatus(false);
+
+    // Reset tracking UI
+    manualTrackingBd = null;
+    activeGeoSessions.clear();
+    const btnStart = document.getElementById('btnStartTrack');
+    const btnStop = document.getElementById('btnStopTrack');
+    const trackSelect = document.getElementById('trackTargetSelect');
+    const trackingStatus = document.getElementById('trackingStatus');
+    if (btnStart) btnStart.disabled = false;
+    if (btnStop) btnStop.disabled = true;
+    if (trackSelect) trackSelect.disabled = false;
+    if (trackingStatus) {
+        trackingStatus.textContent = '--';
+        trackingStatus.className = 'tracking-status';
+    }
+
+    // Update UI tables
+    updateSurveyTable();
+    updateStats();
+
+    // Re-sync with server
+    syncSystemState();
 }
 
 /**
@@ -1715,10 +1787,30 @@ function resetBreadcrumbs() {
         .then(r => r.json())
         .then(data => {
             clearBreadcrumbs();
-            clearSystemTrail();
             addLogEntry(`Heatmap reset: ${data.cleared} points cleared`, 'INFO');
         })
         .catch(e => addLogEntry(`Failed to reset heatmap: ${e}`, 'ERROR'));
+}
+
+/**
+ * Reset heatmap only (alias for UI button)
+ */
+function resetHeatmap() {
+    resetBreadcrumbs();
+}
+
+/**
+ * Reset CEP circles only (without clearing geo data)
+ */
+function resetCepCircles() {
+    Object.keys(cepCircles).forEach(bdAddr => {
+        const sourceId = `cep-${bdAddr}`;
+        if (map.getLayer(sourceId)) map.removeLayer(sourceId);
+        if (map.getLayer(`${sourceId}-glow`)) map.removeLayer(`${sourceId}-glow`);
+        if (map.getSource(sourceId)) map.removeSource(sourceId);
+    });
+    cepCircles = {};
+    addLogEntry('CEP circles cleared', 'INFO');
 }
 
 // System Trail - where the system has been
@@ -1865,16 +1957,17 @@ function clearSystemTrail() {
 }
 
 function resetSystemTrail() {
-    if (!confirm('Reset system trail? This will clear all position history.')) return;
+    // Clear local state first
+    clearSystemTrail();
+    liveTrailCoordinates = [];
 
+    // Clear server-side data
     fetch('/api/system_trail/reset', { method: 'POST' })
         .then(r => r.json())
         .then(data => {
-            clearSystemTrail();
-            liveTrailCoordinates = [];
-            addLogEntry(`System trail reset`, 'INFO');
+            addLogEntry('System trail reset - new trail will begin from current position', 'INFO');
         })
-        .catch(e => addLogEntry(`Failed to reset trail: ${e}`, 'ERROR'));
+        .catch(e => addLogEntry(`Failed to reset trail on server: ${e}`, 'ERROR'));
 }
 
 /**
@@ -4571,6 +4664,7 @@ document.addEventListener('DOMContentLoaded', () => {
         initPanelResizers();
         initVerticalResizers();
         loadPanelLayout();
+        restoreSectionStates();
         refreshTargetList();
     }, 500);
 });
@@ -4828,6 +4922,101 @@ function togglePanelCollapse(panelId) {
     }
 
     savePanelLayout();
+}
+
+/**
+ * Toggle section collapse state
+ */
+function toggleSection(sectionId) {
+    const section = document.getElementById(sectionId);
+    if (!section) return;
+
+    section.classList.toggle('collapsed');
+
+    // Save section collapse states to localStorage
+    saveSectionStates();
+
+    // Trigger resize recalculation for right panel sections
+    if (sectionId === 'surveySection' || sectionId === 'statsSection' || sectionId === 'logsSection') {
+        recalculateRightPanelSections();
+    }
+}
+
+/**
+ * Save section collapse states to localStorage
+ */
+function saveSectionStates() {
+    const sections = ['sectionScan', 'sectionMap', 'sectionTracking', 'sectionTargets', 'surveySection', 'statsSection', 'logsSection'];
+    const states = {};
+    sections.forEach(id => {
+        const section = document.getElementById(id);
+        if (section) {
+            states[id] = section.classList.contains('collapsed');
+        }
+    });
+    localStorage.setItem('bluek9_section_states', JSON.stringify(states));
+}
+
+/**
+ * Restore section collapse states from localStorage
+ */
+function restoreSectionStates() {
+    const savedStates = localStorage.getItem('bluek9_section_states');
+    if (!savedStates) return;
+
+    try {
+        const states = JSON.parse(savedStates);
+        Object.keys(states).forEach(id => {
+            const section = document.getElementById(id);
+            if (section && states[id]) {
+                section.classList.add('collapsed');
+            }
+        });
+    } catch (e) {
+        console.warn('Failed to restore section states:', e);
+    }
+}
+
+/**
+ * Recalculate right panel section heights after collapse toggle
+ */
+function recalculateRightPanelSections() {
+    const surveySection = document.getElementById('surveySection');
+    const statsSection = document.getElementById('statsSection');
+    const logsSection = document.getElementById('logsSection');
+
+    if (!surveySection || !statsSection || !logsSection) return;
+
+    // Count non-collapsed sections
+    const sections = [surveySection, statsSection, logsSection];
+    const expandedSections = sections.filter(s => !s.classList.contains('collapsed'));
+
+    if (expandedSections.length === 0) return;
+
+    // Distribute height equally among expanded sections
+    const panelRight = document.getElementById('panelRight');
+    if (!panelRight) return;
+
+    const headerHeight = panelRight.querySelector('.panel-header')?.offsetHeight || 0;
+    const availableHeight = panelRight.offsetHeight - headerHeight;
+
+    // Calculate collapsed section heights
+    let collapsedHeight = 0;
+    sections.forEach(s => {
+        if (s.classList.contains('collapsed')) {
+            collapsedHeight += s.querySelector('.section-header')?.offsetHeight || 35;
+        }
+    });
+
+    // Subtract resize handles
+    const handleHeight = 8 * 2; // Two resize handles
+    const expandedAvailable = availableHeight - collapsedHeight - handleHeight;
+    const heightPerSection = Math.floor(expandedAvailable / expandedSections.length);
+
+    expandedSections.forEach(s => {
+        s.style.height = `${heightPerSection}px`;
+        s.style.flex = `0 0 ${heightPerSection}px`;
+    });
 }
 
 /**
