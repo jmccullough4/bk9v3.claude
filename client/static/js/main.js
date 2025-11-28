@@ -294,61 +294,56 @@ function handleNameResult(data) {
 /**
  * Initialize modern statistics visualization
  */
-// Detection history for timeline chart
-let detectionHistory = [];
-const MAX_HISTORY_POINTS = 30;
+// Activity tracking for real-time display
+let activityHistory = [];
+const MAX_ACTIVITY_POINTS = 60;
 let signalPulseAnimation = null;
+let activityChart = null;
+let lastDetectionCount = 0;
+let detectionEvents = [];  // Track recent detection events for spikes
 
 function initChart() {
     const ctx = document.getElementById('deviceTypeChart').getContext('2d');
 
-    // Create gradient for the line
-    const gradient = ctx.createLinearGradient(0, 0, 0, 100);
-    gradient.addColorStop(0, 'rgba(0, 212, 255, 0.4)');
-    gradient.addColorStop(1, 'rgba(0, 212, 255, 0)');
+    // Create gradients
+    const activityGradient = ctx.createLinearGradient(0, 0, 0, 80);
+    activityGradient.addColorStop(0, 'rgba(0, 212, 255, 0.6)');
+    activityGradient.addColorStop(0.5, 'rgba(0, 212, 255, 0.2)');
+    activityGradient.addColorStop(1, 'rgba(0, 212, 255, 0)');
 
-    // Initialize with empty data
-    for (let i = 0; i < MAX_HISTORY_POINTS; i++) {
-        detectionHistory.push({ total: 0, classic: 0, ble: 0 });
+    // Initialize with baseline activity (small random values to show it's alive)
+    for (let i = 0; i < MAX_ACTIVITY_POINTS; i++) {
+        activityHistory.push({
+            activity: Math.random() * 2,  // Small baseline noise
+            rssi: -80 + Math.random() * 10,
+            detections: 0
+        });
     }
 
-    deviceTypeChart = new Chart(ctx, {
+    activityChart = new Chart(ctx, {
         type: 'line',
         data: {
-            labels: Array(MAX_HISTORY_POINTS).fill(''),
+            labels: Array(MAX_ACTIVITY_POINTS).fill(''),
             datasets: [
                 {
-                    label: 'Total',
-                    data: detectionHistory.map(d => d.total),
+                    label: 'Signal Activity',
+                    data: activityHistory.map(d => d.activity),
                     borderColor: 'rgba(0, 212, 255, 1)',
-                    backgroundColor: gradient,
+                    backgroundColor: activityGradient,
                     fill: true,
-                    tension: 0.4,
+                    tension: 0.3,
                     borderWidth: 2,
-                    pointRadius: 0,
-                    pointHoverRadius: 4
+                    pointRadius: 0
                 },
                 {
-                    label: 'Classic',
-                    data: detectionHistory.map(d => d.classic),
-                    borderColor: 'rgba(0, 122, 255, 0.8)',
-                    backgroundColor: 'transparent',
-                    fill: false,
-                    tension: 0.4,
-                    borderWidth: 1.5,
-                    pointRadius: 0,
-                    borderDash: [3, 3]
-                },
-                {
-                    label: 'BLE',
-                    data: detectionHistory.map(d => d.ble),
-                    borderColor: 'rgba(48, 209, 88, 0.8)',
-                    backgroundColor: 'transparent',
-                    fill: false,
-                    tension: 0.4,
-                    borderWidth: 1.5,
-                    pointRadius: 0,
-                    borderDash: [3, 3]
+                    label: 'Detection Events',
+                    data: activityHistory.map(d => d.detections * 5),  // Scale up for visibility
+                    borderColor: 'rgba(255, 59, 48, 0.9)',
+                    backgroundColor: 'rgba(255, 59, 48, 0.3)',
+                    fill: true,
+                    tension: 0.1,
+                    borderWidth: 1,
+                    pointRadius: 0
                 }
             ]
         },
@@ -356,55 +351,25 @@ function initChart() {
             responsive: true,
             maintainAspectRatio: false,
             animation: {
-                duration: 500,
-                easing: 'easeOutQuart'
+                duration: 150,
+                easing: 'linear'
             },
             interaction: {
                 mode: 'index',
                 intersect: false
             },
             scales: {
-                x: {
-                    display: false
-                },
+                x: { display: false },
                 y: {
-                    display: true,
-                    position: 'right',
-                    grid: {
-                        color: 'rgba(0, 212, 255, 0.1)',
-                        drawBorder: false
-                    },
-                    ticks: {
-                        color: '#484f58',
-                        font: {
-                            family: 'Share Tech Mono',
-                            size: 9
-                        },
-                        maxTicksLimit: 4,
-                        padding: 5
-                    },
+                    display: false,
+                    min: 0,
+                    max: 20,
                     beginAtZero: true
                 }
             },
             plugins: {
-                legend: {
-                    display: false
-                },
-                tooltip: {
-                    enabled: true,
-                    backgroundColor: 'rgba(10, 14, 20, 0.9)',
-                    borderColor: 'rgba(0, 212, 255, 0.5)',
-                    borderWidth: 1,
-                    titleFont: {
-                        family: 'Share Tech Mono',
-                        size: 10
-                    },
-                    bodyFont: {
-                        family: 'Share Tech Mono',
-                        size: 10
-                    },
-                    padding: 8
-                }
+                legend: { display: false },
+                tooltip: { enabled: false }
             }
         }
     });
@@ -412,8 +377,11 @@ function initChart() {
     // Initialize signal pulse canvas
     initSignalPulse();
 
-    // Update detection history every 2 seconds
-    setInterval(updateDetectionHistory, 2000);
+    // Update activity visualization every 500ms for smooth real-time feel
+    setInterval(updateActivityVisualization, 500);
+
+    // Load version info
+    loadVersionInfo();
 }
 
 /**
@@ -432,7 +400,6 @@ function initSignalPulse() {
 
     const ctx = canvas.getContext('2d');
     let pulseRadius = 0;
-    let pulseOpacity = 1;
 
     function drawPulse() {
         ctx.clearRect(0, 0, 60, 60);
@@ -462,11 +429,15 @@ function initSignalPulse() {
             }
         }
 
-        // Draw center dot with glow
+        // Draw center dot with glow - color based on recent activity
+        const recentActivity = activityHistory.slice(-5).reduce((sum, d) => sum + d.detections, 0);
+        const isActive = recentActivity > 0 || scanning;
+        const glowColor = recentActivity > 0 ? 'rgba(255, 59, 48, ' : 'rgba(0, 212, 255, ';
+
         const glowGradient = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, 8);
-        glowGradient.addColorStop(0, scanning ? 'rgba(0, 212, 255, 1)' : 'rgba(100, 100, 100, 0.5)');
-        glowGradient.addColorStop(0.5, scanning ? 'rgba(0, 212, 255, 0.5)' : 'rgba(100, 100, 100, 0.2)');
-        glowGradient.addColorStop(1, 'rgba(0, 212, 255, 0)');
+        glowGradient.addColorStop(0, isActive ? glowColor + '1)' : 'rgba(100, 100, 100, 0.5)');
+        glowGradient.addColorStop(0.5, isActive ? glowColor + '0.5)' : 'rgba(100, 100, 100, 0.2)');
+        glowGradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
 
         ctx.beginPath();
         ctx.arc(centerX, centerY, 8, 0, Math.PI * 2);
@@ -475,7 +446,7 @@ function initSignalPulse() {
 
         ctx.beginPath();
         ctx.arc(centerX, centerY, 4, 0, Math.PI * 2);
-        ctx.fillStyle = scanning ? '#00d4ff' : '#666';
+        ctx.fillStyle = isActive ? (recentActivity > 0 ? '#ff3b30' : '#00d4ff') : '#666';
         ctx.fill();
 
         // Animate pulse only when scanning
@@ -493,46 +464,80 @@ function initSignalPulse() {
 }
 
 /**
- * Update detection history for timeline chart
+ * Update activity visualization - called frequently for smooth updates
  */
-let lastKnownDeviceCount = 0;
+function updateActivityVisualization() {
+    const currentCount = Object.keys(devices).length;
+    const newDetections = Math.max(0, currentCount - lastDetectionCount);
 
-function updateDetectionHistory() {
-    let classic = 0;
-    let ble = 0;
-    const currentTotal = Object.keys(devices).length;
+    // Calculate activity level based on recent events
+    let activityLevel = 1 + Math.random() * 1.5;  // Base noise
 
-    Object.values(devices).forEach(device => {
-        if (device.device_type === 'classic') classic++;
-        else if (device.device_type === 'ble') ble++;
+    if (scanning) {
+        activityLevel += 2;  // Boost when scanning
+    }
+
+    if (newDetections > 0) {
+        activityLevel += newDetections * 4;  // Big spike for new detections
+        detectionEvents.push({ time: Date.now(), count: newDetections });
+    }
+
+    // Calculate average RSSI activity
+    let rssiActivity = 0;
+    const recentDevices = Object.values(devices).slice(-10);
+    recentDevices.forEach(d => {
+        if (d.rssi && d.rssi !== '--') {
+            // Convert RSSI to positive activity value
+            rssiActivity += Math.max(0, (100 + parseInt(d.rssi)) / 20);
+        }
     });
 
-    // Use the maximum of current or last known to prevent drops
-    // This creates a "high water mark" effect - count only goes up during session
-    const displayTotal = Math.max(currentTotal, lastKnownDeviceCount);
-    lastKnownDeviceCount = displayTotal;
+    if (rssiActivity > 0) {
+        activityLevel += rssiActivity / recentDevices.length;
+    }
+
+    // Clean old detection events (older than 5 seconds)
+    const now = Date.now();
+    detectionEvents = detectionEvents.filter(e => now - e.time < 5000);
 
     // Add new data point
-    detectionHistory.push({
-        total: displayTotal,
-        classic: classic,
-        ble: ble
+    activityHistory.push({
+        activity: Math.min(18, activityLevel),
+        rssi: rssiActivity,
+        detections: newDetections
     });
 
     // Keep only last N points
-    if (detectionHistory.length > MAX_HISTORY_POINTS) {
-        detectionHistory.shift();
+    if (activityHistory.length > MAX_ACTIVITY_POINTS) {
+        activityHistory.shift();
     }
 
-    // Update chart data in place (don't replace arrays)
-    if (deviceTypeChart) {
-        for (let i = 0; i < detectionHistory.length; i++) {
-            deviceTypeChart.data.datasets[0].data[i] = detectionHistory[i].total;
-            deviceTypeChart.data.datasets[1].data[i] = detectionHistory[i].classic;
-            deviceTypeChart.data.datasets[2].data[i] = detectionHistory[i].ble;
-        }
-        deviceTypeChart.update('none'); // No animation for smooth update
+    lastDetectionCount = currentCount;
+
+    // Update chart
+    if (activityChart) {
+        activityChart.data.datasets[0].data = activityHistory.map(d => d.activity);
+        activityChart.data.datasets[1].data = activityHistory.map(d => d.detections * 5);
+        activityChart.update('none');
     }
+}
+
+/**
+ * Load version info from server
+ */
+function loadVersionInfo() {
+    fetch('/api/version')
+        .then(r => r.json())
+        .then(data => {
+            const versionEl = document.querySelector('.version-text');
+            if (versionEl && data.version) {
+                versionEl.textContent = `BlueK9 ${data.version}`;
+                if (data.commit) {
+                    versionEl.title = `Commit: ${data.commit}`;
+                }
+            }
+        })
+        .catch(e => console.log('Could not load version info'));
 }
 
 /**

@@ -3795,6 +3795,42 @@ def get_config():
     })
 
 
+@app.route('/api/version')
+def get_version():
+    """Get application version from git."""
+    version_info = {
+        'version': 'v3.0.26',
+        'commit': None,
+        'branch': None
+    }
+
+    try:
+        # Try to get git commit info
+        result = subprocess.run(
+            ['git', 'rev-parse', '--short', 'HEAD'],
+            capture_output=True, text=True, timeout=2,
+            cwd='/apps/bk9v3.claude'
+        )
+        if result.returncode == 0:
+            commit = result.stdout.strip()
+            version_info['commit'] = commit
+            version_info['version'] = f'v3.0.26-{commit}'
+
+        # Get branch name
+        result = subprocess.run(
+            ['git', 'rev-parse', '--abbrev-ref', 'HEAD'],
+            capture_output=True, text=True, timeout=2,
+            cwd='/apps/bk9v3.claude'
+        )
+        if result.returncode == 0:
+            version_info['branch'] = result.stdout.strip()
+
+    except Exception:
+        pass
+
+    return jsonify(version_info)
+
+
 @app.route('/api/state')
 @login_required
 def get_system_state():
