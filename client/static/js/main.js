@@ -973,6 +973,9 @@ function updateSystemLocation(location) {
             duration: 1000
         });
     }
+
+    // Update system trail in real-time if enabled
+    updateLiveTrail(location.lon, location.lat);
 }
 
 /**
@@ -1662,6 +1665,8 @@ function resetBreadcrumbs() {
 // System Trail - where the system has been
 let showSystemTrail = false;
 let systemTrailMarkers = [];
+let liveTrailCoordinates = [];  // Track coordinates for live updates
+const MAX_TRAIL_POINTS = 500;   // Limit trail length for performance
 
 function toggleSystemTrail() {
     showSystemTrail = document.getElementById('toggleSystemTrail').checked;
@@ -1670,6 +1675,7 @@ function toggleSystemTrail() {
         loadSystemTrail();
     } else {
         clearSystemTrail();
+        liveTrailCoordinates = [];
     }
 }
 
@@ -1680,13 +1686,17 @@ function loadSystemTrail() {
             clearSystemTrail();
 
             if (points.length === 0) {
-                addLogEntry('No system trail data available', 'INFO');
+                // Initialize empty trail - will update live
+                liveTrailCoordinates = [];
                 return;
             }
 
             // Filter valid points and create coordinates array for line
             const validPoints = points.filter(p => p.lat && p.lon);
             const coordinates = validPoints.map(p => [p.lon, p.lat]);
+
+            // Store for live updates
+            liveTrailCoordinates = [...coordinates];
 
             if (coordinates.length > 1) {
                 // Create GeoJSON for the trail line
@@ -1802,9 +1812,95 @@ function resetSystemTrail() {
         .then(r => r.json())
         .then(data => {
             clearSystemTrail();
+            liveTrailCoordinates = [];
             addLogEntry(`System trail reset`, 'INFO');
         })
         .catch(e => addLogEntry(`Failed to reset trail: ${e}`, 'ERROR'));
+}
+
+/**
+ * Update system trail with new GPS position in real-time
+ */
+function updateLiveTrail(lon, lat) {
+    if (!showSystemTrail) return;
+
+    const newCoord = [lon, lat];
+
+    // Check if this is a significant move (at least 2 meters) to avoid cluttering
+    if (liveTrailCoordinates.length > 0) {
+        const lastCoord = liveTrailCoordinates[liveTrailCoordinates.length - 1];
+        const distance = calculateDistance(lastCoord[1], lastCoord[0], lat, lon);
+        if (distance < 2) return;  // Skip if moved less than 2 meters
+    }
+
+    // Add new coordinate
+    liveTrailCoordinates.push(newCoord);
+
+    // Trim to max points for performance
+    if (liveTrailCoordinates.length > MAX_TRAIL_POINTS) {
+        liveTrailCoordinates.shift();
+    }
+
+    // Update the trail line on map
+    if (liveTrailCoordinates.length >= 2) {
+        const lineData = {
+            type: 'Feature',
+            geometry: {
+                type: 'LineString',
+                coordinates: liveTrailCoordinates
+            }
+        };
+
+        if (map.getSource('system-trail-line')) {
+            // Update existing source
+            map.getSource('system-trail-line').setData(lineData);
+        } else {
+            // Create new source and layers
+            map.addSource('system-trail-line', {
+                type: 'geojson',
+                data: lineData
+            });
+
+            // Add glow effect layer
+            map.addLayer({
+                id: 'system-trail-glow',
+                type: 'line',
+                source: 'system-trail-line',
+                paint: {
+                    'line-color': '#00d4ff',
+                    'line-width': 6,
+                    'line-blur': 4,
+                    'line-opacity': 0.3
+                }
+            });
+
+            // Add main trail line
+            map.addLayer({
+                id: 'system-trail-layer',
+                type: 'line',
+                source: 'system-trail-line',
+                paint: {
+                    'line-color': '#00d4ff',
+                    'line-width': 2,
+                    'line-opacity': 0.8
+                }
+            });
+        }
+    }
+}
+
+/**
+ * Calculate distance between two coordinates in meters (Haversine)
+ */
+function calculateDistance(lat1, lon1, lat2, lon2) {
+    const R = 6371000; // Earth's radius in meters
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+              Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+              Math.sin(dLon/2) * Math.sin(dLon/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return R * c;
 }
 
 // ==================== 3D TERRAIN & BUILDINGS ====================
