@@ -5458,7 +5458,7 @@ def udp_listener_loop():
         sock.bind(('0.0.0.0', BLUEK9_UDP_PORT))
         sock.settimeout(1.0)  # 1 second timeout for checking udp_listener_running
 
-        add_log(f"UDP listener bound to port {BLUEK9_UDP_PORT}", "DEBUG")
+        add_log(f"UDP listener active on port {BLUEK9_UDP_PORT}", "INFO")
 
         while udp_listener_running:
             try:
@@ -5473,6 +5473,9 @@ def udp_listener_loop():
                         system_id = message.get('system_id', 'Unknown')
                         system_name = message.get('system_name', system_id)
 
+                        # Check if this is a new peer
+                        is_new_peer = peer_ip not in bluek9_peers
+
                         # Update peer info
                         bluek9_peers[peer_ip] = {
                             'system_id': system_id,
@@ -5481,6 +5484,9 @@ def udp_listener_loop():
                             'last_checkin': datetime.utcnow().isoformat() + 'Z',
                             'ip': peer_ip
                         }
+
+                        if is_new_peer:
+                            add_log(f"*** BlueK9 peer discovered: {system_name} ({peer_ip}) ***", "INFO")
 
                         # Update location if provided
                         if message.get('location'):
@@ -5510,8 +5516,6 @@ def udp_listener_loop():
                             if new_targets > 0:
                                 add_log(f"Received {new_targets} new target(s) from {system_name}", "INFO")
                                 socketio.emit('targets_update', list(targets.values()))
-
-                        add_log(f"BlueK9 peer announcement from {system_name} ({peer_ip})", "DEBUG")
 
                 except json.JSONDecodeError:
                     pass  # Ignore malformed messages
@@ -6117,8 +6121,65 @@ def get_network_status():
         'running': warhammer_running,
         'peer_count': len(warhammer_peers),
         'connected_peers': sum(1 for p in warhammer_peers.values() if p.get('connected')),
-        'bluek9_peers': sum(1 for p in warhammer_peers.values() if p.get('is_bluek9')),
+        'bluek9_peers': len(bluek9_peers),
         'route_count': len(warhammer_routes)
+    })
+
+
+@app.route('/api/network/diagnostic')
+@login_required
+def get_network_diagnostic():
+    """Get detailed diagnostic info for WARHAMMER network troubleshooting."""
+    # Get fresh netbird status
+    peers = parse_netbird_status()
+    connected_ips = [p['ip'] for p in peers if p.get('connected') and p.get('ip')]
+
+    return jsonify({
+        'warhammer_running': warhammer_running,
+        'udp_listener_running': udp_listener_running,
+        'udp_port': BLUEK9_UDP_PORT,
+        'netbird_peers': {
+            'total': len(peers),
+            'connected': len([p for p in peers if p.get('connected')]),
+            'connected_ips': connected_ips
+        },
+        'bluek9_peers': {
+            'count': len(bluek9_peers),
+            'peers': list(bluek9_peers.values())
+        },
+        'peer_locations': list(peer_locations.values()),
+        'our_system_id': CONFIG.get('SYSTEM_ID', 'BK9-001'),
+        'our_system_name': CONFIG.get('SYSTEM_NAME', 'BlueK9'),
+        'our_location': {
+            'lat': current_location.get('lat'),
+            'lon': current_location.get('lon')
+        }
+    })
+
+
+@app.route('/api/network/test_udp', methods=['POST'])
+@login_required
+def test_udp_send():
+    """Test UDP announcement to all peers."""
+    peers = parse_netbird_status()
+    connected_ips = [p['ip'] for p in peers if p.get('connected') and p.get('ip')]
+
+    if not connected_ips:
+        return jsonify({
+            'status': 'error',
+            'message': 'No connected NetBird peers found',
+            'netbird_peers': len(peers)
+        })
+
+    sent = send_udp_announcement(connected_ips)
+    add_log(f"Test UDP: Sent announcement to {sent}/{len(connected_ips)} peers", "INFO")
+
+    return jsonify({
+        'status': 'sent',
+        'sent_to': sent,
+        'total_peers': len(connected_ips),
+        'peer_ips': connected_ips,
+        'bluek9_peers_found': len(bluek9_peers)
     })
 
 
