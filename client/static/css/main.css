@@ -1945,6 +1945,99 @@ body {
     color: var(--accent-danger);
 }
 
+/* ==================== UBERTOOTH STYLES ==================== */
+
+.ubertooth-status {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 15px;
+    margin-bottom: 15px;
+}
+
+.ubertooth-status .status-indicator {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 8px;
+}
+
+.ubertooth-status .status-indicator:last-child {
+    margin-bottom: 0;
+}
+
+.ubertooth-status .status-label {
+    color: var(--text-secondary);
+}
+
+.ubertooth-status .status-value {
+    font-family: var(--font-mono);
+    color: var(--accent-primary);
+}
+
+.ubertooth-status .status-value.running {
+    color: var(--accent-success);
+}
+
+.ubertooth-status .status-value.not-available {
+    color: var(--accent-danger);
+}
+
+.ubertooth-controls {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 15px;
+    flex-wrap: wrap;
+}
+
+.ubertooth-data {
+    max-height: 300px;
+    overflow-y: auto;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+}
+
+.ubertooth-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+
+.ubertooth-table th,
+.ubertooth-table td {
+    padding: 8px 10px;
+    text-align: left;
+    border-bottom: 1px solid var(--border-color);
+    font-family: var(--font-mono);
+}
+
+.ubertooth-table th {
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    font-weight: 600;
+    text-transform: uppercase;
+    font-size: 11px;
+    position: sticky;
+    top: 0;
+}
+
+.ubertooth-table tbody tr:hover {
+    background: rgba(0, 212, 255, 0.1);
+}
+
+.ubertooth-table .lap-cell {
+    color: var(--accent-primary);
+    font-weight: 600;
+}
+
+.ubertooth-table .uap-cell {
+    color: var(--accent-warning);
+}
+
+.ubertooth-table .bd-partial-cell {
+    color: var(--accent-success);
+}
+
 /* ==================== RESIZABLE PANELS ==================== */
 
 .panel-left,

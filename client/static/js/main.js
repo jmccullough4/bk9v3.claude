@@ -2530,7 +2530,8 @@ function updateRadioListSettings(radios) {
     if (!list) return;
     list.innerHTML = '';
 
-    if (radios.bluetooth.length === 0 && radios.wifi.length === 0) {
+    const ubertoothList = radios.ubertooth || [];
+    if (radios.bluetooth.length === 0 && radios.wifi.length === 0 && ubertoothList.length === 0) {
         list.innerHTML = '<div class="settings-hint">No radios detected</div>';
         return;
     }
@@ -2568,12 +2569,187 @@ function updateRadioListSettings(radios) {
         `;
         list.appendChild(item);
     });
+
+    // Ubertooth devices
+    ubertoothList.forEach(radio => {
+        const item = document.createElement('div');
+        const statusClass = radio.status === 'running' ? 'status-up' : (radio.status === 'ready' ? '' : 'status-down');
+        item.className = `radio-item`;
+        item.innerHTML = `
+            <div class="item-info">
+                <span class="item-primary">${radio.interface} (Ubertooth)</span>
+                <span class="item-secondary">${radio.version || 'Unknown firmware'}</span>
+                <span class="item-status ${statusClass}">${radio.status.toUpperCase()}</span>
+            </div>
+        `;
+        list.appendChild(item);
+    });
 }
 
 function refreshRadiosInSettings() {
     loadRadios();
     addLogEntry('Radio list refreshed', 'INFO');
 }
+
+// ==================== UBERTOOTH FUNCTIONS ====================
+
+let ubertoothRunning = false;
+
+function loadUbertoothStatus() {
+    fetch('/api/ubertooth/status')
+        .then(response => response.json())
+        .then(data => {
+            updateUbertoothUI(data);
+        })
+        .catch(error => {
+            console.error('Error loading Ubertooth status:', error);
+            const statusText = document.getElementById('ubertoothStatusText');
+            if (statusText) {
+                statusText.textContent = 'Error checking status';
+                statusText.className = 'status-value not-available';
+            }
+        });
+}
+
+function updateUbertoothUI(data) {
+    const statusText = document.getElementById('ubertoothStatusText');
+    const piconetCount = document.getElementById('ubertoothPiconetCount');
+    const startBtn = document.getElementById('ubertoothStartBtn');
+    const stopBtn = document.getElementById('ubertoothStopBtn');
+
+    if (statusText) {
+        if (!data.available) {
+            statusText.textContent = data.error || 'Not Available';
+            statusText.className = 'status-value not-available';
+        } else if (data.running) {
+            statusText.textContent = 'Running';
+            statusText.className = 'status-value running';
+        } else {
+            statusText.textContent = 'Ready';
+            statusText.className = 'status-value';
+        }
+    }
+
+    if (piconetCount) {
+        piconetCount.textContent = data.piconets_detected || 0;
+    }
+
+    ubertoothRunning = data.running || false;
+
+    if (startBtn) {
+        startBtn.disabled = !data.available || data.running;
+    }
+    if (stopBtn) {
+        stopBtn.disabled = !data.running;
+    }
+}
+
+function startUbertooth() {
+    fetch('/api/ubertooth/start', { method: 'POST' })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'started') {
+                addLogEntry('Ubertooth scanner started', 'INFO');
+                loadUbertoothStatus();
+            } else {
+                addLogEntry(`Failed to start Ubertooth: ${data.message}`, 'ERROR');
+            }
+        })
+        .catch(error => {
+            addLogEntry('Error starting Ubertooth: ' + error, 'ERROR');
+        });
+}
+
+function stopUbertooth() {
+    fetch('/api/ubertooth/stop', { method: 'POST' })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'stopped') {
+                addLogEntry('Ubertooth scanner stopped', 'INFO');
+                loadUbertoothStatus();
+            } else {
+                addLogEntry(`Failed to stop Ubertooth: ${data.message}`, 'ERROR');
+            }
+        })
+        .catch(error => {
+            addLogEntry('Error stopping Ubertooth: ' + error, 'ERROR');
+        });
+}
+
+function refreshUbertoothData() {
+    fetch('/api/ubertooth/data')
+        .then(response => response.json())
+        .then(data => {
+            updateUbertoothTable(data.piconets || []);
+            const piconetCount = document.getElementById('ubertoothPiconetCount');
+            if (piconetCount) {
+                piconetCount.textContent = data.piconets ? data.piconets.length : 0;
+            }
+        })
+        .catch(error => {
+            addLogEntry('Error refreshing Ubertooth data: ' + error, 'ERROR');
+        });
+}
+
+function updateUbertoothTable(piconets) {
+    const tableBody = document.getElementById('ubertoothDataTable');
+    if (!tableBody) return;
+
+    tableBody.innerHTML = '';
+
+    if (piconets.length === 0) {
+        const row = document.createElement('tr');
+        row.innerHTML = '<td colspan="7" style="text-align: center; color: var(--text-secondary);">No piconets detected</td>';
+        tableBody.appendChild(row);
+        return;
+    }
+
+    piconets.forEach(piconet => {
+        const row = document.createElement('tr');
+        const firstSeen = piconet.first_seen ? new Date(piconet.first_seen).toLocaleTimeString() : '-';
+        const lastSeen = piconet.last_seen ? new Date(piconet.last_seen).toLocaleTimeString() : '-';
+        const channels = piconet.channels ? piconet.channels.sort((a, b) => a - b).join(', ') : '-';
+
+        row.innerHTML = `
+            <td class="lap-cell">${piconet.lap || '-'}</td>
+            <td class="uap-cell">${piconet.uap || '??'}</td>
+            <td class="bd-partial-cell">${piconet.bd_partial || '-'}</td>
+            <td>${channels}</td>
+            <td>${piconet.packet_count || 0}</td>
+            <td>${firstSeen}</td>
+            <td>${lastSeen}</td>
+        `;
+        tableBody.appendChild(row);
+    });
+}
+
+function clearUbertoothData() {
+    if (!confirm('Clear all captured Ubertooth data?')) return;
+
+    fetch('/api/ubertooth/clear', { method: 'POST' })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'cleared') {
+                addLogEntry('Ubertooth data cleared', 'INFO');
+                updateUbertoothTable([]);
+                const piconetCount = document.getElementById('ubertoothPiconetCount');
+                if (piconetCount) piconetCount.textContent = '0';
+            }
+        })
+        .catch(error => {
+            addLogEntry('Error clearing Ubertooth data: ' + error, 'ERROR');
+        });
+}
+
+// Handle real-time Ubertooth updates via WebSocket
+socket.on('ubertooth_update', (data) => {
+    // Update piconet count
+    const piconetCount = document.getElementById('ubertoothPiconetCount');
+    if (piconetCount && data.packet_count) {
+        // We'll refresh the full data periodically
+        refreshUbertoothData();
+    }
+});
 
 // ==================== GPS CONFIGURATION ====================
 
@@ -3511,6 +3687,7 @@ function openSettingsModal() {
     loadSmsNumbers();
     loadRadios();
     loadSystemInfo();
+    loadUbertoothStatus();
     document.getElementById('settingsModal').classList.remove('hidden');
 }
 

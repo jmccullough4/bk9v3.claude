@@ -85,6 +85,12 @@ log_messages = []
 btmon_rssi_cache = {}  # BD Address -> latest RSSI from btmon
 btmon_device_cache = {}  # BD Address -> full device info from btmon
 
+# Ubertooth state
+ubertooth_process = None
+ubertooth_thread = None
+ubertooth_running = False
+ubertooth_data = {}  # LAP -> piconet info (UAP, channel, clock)
+
 # Bluetooth Company Identifiers (common ones)
 # Full list at: https://www.bluetooth.com/specifications/assigned-numbers/company-identifiers/
 BT_COMPANY_IDS = {
@@ -3669,8 +3675,8 @@ def scan_loop():
 # ==================== RADIO MANAGEMENT ====================
 
 def get_available_radios():
-    """Get list of available Bluetooth and WiFi radios."""
-    radios = {'bluetooth': [], 'wifi': []}
+    """Get list of available Bluetooth, WiFi, and Ubertooth radios."""
+    radios = {'bluetooth': [], 'wifi': [], 'ubertooth': []}
 
     # Bluetooth radios
     try:
@@ -3711,6 +3717,23 @@ def get_available_radios():
     except Exception as e:
         logger.error(f"Error getting WiFi radios: {e}")
 
+    # Ubertooth devices
+    try:
+        if check_ubertooth_available():
+            # Try to get device info
+            result = subprocess.run(['ubertooth-util', '-v'], capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                # Parse firmware version from output
+                version_info = result.stdout.strip() if result.stdout else 'Unknown'
+                radios['ubertooth'].append({
+                    'interface': 'ubertooth0',
+                    'version': version_info,
+                    'status': 'running' if ubertooth_running else 'ready',
+                    'type': 'ubertooth'
+                })
+    except Exception as e:
+        logger.debug(f"Ubertooth not available: {e}")
+
     return radios
 
 
@@ -3742,6 +3765,174 @@ def disable_radio(interface, radio_type='bluetooth'):
     except Exception as e:
         add_log(f"Failed to disable {interface}: {str(e)}", "ERROR")
         return False
+
+
+# ==================== UBERTOOTH FUNCTIONS ====================
+
+def check_ubertooth_available():
+    """Check if Ubertooth tools are available on the system."""
+    try:
+        result = subprocess.run(['which', 'ubertooth-rx'], capture_output=True, text=True)
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def get_ubertooth_info():
+    """Get Ubertooth device info."""
+    try:
+        result = subprocess.run(['ubertooth-util', '-v'], capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            # Parse version info
+            return {
+                'available': True,
+                'version': result.stdout.strip() if result.stdout else 'Unknown',
+                'status': 'ready' if not ubertooth_running else 'running'
+            }
+    except FileNotFoundError:
+        return {'available': False, 'error': 'Ubertooth tools not installed'}
+    except subprocess.TimeoutExpired:
+        return {'available': False, 'error': 'Ubertooth device not responding'}
+    except Exception as e:
+        return {'available': False, 'error': str(e)}
+    return {'available': False, 'error': 'Unknown error'}
+
+
+def parse_ubertooth_output(line):
+    """Parse a line of ubertooth-rx output for piconet information."""
+    global ubertooth_data
+
+    # ubertooth-rx outputs lines like:
+    # systime=1234567890 ch=39 LAP=abcdef err=0 clk6=12 clk=0x12345678
+    # or with UAP recovery:
+    # systime=1234567890 ch=39 LAP=abcdef UAP=12 err=0 clk6=12 clk=0x12345678
+
+    try:
+        if 'LAP=' in line:
+            parts = {}
+            for part in line.split():
+                if '=' in part:
+                    key, value = part.split('=', 1)
+                    parts[key] = value
+
+            lap = parts.get('LAP', '').upper()
+            if lap and len(lap) == 6:
+                channel = parts.get('ch', '?')
+                uap = parts.get('UAP', None)
+                clk = parts.get('clk', None)
+                clk6 = parts.get('clk6', None)
+
+                # Store piconet data
+                if lap not in ubertooth_data:
+                    ubertooth_data[lap] = {
+                        'lap': lap,
+                        'first_seen': datetime.now().isoformat(),
+                        'channels': set(),
+                        'packet_count': 0
+                    }
+
+                ubertooth_data[lap]['last_seen'] = datetime.now().isoformat()
+                ubertooth_data[lap]['channels'].add(int(channel) if channel.isdigit() else channel)
+                ubertooth_data[lap]['packet_count'] += 1
+
+                if uap:
+                    ubertooth_data[lap]['uap'] = uap.upper()
+                    # Construct BD_ADDR format: UAP:LAP -> XX:XX:XX:YY:YY:YY
+                    # LAP is lower 3 bytes, UAP is next byte above
+                    bd_partial = f"??:{uap}:{lap[0:2]}:{lap[2:4]}:{lap[4:6]}"
+                    ubertooth_data[lap]['bd_partial'] = bd_partial
+
+                if clk:
+                    ubertooth_data[lap]['clock'] = clk
+
+                return ubertooth_data[lap]
+    except Exception as e:
+        logger.error(f"Error parsing ubertooth output: {e}")
+    return None
+
+
+def ubertooth_scanner_thread():
+    """Background thread to run ubertooth-rx and capture piconet data."""
+    global ubertooth_process, ubertooth_running, ubertooth_data
+
+    add_log("Ubertooth scanner starting", "INFO")
+
+    try:
+        # Run ubertooth-rx to capture Bluetooth packets
+        # -r captures raw packets, -q prints LAP/UAP info
+        ubertooth_process = subprocess.Popen(
+            ['ubertooth-rx', '-q'],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1
+        )
+
+        while ubertooth_running and ubertooth_process.poll() is None:
+            line = ubertooth_process.stdout.readline()
+            if line:
+                piconet_info = parse_ubertooth_output(line.strip())
+                if piconet_info:
+                    # Emit update to clients
+                    socketio.emit('ubertooth_update', {
+                        'lap': piconet_info['lap'],
+                        'uap': piconet_info.get('uap'),
+                        'bd_partial': piconet_info.get('bd_partial'),
+                        'channels': list(piconet_info['channels']),
+                        'packet_count': piconet_info['packet_count'],
+                        'first_seen': piconet_info['first_seen'],
+                        'last_seen': piconet_info['last_seen']
+                    })
+
+    except FileNotFoundError:
+        add_log("Ubertooth tools not found - install ubertooth package", "ERROR")
+    except Exception as e:
+        add_log(f"Ubertooth scanner error: {e}", "ERROR")
+    finally:
+        if ubertooth_process:
+            ubertooth_process.terminate()
+            try:
+                ubertooth_process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                ubertooth_process.kill()
+        ubertooth_process = None
+        ubertooth_running = False
+        add_log("Ubertooth scanner stopped", "INFO")
+
+
+def start_ubertooth():
+    """Start the Ubertooth scanner."""
+    global ubertooth_thread, ubertooth_running, ubertooth_data
+
+    if ubertooth_running:
+        return False, "Ubertooth already running"
+
+    if not check_ubertooth_available():
+        return False, "Ubertooth tools not available"
+
+    # Clear previous data
+    ubertooth_data = {}
+    ubertooth_running = True
+
+    ubertooth_thread = threading.Thread(target=ubertooth_scanner_thread, daemon=True)
+    ubertooth_thread.start()
+
+    return True, "Ubertooth scanner started"
+
+
+def stop_ubertooth():
+    """Stop the Ubertooth scanner."""
+    global ubertooth_running, ubertooth_process
+
+    if not ubertooth_running:
+        return False, "Ubertooth not running"
+
+    ubertooth_running = False
+
+    if ubertooth_process:
+        ubertooth_process.terminate()
+
+    return True, "Ubertooth scanner stopping"
 
 
 # ==================== FLASK ROUTES ====================
@@ -4710,6 +4901,60 @@ def disable_radio_route(interface):
     return jsonify({'status': 'disabled' if success else 'failed'})
 
 
+# ==================== UBERTOOTH API ROUTES ====================
+
+@app.route('/api/ubertooth/status')
+@login_required
+def ubertooth_status():
+    """Get Ubertooth status and info."""
+    info = get_ubertooth_info()
+    info['running'] = ubertooth_running
+    info['piconets_detected'] = len(ubertooth_data)
+    return jsonify(info)
+
+
+@app.route('/api/ubertooth/start', methods=['POST'])
+@login_required
+def start_ubertooth_route():
+    """Start Ubertooth scanner."""
+    success, message = start_ubertooth()
+    return jsonify({'status': 'started' if success else 'failed', 'message': message})
+
+
+@app.route('/api/ubertooth/stop', methods=['POST'])
+@login_required
+def stop_ubertooth_route():
+    """Stop Ubertooth scanner."""
+    success, message = stop_ubertooth()
+    return jsonify({'status': 'stopped' if success else 'failed', 'message': message})
+
+
+@app.route('/api/ubertooth/data')
+@login_required
+def get_ubertooth_data():
+    """Get captured piconet data from Ubertooth."""
+    # Convert sets to lists for JSON serialization
+    data_list = []
+    for lap, info in ubertooth_data.items():
+        data_copy = info.copy()
+        data_copy['channels'] = list(info.get('channels', set()))
+        data_list.append(data_copy)
+    return jsonify({
+        'running': ubertooth_running,
+        'piconets': data_list
+    })
+
+
+@app.route('/api/ubertooth/clear', methods=['POST'])
+@login_required
+def clear_ubertooth_data():
+    """Clear captured Ubertooth data."""
+    global ubertooth_data
+    ubertooth_data = {}
+    add_log("Ubertooth data cleared", "INFO")
+    return jsonify({'status': 'cleared'})
+
+
 @app.route('/api/gps')
 @login_required
 def get_gps():
@@ -5145,91 +5390,123 @@ def get_logs():
 @login_required
 def export_logs():
     """Export comprehensive collection logs for offline analysis."""
-    export_format = request.args.get('format', 'json')
-    conn = get_db()
-    c = conn.cursor()
+    try:
+        export_format = request.args.get('format', 'json')
+        conn = get_db()
+        c = conn.cursor()
 
-    # Get all devices with full details
-    c.execute('''
-        SELECT bd_address, device_name, manufacturer, device_type, rssi,
-               first_seen, last_seen, system_lat, system_lon,
-               emitter_lat, emitter_lon, emitter_accuracy, is_target, raw_data
-        FROM devices
-        ORDER BY last_seen DESC
-    ''')
-    devices_log = [dict(row) for row in c.fetchall()]
+        # Get all devices with full details
+        try:
+            c.execute('''
+                SELECT bd_address, device_name, manufacturer, device_type, rssi,
+                       first_seen, last_seen, system_lat, system_lon,
+                       emitter_lat, emitter_lon, emitter_accuracy, is_target, raw_data
+                FROM devices
+                ORDER BY last_seen DESC
+            ''')
+            devices_log = [dict(row) for row in c.fetchall()]
+        except Exception as e:
+            add_log(f"Export: devices query failed: {e}", "WARNING")
+            devices_log = []
 
-    # Get all RSSI history for geolocation data
-    c.execute('''
-        SELECT bd_address, rssi, system_lat, system_lon, timestamp
-        FROM rssi_history
-        ORDER BY timestamp DESC
-    ''')
-    rssi_history = [dict(row) for row in c.fetchall()]
+        # Get all RSSI history for geolocation data
+        try:
+            c.execute('''
+                SELECT bd_address, rssi, system_lat, system_lon, timestamp
+                FROM rssi_history
+                ORDER BY timestamp DESC
+                LIMIT 10000
+            ''')
+            rssi_history = [dict(row) for row in c.fetchall()]
+        except Exception as e:
+            add_log(f"Export: rssi_history query failed: {e}", "WARNING")
+            rssi_history = []
 
-    # Get targets list
-    c.execute('SELECT bd_address, notes, added_at FROM targets')
-    targets_list = [dict(row) for row in c.fetchall()]
+        # Get targets list
+        try:
+            c.execute('SELECT bd_address, notes, added_at FROM targets')
+            targets_list = [dict(row) for row in c.fetchall()]
+        except Exception as e:
+            add_log(f"Export: targets query failed: {e}", "WARNING")
+            targets_list = []
 
-    # Get system settings
-    c.execute('SELECT key, value FROM system_settings')
-    settings = {row['key']: row['value'] for row in c.fetchall()}
+        # Get system settings
+        try:
+            c.execute('SELECT key, value FROM system_settings')
+            settings = {row['key']: row['value'] for row in c.fetchall()}
+        except Exception as e:
+            add_log(f"Export: settings query failed: {e}", "WARNING")
+            settings = {}
 
-    conn.close()
+        conn.close()
 
-    # Build export data (all timestamps in UTC)
-    export_data = {
-        'export_timestamp': datetime.utcnow().isoformat() + 'Z',
-        'system_id': settings.get('SYSTEM_ID', 'UNKNOWN'),
-        'devices': devices_log,
-        'rssi_history': rssi_history,
-        'targets': targets_list,
-        'summary': {
-            'total_devices': len(devices_log),
-            'total_rssi_readings': len(rssi_history),
-            'total_targets': len(targets_list),
-            'devices_with_location': sum(1 for d in devices_log if d.get('emitter_lat')),
-            'targets_detected': sum(1 for d in devices_log if d.get('is_target'))
+        # Build export data (all timestamps in UTC)
+        export_data = {
+            'export_timestamp': datetime.utcnow().isoformat() + 'Z',
+            'system_id': settings.get('SYSTEM_ID', 'UNKNOWN'),
+            'devices': devices_log,
+            'rssi_history': rssi_history,
+            'targets': targets_list,
+            'summary': {
+                'total_devices': len(devices_log),
+                'total_rssi_readings': len(rssi_history),
+                'total_targets': len(targets_list),
+                'devices_with_location': sum(1 for d in devices_log if d.get('emitter_lat')),
+                'targets_detected': sum(1 for d in devices_log if d.get('is_target'))
+            }
         }
-    }
 
-    if export_format == 'csv':
-        # Generate CSV for devices
-        import io
-        output = io.StringIO()
-        output.write('# BlueK9 Collection Export\n')
-        output.write(f'# Exported: {export_data["export_timestamp"]}\n')
-        output.write(f'# System ID: {export_data["system_id"]}\n')
-        output.write('# NOTE: All timestamps are in UTC\n')
-        output.write('#\n')
-        output.write('# DEVICES\n')
-        output.write('bd_address,device_name,manufacturer,device_type,rssi,first_seen,last_seen,')
-        output.write('system_lat,system_lon,emitter_lat,emitter_lon,emitter_accuracy,is_target\n')
+        if export_format == 'csv':
+            # Generate CSV for devices
+            import io
+            output = io.StringIO()
+            output.write('# BlueK9 Collection Export\n')
+            output.write(f'# Exported: {export_data["export_timestamp"]}\n')
+            output.write(f'# System ID: {export_data["system_id"]}\n')
+            output.write('# NOTE: All timestamps are in UTC\n')
+            output.write('#\n')
+            output.write('# DEVICES\n')
+            output.write('bd_address,device_name,manufacturer,device_type,rssi,first_seen,last_seen,')
+            output.write('system_lat,system_lon,emitter_lat,emitter_lon,emitter_accuracy,is_target\n')
 
-        for d in devices_log:
-            output.write(f'{d.get("bd_address","")},{d.get("device_name","").replace(",", ";") if d.get("device_name") else ""},')
-            output.write(f'{d.get("manufacturer","").replace(",", ";") if d.get("manufacturer") else ""},')
-            output.write(f'{d.get("device_type","")},{d.get("rssi","")},{d.get("first_seen","")},')
-            output.write(f'{d.get("last_seen","")},{d.get("system_lat","")},{d.get("system_lon","")},')
-            output.write(f'{d.get("emitter_lat","")},{d.get("emitter_lon","")},{d.get("emitter_accuracy","")},')
-            output.write(f'{1 if d.get("is_target") else 0}\n')
+            for d in devices_log:
+                name = (d.get("device_name") or "").replace(",", ";")
+                mfr = (d.get("manufacturer") or "").replace(",", ";")
+                output.write(f'{d.get("bd_address","")},{name},{mfr},')
+                output.write(f'{d.get("device_type","")},{d.get("rssi","")},{d.get("first_seen","")},')
+                output.write(f'{d.get("last_seen","")},{d.get("system_lat","")},{d.get("system_lon","")},')
+                output.write(f'{d.get("emitter_lat","")},{d.get("emitter_lon","")},{d.get("emitter_accuracy","")},')
+                output.write(f'{1 if d.get("is_target") else 0}\n')
 
-        output.write('#\n# RSSI HISTORY\n')
-        output.write('bd_address,rssi,system_lat,system_lon,timestamp\n')
-        for r in rssi_history:
-            output.write(f'{r.get("bd_address","")},{r.get("rssi","")},{r.get("system_lat","")},')
-            output.write(f'{r.get("system_lon","")},{r.get("timestamp","")}\n')
+            output.write('#\n# RSSI HISTORY\n')
+            output.write('bd_address,rssi,system_lat,system_lon,timestamp\n')
+            for r in rssi_history:
+                output.write(f'{r.get("bd_address","")},{r.get("rssi","")},{r.get("system_lat","")},')
+                output.write(f'{r.get("system_lon","")},{r.get("timestamp","")}\n')
 
-        response = make_response(output.getvalue())
-        response.headers['Content-Type'] = 'text/csv'
-        response.headers['Content-Disposition'] = f'attachment; filename=bluek9_collection_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
+            response = make_response(output.getvalue())
+            response.headers['Content-Type'] = 'text/csv'
+            response.headers['Content-Disposition'] = f'attachment; filename=bluek9_collection_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
+            return response
+
+        # Default JSON export - handle any non-serializable values
+        def json_serializer(obj):
+            if isinstance(obj, bytes):
+                return obj.decode('utf-8', errors='replace')
+            if hasattr(obj, 'isoformat'):
+                return obj.isoformat()
+            return str(obj)
+
+        response = make_response(json.dumps(export_data, indent=2, default=json_serializer))
+        response.headers['Content-Type'] = 'application/json'
+        response.headers['Content-Disposition'] = f'attachment; filename=bluek9_collection_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json'
         return response
 
-    # Default JSON export
-    response = make_response(json.dumps(export_data, indent=2))
-    response.headers['Content-Type'] = 'application/json'
-    response.headers['Content-Disposition'] = f'attachment; filename=bluek9_collection_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json'
-    return response
+    except Exception as e:
+        add_log(f"Export failed: {e}", "ERROR")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
 
 
 # ==================== WEBSOCKET EVENTS ====================

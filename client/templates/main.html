@@ -221,6 +221,45 @@
                         </div>
                         <button class="btn btn-secondary mt-10" onclick="refreshRadiosInSettings()">Refresh Radios</button>
                     </div>
+
+                    <div class="settings-group">
+                        <h3>Ubertooth Piconet Scanner</h3>
+                        <p class="settings-hint">Passive Bluetooth piconet detection using Ubertooth hardware.</p>
+                        <div id="ubertoothStatus" class="ubertooth-status">
+                            <div class="status-indicator">
+                                <span class="status-label">Status:</span>
+                                <span id="ubertoothStatusText" class="status-value">Checking...</span>
+                            </div>
+                            <div class="status-indicator">
+                                <span class="status-label">Piconets Detected:</span>
+                                <span id="ubertoothPiconetCount" class="status-value">0</span>
+                            </div>
+                        </div>
+                        <div class="ubertooth-controls">
+                            <button id="ubertoothStartBtn" class="btn btn-success" onclick="startUbertooth()">Start Scanner</button>
+                            <button id="ubertoothStopBtn" class="btn btn-danger" onclick="stopUbertooth()" disabled>Stop Scanner</button>
+                            <button class="btn btn-secondary" onclick="refreshUbertoothData()">Refresh Data</button>
+                            <button class="btn btn-warning" onclick="clearUbertoothData()">Clear Data</button>
+                        </div>
+                        <div id="ubertoothDataContainer" class="ubertooth-data">
+                            <table class="ubertooth-table">
+                                <thead>
+                                    <tr>
+                                        <th>LAP</th>
+                                        <th>UAP</th>
+                                        <th>BD Partial</th>
+                                        <th>Channels</th>
+                                        <th>Packets</th>
+                                        <th>First Seen</th>
+                                        <th>Last Seen</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="ubertoothDataTable">
+                                    <!-- Piconet data will be populated here -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- Users Tab -->
