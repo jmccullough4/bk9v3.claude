@@ -1393,6 +1393,18 @@ function showTargetContextMenu(event, bdAddress) {
     const device = devices[bdAddress];
     const isBLE = device && device.device_type === 'ble';
 
+    // Update name option based on whether name retrieval is running
+    const nameItem = menu.querySelector('[onclick*="name"]');
+    if (nameItem) {
+        if (nameRetrievalActive[bdAddress]) {
+            nameItem.innerHTML = '<i>⏹</i> Stop Get Name';
+            nameItem.classList.add('active-op');
+        } else {
+            nameItem.innerHTML = '<i>📝</i> Get Device Name';
+            nameItem.classList.remove('active-op');
+        }
+    }
+
     // Update stimulate option for BLE devices
     const stimItem = menu.querySelector('[onclick*="stimulate"]');
     if (stimItem) {
@@ -2429,6 +2441,18 @@ function showContextMenu(e, bdAddress) {
         targetItem.innerHTML = '<i>🎯</i> Remove from Targets';
     } else {
         targetItem.innerHTML = '<i>🎯</i> Add as Target';
+    }
+
+    // Update name option based on whether name retrieval is running
+    const nameItem = menu.querySelector('[onclick*="name"]');
+    if (nameItem) {
+        if (nameRetrievalActive[bdAddress]) {
+            nameItem.innerHTML = '<i>⏹</i> Stop Get Name';
+            nameItem.classList.add('active-op');
+        } else {
+            nameItem.innerHTML = '<i>📝</i> Get Device Name';
+            nameItem.classList.remove('active-op');
+        }
     }
 
     // Update locate option based on device type
