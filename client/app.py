@@ -5608,14 +5608,21 @@ def check_bluek9_peer(peer_ip, timeout=2):
         with urllib.request.urlopen(req, timeout=timeout) as response:
             data = json.loads(response.read().decode('utf-8'))
             if data.get('is_bluek9'):
-                return {
+                result = {
                     'is_bluek9': True,
                     'system_id': data.get('system_id'),
                     'system_name': data.get('system_name'),
                     'version': data.get('version')
                 }
-    except Exception:
-        pass
+                # Include location data if available
+                if data.get('location'):
+                    result['location'] = data['location']
+                add_log(f"Found BlueK9 peer: {data.get('system_name', data.get('system_id'))} at {peer_ip}", "INFO")
+                return result
+    except urllib.error.URLError:
+        pass  # Peer not reachable or not running BlueK9
+    except Exception as e:
+        add_log(f"Error checking peer {peer_ip}: {e}", "DEBUG")
 
     return {'is_bluek9': False}
 
@@ -6003,8 +6010,16 @@ def start_network_monitor():
     warhammer_monitor_thread.start()
 
     # Initial data fetch
-    get_warhammer_peers()
-    get_warhammer_routes()
+    peers = parse_netbird_status()
+    routes = get_netbird_routes()
+
+    # Emit initial data
+    socketio.emit('warhammer_update', {
+        'peers': peers,
+        'peer_locations': list(peer_locations.values()),
+        'routes': routes,
+        'bluek9_count': 0
+    })
 
     add_log("WARHAMMER network monitoring started", "INFO")
     return jsonify({'status': 'started'})
