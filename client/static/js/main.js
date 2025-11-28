@@ -5167,7 +5167,6 @@ function updateCommLines() {
 /**
  * Handle geo ping events from server
  */
-let manualTrackingBd = null;
 
 function handleGeoPing(data) {
     // Update device RSSI in real-time
