@@ -5664,3 +5664,531 @@ function stopTargetTracking() {
     })
     .catch(e => addLogEntry(`Failed to stop tracking: ${e}`, 'ERROR'));
 }
+
+// ==================== WARHAMMER NETWORK FUNCTIONS ====================
+
+// Network state
+let networkRunning = false;
+let networkPeers = [];
+let networkRoutes = [];
+let peerLocations = {};
+let peerMarkers = {};
+let connectionLines = {};
+let showPeerLocations = true;
+let showPeerConnections = true;
+
+/**
+ * Start WARHAMMER network monitoring
+ */
+function startNetworkMonitor() {
+    fetch('/api/network/monitor/start', { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+            if (data.status === 'started' || data.status === 'already_running') {
+                networkRunning = true;
+                updateNetworkUI();
+                addLogEntry('WARHAMMER network connected', 'INFO');
+                // Start cellular monitoring too
+                startCellularMonitor();
+            }
+        })
+        .catch(e => addLogEntry(`Network connect failed: ${e}`, 'ERROR'));
+}
+
+/**
+ * Stop WARHAMMER network monitoring
+ */
+function stopNetworkMonitor() {
+    fetch('/api/network/monitor/stop', { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+            networkRunning = false;
+            updateNetworkUI();
+            clearPeerMarkers();
+            addLogEntry('WARHAMMER network disconnected', 'INFO');
+        })
+        .catch(e => addLogEntry(`Network disconnect failed: ${e}`, 'ERROR'));
+}
+
+/**
+ * Update network UI elements
+ */
+function updateNetworkUI() {
+    const startBtn = document.getElementById('btnStartNetwork');
+    const stopBtn = document.getElementById('btnStopNetwork');
+    const badge = document.getElementById('networkStatusBadge');
+
+    if (startBtn) startBtn.disabled = networkRunning;
+    if (stopBtn) stopBtn.disabled = !networkRunning;
+
+    if (badge) {
+        badge.textContent = networkRunning ? 'ONLINE' : 'OFFLINE';
+        badge.className = `network-status-badge ${networkRunning ? 'online' : ''}`;
+    }
+}
+
+/**
+ * Update network data from WebSocket event
+ */
+function handleWarhammerUpdate(data) {
+    if (data.peers) {
+        networkPeers = data.peers;
+        updatePeerList();
+        document.getElementById('networkPeerCount').textContent = networkPeers.length;
+        document.getElementById('networkOnlineCount').textContent =
+            networkPeers.filter(p => p.connected).length;
+    }
+
+    if (data.peer_locations) {
+        data.peer_locations.forEach(loc => {
+            peerLocations[loc.system_id] = loc;
+        });
+        if (showPeerLocations) {
+            updatePeerMarkers();
+        }
+    }
+
+    if (data.routes) {
+        networkRoutes = data.routes;
+        updateRouteList();
+        document.getElementById('networkRouteCount').textContent = networkRoutes.length;
+    }
+}
+
+/**
+ * Update the peer list in the UI
+ */
+function updatePeerList() {
+    const container = document.getElementById('peerListContainer');
+    if (!container) return;
+
+    if (networkPeers.length === 0) {
+        container.innerHTML = '<div class="peer-item"><span class="peer-name" style="color: var(--text-muted);">No peers connected</span></div>';
+        return;
+    }
+
+    container.innerHTML = networkPeers.map(peer => `
+        <div class="peer-item" onclick="locatePeer('${peer.id}')">
+            <div class="peer-status-dot ${peer.connected ? 'online' : 'offline'}"></div>
+            <div class="peer-info">
+                <div class="peer-name">${peer.hostname || peer.name}</div>
+                <div class="peer-ip">${peer.ip}</div>
+            </div>
+            <button class="peer-locate-btn" onclick="event.stopPropagation(); locatePeer('${peer.id}')" title="Locate on map">
+                &#128205;
+            </button>
+        </div>
+    `).join('');
+}
+
+/**
+ * Update the route list in the UI
+ */
+function updateRouteList() {
+    const container = document.getElementById('routeListContainer');
+    if (!container) return;
+
+    if (networkRoutes.length === 0) {
+        container.innerHTML = '<div class="route-item"><span class="route-network" style="color: var(--text-muted);">No routes configured</span></div>';
+        return;
+    }
+
+    container.innerHTML = networkRoutes.map(route => `
+        <div class="route-item ${route.persistent ? 'persistent' : ''} ${!route.enabled ? 'disabled' : ''}">
+            <div class="route-info">
+                <div class="route-network">
+                    ${route.network}
+                    ${route.persistent ? '<span class="route-persistent-badge">PERSISTENT</span>' : ''}
+                </div>
+                <div class="route-desc">${route.description || 'No description'}</div>
+            </div>
+            <div class="route-actions">
+                <button class="route-action-btn" onclick="toggleRoute('${route.id}')"
+                    ${route.persistent ? 'disabled' : ''} title="${route.enabled ? 'Disable' : 'Enable'}">
+                    ${route.enabled ? '&#10004;' : '&#10006;'}
+                </button>
+                <button class="route-action-btn delete" onclick="deleteRoute('${route.id}')"
+                    ${route.persistent ? 'disabled' : ''} title="Delete">
+                    &#128465;
+                </button>
+            </div>
+        </div>
+    `).join('');
+}
+
+/**
+ * Locate a peer on the map
+ */
+function locatePeer(peerId) {
+    const peer = networkPeers.find(p => p.id === peerId);
+    if (!peer) return;
+
+    // Find peer location
+    const peerLoc = Object.values(peerLocations).find(loc =>
+        loc.system_id === peer.hostname || loc.system_name === peer.name
+    );
+
+    if (peerLoc && peerLoc.lat && peerLoc.lon) {
+        map.flyTo({
+            center: [peerLoc.lon, peerLoc.lat],
+            zoom: 14,
+            duration: 1500
+        });
+        addLogEntry(`Located peer: ${peer.hostname}`, 'INFO');
+    } else {
+        addLogEntry(`No location data for peer: ${peer.hostname}`, 'WARNING');
+    }
+}
+
+/**
+ * Toggle a route enabled/disabled
+ */
+function toggleRoute(routeId) {
+    fetch(`/api/network/routes/${routeId}/toggle`, { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+            if (data.error) {
+                addLogEntry(`Route toggle failed: ${data.error}`, 'ERROR');
+            } else {
+                addLogEntry(`Route ${data.enabled ? 'enabled' : 'disabled'}`, 'INFO');
+                refreshNetworkRoutes();
+            }
+        })
+        .catch(e => addLogEntry(`Route toggle failed: ${e}`, 'ERROR'));
+}
+
+/**
+ * Delete a route
+ */
+function deleteRoute(routeId) {
+    if (!confirm('Delete this route?')) return;
+
+    fetch(`/api/network/routes/${routeId}`, { method: 'DELETE' })
+        .then(r => r.json())
+        .then(data => {
+            if (data.error) {
+                addLogEntry(`Route delete failed: ${data.error}`, 'ERROR');
+            } else {
+                addLogEntry('Route deleted', 'INFO');
+                refreshNetworkRoutes();
+            }
+        })
+        .catch(e => addLogEntry(`Route delete failed: ${e}`, 'ERROR'));
+}
+
+/**
+ * Refresh network routes
+ */
+function refreshNetworkRoutes() {
+    fetch('/api/network/routes')
+        .then(r => r.json())
+        .then(data => {
+            networkRoutes = data.routes || [];
+            updateRouteList();
+        });
+}
+
+/**
+ * Open add route modal
+ */
+function openAddRouteModal() {
+    // Populate peer select
+    const peerSelect = document.getElementById('routePeer');
+    peerSelect.innerHTML = '<option value="">-- Select Peer --</option>';
+    networkPeers.forEach(peer => {
+        peerSelect.innerHTML += `<option value="${peer.id}">${peer.hostname || peer.name}</option>`;
+    });
+
+    document.getElementById('addRouteModal').classList.remove('hidden');
+}
+
+/**
+ * Close add route modal
+ */
+function closeAddRouteModal() {
+    document.getElementById('addRouteModal').classList.add('hidden');
+}
+
+/**
+ * Submit add route form
+ */
+function submitAddRoute() {
+    const network = document.getElementById('routeNetwork').value;
+    const description = document.getElementById('routeDescription').value;
+    const peer = document.getElementById('routePeer').value;
+    const metric = parseInt(document.getElementById('routeMetric').value) || 9999;
+    const masquerade = document.getElementById('routeMasquerade').checked;
+
+    if (!network) {
+        addLogEntry('Network CIDR is required', 'WARNING');
+        return;
+    }
+
+    fetch('/api/network/routes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ network, description, peer, metric, masquerade })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.error) {
+            addLogEntry(`Add route failed: ${data.error}`, 'ERROR');
+        } else {
+            addLogEntry(`Route added: ${network}`, 'INFO');
+            closeAddRouteModal();
+            refreshNetworkRoutes();
+        }
+    })
+    .catch(e => addLogEntry(`Add route failed: ${e}`, 'ERROR'));
+}
+
+/**
+ * Toggle peer location visibility
+ */
+function toggleShowPeers() {
+    showPeerLocations = document.getElementById('toggleShowPeers').checked;
+    if (showPeerLocations) {
+        updatePeerMarkers();
+    } else {
+        clearPeerMarkers();
+    }
+}
+
+/**
+ * Toggle connection line visibility
+ */
+function toggleShowConnections() {
+    showPeerConnections = document.getElementById('toggleShowConnections').checked;
+    if (showPeerConnections) {
+        updateConnectionLines();
+    } else {
+        clearConnectionLines();
+    }
+}
+
+/**
+ * Update peer markers on map
+ */
+function updatePeerMarkers() {
+    if (!map || !showPeerLocations) return;
+
+    Object.values(peerLocations).forEach(loc => {
+        if (!loc.lat || !loc.lon) return;
+
+        const markerId = `peer-${loc.system_id}`;
+
+        // Remove existing marker
+        if (peerMarkers[markerId]) {
+            peerMarkers[markerId].remove();
+        }
+
+        // Create marker element
+        const el = document.createElement('div');
+        el.className = 'peer-marker';
+
+        // Check if this is our system
+        const isSelf = loc.system_id === localStorage.getItem('bluek9_system_id');
+        if (isSelf) el.classList.add('self');
+
+        el.innerHTML = `
+            <div class="peer-marker-icon">
+                <svg viewBox="0 0 24 24">
+                    <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/>
+                </svg>
+            </div>
+            <div class="peer-marker-label">${loc.system_name || loc.system_id}</div>
+        `;
+
+        // Create and add marker
+        const marker = new mapboxgl.Marker({ element: el })
+            .setLngLat([loc.lon, loc.lat])
+            .addTo(map);
+
+        peerMarkers[markerId] = marker;
+    });
+
+    if (showPeerConnections) {
+        updateConnectionLines();
+    }
+}
+
+/**
+ * Clear all peer markers
+ */
+function clearPeerMarkers() {
+    Object.values(peerMarkers).forEach(marker => marker.remove());
+    peerMarkers = {};
+    clearConnectionLines();
+}
+
+/**
+ * Update connection lines between peers
+ */
+function updateConnectionLines() {
+    // Connection lines would require SVG overlay
+    // For now, we'll skip this as it's complex with Mapbox
+}
+
+/**
+ * Clear connection lines
+ */
+function clearConnectionLines() {
+    Object.keys(connectionLines).forEach(id => {
+        if (map.getLayer(id)) map.removeLayer(id);
+        if (map.getSource(id)) map.removeSource(id);
+    });
+    connectionLines = {};
+}
+
+/**
+ * Refresh network settings panel
+ */
+function refreshNetworkSettings() {
+    fetch('/api/network/status')
+        .then(r => r.json())
+        .then(data => {
+            document.getElementById('settingsNetworkName').textContent = data.network_name || 'WARHAMMER';
+            document.getElementById('settingsNetworkStatus').textContent = data.running ? 'CONNECTED' : 'DISCONNECTED';
+            document.getElementById('settingsNetworkPeers').textContent = `${data.connected_peers || 0} / ${data.peer_count || 0}`;
+            document.getElementById('settingsNetworkRoutes').textContent = data.route_count || '0';
+        });
+}
+
+// ==================== CELLULAR SIGNAL FUNCTIONS ====================
+
+let cellularRunning = false;
+
+/**
+ * Start cellular signal monitoring
+ */
+function startCellularMonitor() {
+    fetch('/api/cellular/monitor/start', { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+            cellularRunning = true;
+            // Initial fetch
+            updateCellularStatus();
+        })
+        .catch(e => console.log('Cellular monitor start failed:', e));
+}
+
+/**
+ * Update cellular status display
+ */
+function updateCellularStatus() {
+    fetch('/api/cellular/status')
+        .then(r => r.json())
+        .then(data => {
+            updateCellularUI(data);
+        })
+        .catch(e => {
+            // No modem - show no signal
+            updateCellularUI({ bars: 0, technology: '--' });
+        });
+}
+
+/**
+ * Update cellular UI from data
+ */
+function updateCellularUI(data) {
+    // Update signal bars
+    const bars = document.querySelectorAll('.signal-bar');
+    const barCount = data.bars || 0;
+
+    bars.forEach((bar, index) => {
+        const barNum = index + 1;
+        bar.classList.remove('active', 'warning', 'danger');
+
+        if (barNum <= barCount) {
+            if (barCount <= 2) {
+                bar.classList.add('danger');
+            } else if (barCount <= 3) {
+                bar.classList.add('warning');
+            } else {
+                bar.classList.add('active');
+            }
+        }
+    });
+
+    // Update technology label
+    const techEl = document.getElementById('cellularTech');
+    if (techEl) {
+        let tech = data.technology || '--';
+        // Simplify technology string
+        if (tech.includes('lte')) tech = 'LTE';
+        else if (tech.includes('5g')) tech = '5G';
+        else if (tech.includes('umts') || tech.includes('hspa')) tech = '3G';
+        else if (tech.includes('edge') || tech.includes('gprs')) tech = '2G';
+        techEl.textContent = tech.substring(0, 4).toUpperCase();
+    }
+
+    // Update tooltip values
+    const setTooltip = (id, value) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = value || '--';
+    };
+
+    setTooltip('cellularOperator', data.operator);
+    setTooltip('cellularTechnology', data.technology);
+    setTooltip('cellularQuality', data.quality ? `${data.quality}%` : '--');
+    setTooltip('cellularRssi', data.rssi ? `${data.rssi} dBm` : '--');
+    setTooltip('cellularPhone', data.phone_number);
+    setTooltip('cellularImei', data.imei);
+    setTooltip('cellularIccid', data.iccid);
+    setTooltip('cellularState', data.state);
+}
+
+/**
+ * Handle cellular update from WebSocket
+ */
+function handleCellularUpdate(data) {
+    updateCellularUI(data);
+}
+
+// ==================== WEBSOCKET HANDLERS FOR NETWORK ====================
+
+// Add WebSocket handlers for network events (called from initWebSocket)
+function initNetworkWebSocket() {
+    if (!socket) return;
+
+    socket.on('warhammer_update', handleWarhammerUpdate);
+    socket.on('peer_location_update', (data) => {
+        peerLocations[data.system_id] = data;
+        if (showPeerLocations) {
+            updatePeerMarkers();
+        }
+    });
+    socket.on('cellular_update', handleCellularUpdate);
+}
+
+// Extend the section states to include network section
+const originalSaveSectionStates = typeof saveSectionStates === 'function' ? saveSectionStates : null;
+function saveSectionStatesExtended() {
+    const sections = ['sectionScan', 'sectionMap', 'sectionTracking', 'sectionTargets', 'sectionNetwork', 'surveySection', 'statsSection', 'logsSection'];
+    const states = {};
+    sections.forEach(id => {
+        const section = document.getElementById(id);
+        if (section) {
+            states[id] = section.classList.contains('collapsed');
+        }
+    });
+    localStorage.setItem('bluek9_section_states', JSON.stringify(states));
+}
+
+// Override saveSectionStates
+saveSectionStates = saveSectionStatesExtended;
+
+// Initialize network features when app loads
+document.addEventListener('DOMContentLoaded', () => {
+    // Initialize network WebSocket handlers after a short delay
+    setTimeout(() => {
+        initNetworkWebSocket();
+        // Auto-start network monitor if setting is enabled
+        const autoConnect = localStorage.getItem('bluek9_network_autoconnect') !== 'false';
+        if (autoConnect) {
+            startNetworkMonitor();
+        }
+        // Initial cellular status check
+        updateCellularStatus();
+    }, 1000);
+});
