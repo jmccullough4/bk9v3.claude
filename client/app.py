@@ -5458,7 +5458,7 @@ def udp_listener_loop():
         sock.bind(('0.0.0.0', BLUEK9_UDP_PORT))
         sock.settimeout(1.0)  # 1 second timeout for checking udp_listener_running
 
-        add_log(f"UDP listener bound to port {BLUEK9_UDP_PORT}", "DEBUG")
+        add_log(f"UDP listener active on port {BLUEK9_UDP_PORT}", "INFO")
 
         while udp_listener_running:
             try:
@@ -5473,6 +5473,9 @@ def udp_listener_loop():
                         system_id = message.get('system_id', 'Unknown')
                         system_name = message.get('system_name', system_id)
 
+                        # Check if this is a new peer
+                        is_new_peer = peer_ip not in bluek9_peers
+
                         # Update peer info
                         bluek9_peers[peer_ip] = {
                             'system_id': system_id,
@@ -5481,6 +5484,9 @@ def udp_listener_loop():
                             'last_checkin': datetime.utcnow().isoformat() + 'Z',
                             'ip': peer_ip
                         }
+
+                        if is_new_peer:
+                            add_log(f"*** BlueK9 peer discovered: {system_name} ({peer_ip}) ***", "INFO")
 
                         # Update location if provided
                         if message.get('location'):
@@ -5510,8 +5516,6 @@ def udp_listener_loop():
                             if new_targets > 0:
                                 add_log(f"Received {new_targets} new target(s) from {system_name}", "INFO")
                                 socketio.emit('targets_update', list(targets.values()))
-
-                        add_log(f"BlueK9 peer announcement from {system_name} ({peer_ip})", "DEBUG")
 
                 except json.JSONDecodeError:
                     pass  # Ignore malformed messages
@@ -5811,7 +5815,12 @@ def broadcast_location_to_peers():
 
 
 def warhammer_monitor_loop():
-    """Background loop to monitor WARHAMMER network status."""
+    """Background loop to monitor WARHAMMER network status.
+
+    Timing:
+    - Discovery mode (no BlueK9 peers): announce every 20 seconds
+    - Connected mode (BlueK9 peers found): announce every 2 seconds for real-time updates
+    """
     global warhammer_running, warhammer_peers, peer_locations, bluek9_peers
 
     add_log("WARHAMMER network monitor started", "INFO")
@@ -5819,21 +5828,41 @@ def warhammer_monitor_loop():
     # Start UDP listener for peer announcements
     start_udp_listener()
 
-    check_cycle = 0
+    # Timing configuration
+    DISCOVERY_INTERVAL = 20  # Seconds between announcements when no BlueK9 peers
+    CONNECTED_INTERVAL = 2   # Seconds between announcements when BlueK9 peers connected
+    STALE_TIMEOUT = 30       # Seconds before marking a peer as offline
+
+    last_announce_time = 0
+    last_netbird_check = 0
+    NETBIRD_CHECK_INTERVAL = 10  # Check netbird status less frequently
 
     while warhammer_running:
         try:
-            # Get peer list from netbird
-            peers = parse_netbird_status()
+            current_time = time.time()
 
-            # Get routes
-            routes = get_netbird_routes()
+            # Check netbird status periodically (not every loop)
+            if current_time - last_netbird_check >= NETBIRD_CHECK_INTERVAL:
+                peers = parse_netbird_status()
+                routes = get_netbird_routes()
+                last_netbird_check = current_time
+            else:
+                # Use cached data
+                peers = list(warhammer_peers.values())
+                routes = list(warhammer_routes.values())
 
-            # Send UDP announcement to all connected peers (every cycle)
-            # This is lightweight and allows other BlueK9 instances to discover us
-            connected_peer_ips = [p['ip'] for p in peers if p.get('connected') and p.get('ip')]
-            if connected_peer_ips:
-                send_udp_announcement(connected_peer_ips)
+            # Determine interval based on whether we have BlueK9 peers
+            has_bluek9_peers = len(bluek9_peers) > 0
+            announce_interval = CONNECTED_INTERVAL if has_bluek9_peers else DISCOVERY_INTERVAL
+
+            # Send UDP announcement at appropriate interval
+            if current_time - last_announce_time >= announce_interval:
+                connected_peer_ips = [p['ip'] for p in peers if p.get('connected') and p.get('ip')]
+                if connected_peer_ips:
+                    sent = send_udp_announcement(connected_peer_ips)
+                    if not has_bluek9_peers and sent > 0:
+                        add_log(f"Searching for BlueK9 peers... (sent to {sent} network peers)", "DEBUG")
+                last_announce_time = current_time
 
             # Mark peers as BlueK9 if we've received UDP announcements from them
             for peer in peers:
@@ -5843,7 +5872,7 @@ def warhammer_monitor_loop():
                     peer['system_id'] = bluek9_peers[peer_ip].get('system_id')
                     peer['system_name'] = bluek9_peers[peer_ip].get('system_name')
 
-            # Clean up stale BlueK9 peers (no announcement in 60 seconds)
+            # Clean up stale BlueK9 peers (no announcement received recently)
             stale_peers = []
             for peer_ip, peer_info in bluek9_peers.items():
                 last_checkin = peer_info.get('last_checkin', '')
@@ -5851,14 +5880,18 @@ def warhammer_monitor_loop():
                     try:
                         last_dt = datetime.fromisoformat(last_checkin.replace('Z', '+00:00'))
                         age = (datetime.now(last_dt.tzinfo) - last_dt).total_seconds()
-                        if age > 60:
+                        if age > STALE_TIMEOUT:
                             stale_peers.append(peer_ip)
                     except Exception:
                         pass
 
             for peer_ip in stale_peers:
                 peer_name = bluek9_peers[peer_ip].get('system_name', peer_ip)
+                system_id = bluek9_peers[peer_ip].get('system_id')
                 del bluek9_peers[peer_ip]
+                # Also remove from peer_locations
+                if system_id and system_id in peer_locations:
+                    del peer_locations[system_id]
                 add_log(f"BlueK9 peer {peer_name} went offline", "INFO")
 
             # Emit updates to connected web clients
@@ -5869,12 +5902,11 @@ def warhammer_monitor_loop():
                 'bluek9_count': len(bluek9_peers)
             })
 
-            check_cycle += 1
-
         except Exception as e:
             add_log(f"WARHAMMER monitor error: {e}", "WARNING")
 
-        time.sleep(5)  # Update every 5 seconds
+        # Short sleep for responsive loop
+        time.sleep(0.5)
 
     # Stop UDP listener when monitor stops
     stop_udp_listener()
@@ -6089,8 +6121,65 @@ def get_network_status():
         'running': warhammer_running,
         'peer_count': len(warhammer_peers),
         'connected_peers': sum(1 for p in warhammer_peers.values() if p.get('connected')),
-        'bluek9_peers': sum(1 for p in warhammer_peers.values() if p.get('is_bluek9')),
+        'bluek9_peers': len(bluek9_peers),
         'route_count': len(warhammer_routes)
+    })
+
+
+@app.route('/api/network/diagnostic')
+@login_required
+def get_network_diagnostic():
+    """Get detailed diagnostic info for WARHAMMER network troubleshooting."""
+    # Get fresh netbird status
+    peers = parse_netbird_status()
+    connected_ips = [p['ip'] for p in peers if p.get('connected') and p.get('ip')]
+
+    return jsonify({
+        'warhammer_running': warhammer_running,
+        'udp_listener_running': udp_listener_running,
+        'udp_port': BLUEK9_UDP_PORT,
+        'netbird_peers': {
+            'total': len(peers),
+            'connected': len([p for p in peers if p.get('connected')]),
+            'connected_ips': connected_ips
+        },
+        'bluek9_peers': {
+            'count': len(bluek9_peers),
+            'peers': list(bluek9_peers.values())
+        },
+        'peer_locations': list(peer_locations.values()),
+        'our_system_id': CONFIG.get('SYSTEM_ID', 'BK9-001'),
+        'our_system_name': CONFIG.get('SYSTEM_NAME', 'BlueK9'),
+        'our_location': {
+            'lat': current_location.get('lat'),
+            'lon': current_location.get('lon')
+        }
+    })
+
+
+@app.route('/api/network/test_udp', methods=['POST'])
+@login_required
+def test_udp_send():
+    """Test UDP announcement to all peers."""
+    peers = parse_netbird_status()
+    connected_ips = [p['ip'] for p in peers if p.get('connected') and p.get('ip')]
+
+    if not connected_ips:
+        return jsonify({
+            'status': 'error',
+            'message': 'No connected NetBird peers found',
+            'netbird_peers': len(peers)
+        })
+
+    sent = send_udp_announcement(connected_ips)
+    add_log(f"Test UDP: Sent announcement to {sent}/{len(connected_ips)} peers", "INFO")
+
+    return jsonify({
+        'status': 'sent',
+        'sent_to': sent,
+        'total_peers': len(connected_ips),
+        'peer_ips': connected_ips,
+        'bluek9_peers_found': len(bluek9_peers)
     })
 
 
