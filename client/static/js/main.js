@@ -12,6 +12,7 @@ let markers = {};
 let cepCircles = {};
 let systemMarker = null;
 let followGps = false;  // Disabled by default
+let initialMapCentered = false;  // Track if we've centered on first GPS fix
 let showCep = true;
 let showBreadcrumbs = false;
 let scanning = false;
@@ -1093,8 +1094,18 @@ function updateSystemLocation(location) {
             .addTo(map);
     }
 
-    // Follow GPS if enabled
-    if (followGps) {
+    // Center map on first GPS fix, or follow GPS if enabled
+    if (!initialMapCentered) {
+        // First GPS fix - center map on system location
+        initialMapCentered = true;
+        map.flyTo({
+            center: [location.lon, location.lat],
+            zoom: 15,
+            duration: 1500
+        });
+        addLogEntry('Map centered on system location', 'INFO');
+    } else if (followGps) {
+        // Follow GPS if enabled
         map.flyTo({
             center: [location.lon, location.lat],
             zoom: Math.max(map.getZoom(), 15),
