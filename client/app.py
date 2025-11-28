@@ -80,7 +80,7 @@ devices = {}  # BD Address -> device info
 targets = {}  # BD Address -> target info
 active_radios = {'bluetooth': [], 'wifi': []}
 sms_numbers = []
-follow_gps = True
+follow_gps = False  # Disabled by default
 log_messages = []
 btmon_rssi_cache = {}  # BD Address -> latest RSSI from btmon
 btmon_device_cache = {}  # BD Address -> full device info from btmon
@@ -4525,71 +4525,35 @@ def apply_updates():
 
 
 def do_system_restart():
-    """Execute the actual system restart (can be called from multiple places)."""
-    global scanning_active
+    """Execute the actual system restart using flag-based approach with start.sh loop."""
+    global scanning_active, warhammer_running
+
+    add_log("Initiating system restart...", "INFO")
 
     # Stop any active scanning
     scanning_active = False
+
+    # Stop WARHAMMER monitoring
+    warhammer_running = False
 
     # Stop any active geo tracking sessions
     for bd_addr in list(active_geo_sessions.keys()):
         stop_active_geo(bd_addr)
 
-    # Path to start.sh script
-    script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    start_script = os.path.join(script_dir, 'scripts', 'start.sh')
-
-    # Also check /apps/bk9v3.claude location
-    if not os.path.exists(start_script):
-        start_script = '/apps/bk9v3.claude/scripts/start.sh'
-
-    add_log(f"Restart script path: {start_script}", "INFO")
-
-    if not os.path.exists(start_script):
-        add_log(f"Start script not found at {start_script}", "ERROR")
-        return False
-
+    # Create restart flag file - start.sh will detect this and restart
+    restart_flag = '/tmp/bluek9_restart'
     try:
-        # Create a restart script that waits for this process to die
-        restart_script = f'''#!/bin/bash
-# Wait for port to be free
-for i in {{1..30}}; do
-    if ! netstat -tuln 2>/dev/null | grep -q ':5000 '; then
-        break
-    fi
-    sleep 1
-done
-sleep 1
-# Start BlueK9 with --no-update to avoid update check on restart
-exec {start_script} --no-update
-'''
-        # Write restart script
-        restart_script_path = '/tmp/bluek9_restart.sh'
-        with open(restart_script_path, 'w') as f:
-            f.write(restart_script)
-        os.chmod(restart_script_path, 0o755)
-
-        # Launch the restart script in background with nohup
-        subprocess.Popen(
-            ['nohup', '/bin/bash', restart_script_path],
-            start_new_session=True,
-            stdout=open('/dev/null', 'w'),
-            stderr=open('/dev/null', 'w'),
-            preexec_fn=os.setpgrp
-        )
-
-        # Give it a moment to start
-        time.sleep(0.5)
-
-        # Now exit this process
-        add_log("Old process exiting, restart script will start new instance", "INFO")
-        os._exit(0)
-
+        with open(restart_flag, 'w') as f:
+            f.write(str(time.time()))
+        add_log("Restart flag created, exiting for restart...", "INFO")
     except Exception as e:
-        add_log(f"Restart exec failed: {e}", "ERROR")
-        return False
+        add_log(f"Failed to create restart flag: {e}", "ERROR")
 
-    return True
+    # Give a moment for the log to be sent
+    time.sleep(0.5)
+
+    # Exit the application - start.sh loop will restart it
+    os._exit(0)
 
 
 @app.route('/api/system/restart', methods=['POST'])
@@ -5595,15 +5559,19 @@ def get_netbird_routes():
         return []
 
 
-def check_bluek9_peer(peer_ip, timeout=2):
+def check_bluek9_peer(peer_ip, timeout=3):
     """Check if a peer is running BlueK9 by attempting to connect."""
     import urllib.request
     import urllib.error
+    import socket
+
+    add_log(f"Checking if peer {peer_ip} is running BlueK9...", "DEBUG")
 
     try:
         url = f"http://{peer_ip}:5000/api/network/checkin"
         req = urllib.request.Request(url, method='GET')
         req.add_header('X-BlueK9-Checkin', 'true')
+        req.add_header('User-Agent', 'BlueK9-PeerCheck/3.1.0')
 
         with urllib.request.urlopen(req, timeout=timeout) as response:
             data = json.loads(response.read().decode('utf-8'))
@@ -5619,10 +5587,16 @@ def check_bluek9_peer(peer_ip, timeout=2):
                     result['location'] = data['location']
                 add_log(f"Found BlueK9 peer: {data.get('system_name', data.get('system_id'))} at {peer_ip}", "INFO")
                 return result
-    except urllib.error.URLError:
-        pass  # Peer not reachable or not running BlueK9
+            else:
+                add_log(f"Peer {peer_ip} responded but is not BlueK9", "DEBUG")
+    except urllib.error.HTTPError as e:
+        add_log(f"Peer {peer_ip} HTTP error: {e.code} {e.reason}", "DEBUG")
+    except urllib.error.URLError as e:
+        add_log(f"Peer {peer_ip} connection failed: {e.reason}", "DEBUG")
+    except socket.timeout:
+        add_log(f"Peer {peer_ip} connection timed out", "DEBUG")
     except Exception as e:
-        add_log(f"Error checking peer {peer_ip}: {e}", "DEBUG")
+        add_log(f"Error checking peer {peer_ip}: {type(e).__name__}: {e}", "DEBUG")
 
     return {'is_bluek9': False}
 
@@ -5759,28 +5733,66 @@ def get_our_location_data():
 
 
 def broadcast_targets_to_peers():
-    """Broadcast our targets to all BlueK9 peers."""
+    """Broadcast our targets to all BlueK9 peers and receive their targets."""
     import urllib.request
+    import urllib.error
 
     if not targets:
-        return
+        add_log("No targets to broadcast", "DEBUG")
+        return {'sent': 0, 'received': 0}
+
+    if not bluek9_peers:
+        add_log("No BlueK9 peers to broadcast targets to", "DEBUG")
+        return {'sent': 0, 'received': 0}
 
     targets_data = {
         'system_id': CONFIG.get('SYSTEM_ID', 'BK9-001'),
         'targets': list(targets.values())
     }
 
-    for peer_ip in list(bluek9_peers.keys()):
+    sent_count = 0
+    received_count = 0
+
+    for peer_ip, peer_info in list(bluek9_peers.items()):
+        peer_name = peer_info.get('system_name', peer_ip)
         try:
             url = f"http://{peer_ip}:5000/api/network/targets"
             data = json.dumps(targets_data).encode('utf-8')
             req = urllib.request.Request(url, data=data, method='POST')
             req.add_header('Content-Type', 'application/json')
             req.add_header('X-BlueK9-Targets', 'true')
-            with urllib.request.urlopen(req, timeout=2) as response:
-                pass
-        except Exception:
-            pass
+            req.add_header('User-Agent', 'BlueK9-TargetSync/3.1.0')
+
+            with urllib.request.urlopen(req, timeout=3) as response:
+                resp_data = json.loads(response.read().decode('utf-8'))
+                sent_count += 1
+
+                # Check if peer sent back targets
+                if resp_data.get('targets'):
+                    for target in resp_data['targets']:
+                        bd_addr = target.get('bd_address', '').upper()
+                        if bd_addr and bd_addr not in targets:
+                            targets[bd_addr] = {
+                                'bd_address': bd_addr,
+                                'alias': target.get('alias', ''),
+                                'added_timestamp': datetime.utcnow().isoformat() + 'Z',
+                                'source': peer_info.get('system_id', peer_ip)
+                            }
+                            received_count += 1
+
+                add_log(f"Synced targets with {peer_name}", "DEBUG")
+
+        except urllib.error.HTTPError as e:
+            add_log(f"Target sync to {peer_name} failed: HTTP {e.code}", "WARNING")
+        except urllib.error.URLError as e:
+            add_log(f"Target sync to {peer_name} failed: {e.reason}", "WARNING")
+        except Exception as e:
+            add_log(f"Target sync to {peer_name} error: {e}", "WARNING")
+
+    if sent_count > 0:
+        add_log(f"Target sync: sent to {sent_count} peer(s), received {received_count} new target(s)", "INFO")
+
+    return {'sent': sent_count, 'received': received_count}
 
 
 # API endpoint for BlueK9 peer check-in (other BlueK9 instances call this)
@@ -5840,22 +5852,23 @@ def receive_peer_location():
     return jsonify(response)
 
 
-# API endpoint to receive targets from other BlueK9 peers
+# API endpoint to receive targets from other BlueK9 peers (bidirectional sync)
 @app.route('/api/network/targets', methods=['POST'])
 def receive_peer_targets():
-    """Receive shared targets from a BlueK9 peer."""
+    """Receive shared targets from a BlueK9 peer and return our targets."""
     global targets
 
     if request.headers.get('X-BlueK9-Targets') != 'true':
         return jsonify({'error': 'Invalid request'}), 400
 
     data = request.json
-    if not data or not data.get('targets'):
+    if not data:
         return jsonify({'error': 'Invalid data'}), 400
 
     source_system = data.get('system_id', 'Unknown')
     new_targets = 0
 
+    # Process incoming targets
     for target in data.get('targets', []):
         bd_addr = target.get('bd_address', '').upper()
         if bd_addr and bd_addr not in targets:
@@ -5873,7 +5886,13 @@ def receive_peer_targets():
         # Emit updated targets to web clients
         socketio.emit('targets_update', list(targets.values()))
 
-    return jsonify({'status': 'received', 'new_targets': new_targets})
+    # Return our targets for bidirectional sync
+    response = {
+        'status': 'received',
+        'new_targets': new_targets,
+        'targets': list(targets.values())  # Send back our targets
+    }
+    return jsonify(response)
 
 
 # API endpoint to manually sync targets with peers
@@ -5881,9 +5900,22 @@ def receive_peer_targets():
 @login_required
 def sync_targets_with_peers():
     """Manually trigger target sync with all BlueK9 peers."""
-    broadcast_targets_to_peers()
-    add_log("Target sync broadcast sent to peers", "INFO")
-    return jsonify({'status': 'synced', 'peer_count': len(bluek9_peers)})
+    if not bluek9_peers:
+        add_log("Target sync failed: no BlueK9 peers connected", "WARNING")
+        return jsonify({'status': 'no_peers', 'peer_count': 0, 'message': 'No BlueK9 peers connected'})
+
+    result = broadcast_targets_to_peers()
+
+    # Emit updated targets to web clients
+    socketio.emit('targets_update', list(targets.values()))
+
+    return jsonify({
+        'status': 'synced',
+        'peer_count': len(bluek9_peers),
+        'sent_to': result.get('sent', 0),
+        'received': result.get('received', 0),
+        'total_targets': len(targets)
+    })
 
 
 @app.route('/api/network/status')
