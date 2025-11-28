@@ -442,7 +442,7 @@ body {
 }
 
 .panel-section.collapsed .section-content,
-.panel-section.collapsed .survey-search,
+.panel-section.collapsed .survey-toolbar,
 .panel-section.collapsed .table-container {
     display: none;
 }
@@ -654,6 +654,69 @@ body {
     background: var(--accent-primary);
     color: var(--bg-primary);
     border-color: var(--accent-primary);
+}
+
+/* Map Toolbar */
+.map-toolbar {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+
+.map-layer-select {
+    flex: 1;
+    padding: 8px 10px;
+    background: rgba(0, 20, 30, 0.8);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.map-layer-select:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+}
+
+/* Toggle Row with inline reset */
+.toggle-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 0;
+}
+
+.toggle-row .toggle {
+    flex: 1;
+}
+
+.btn-inline-reset {
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: 1px solid rgba(255, 100, 100, 0.3);
+    border-radius: 4px;
+    color: rgba(255, 100, 100, 0.7);
+    font-size: 14px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    margin-left: 8px;
+}
+
+.btn-inline-reset:hover {
+    background: rgba(255, 100, 100, 0.2);
+    border-color: rgba(255, 100, 100, 0.6);
+    color: #ff6b6b;
+}
+
+.map-reset-all {
+    padding-top: 5px;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 /* Measurement display */
@@ -1078,12 +1141,20 @@ body {
     50% { opacity: 0.7; }
 }
 
-/* Survey Search/Filter Bar */
-.survey-search {
+/* Survey Toolbar */
+.survey-toolbar {
     display: flex;
+    gap: 8px;
+    align-items: center;
     padding: 8px 10px;
     background: rgba(0, 0, 0, 0.2);
     border-bottom: 1px solid var(--border-color);
+}
+
+/* Survey Search/Filter Bar */
+.survey-search {
+    display: flex;
+    flex: 1;
 }
 
 .survey-search input {
@@ -4078,6 +4149,9 @@ body.resizing-vertical * {
 }
 
 .peer-list-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
     font-family: var(--font-mono);
     font-size: 9px;
     color: var(--accent-primary);
@@ -4085,6 +4159,36 @@ body.resizing-vertical * {
     padding: 6px 10px;
     background: rgba(0, 0, 0, 0.3);
     border-bottom: 1px solid var(--border-color);
+}
+
+.peer-filter-toggle {
+    display: flex;
+    gap: 2px;
+}
+
+.peer-filter-btn {
+    padding: 2px 6px;
+    font-family: var(--font-mono);
+    font-size: 8px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    background: rgba(50, 50, 50, 0.5);
+    border: 1px solid var(--border-color);
+    border-radius: 3px;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.peer-filter-btn:hover {
+    background: rgba(0, 212, 255, 0.1);
+    border-color: var(--accent-primary);
+}
+
+.peer-filter-btn.active {
+    background: rgba(0, 212, 255, 0.2);
+    border-color: var(--accent-primary);
+    color: var(--accent-primary);
 }
 
 .peer-list-container {
@@ -4485,4 +4589,55 @@ body.resizing-vertical * {
 
 #addRouteModal .input {
     width: 100%;
+}
+
+/* System Restart Overlay */
+.system-restart-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: rgba(0, 0, 0, 0.9);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 99999;
+    animation: fadeIn 0.3s ease-out;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+.restart-message {
+    text-align: center;
+    color: var(--accent-primary);
+}
+
+.restart-icon {
+    font-size: 60px;
+    animation: spin 1s linear infinite;
+    margin-bottom: 20px;
+}
+
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+.restart-title {
+    font-family: var(--font-mono);
+    font-size: 24px;
+    font-weight: 700;
+    letter-spacing: 4px;
+    margin-bottom: 10px;
+}
+
+.restart-subtitle {
+    font-family: var(--font-mono);
+    font-size: 14px;
+    color: var(--text-muted);
+    letter-spacing: 2px;
 }

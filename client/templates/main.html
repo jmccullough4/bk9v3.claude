@@ -642,17 +642,6 @@
                                 <span>&#9632;</span> STOP
                             </button>
                         </div>
-                        <div class="btn-group mt-10">
-                            <button class="btn btn-secondary" onclick="stimulateScan('classic')">
-                                STIM CLASSIC
-                            </button>
-                            <button class="btn btn-secondary" onclick="stimulateScan('ble')">
-                                STIM BLE
-                            </button>
-                        </div>
-                        <button class="btn btn-warning btn-full mt-10" onclick="clearResults()">
-                            CLEAR RESULTS
-                        </button>
                     </div>
                 </div>
 
@@ -664,17 +653,18 @@
                         <span class="section-toggle">&#9660;</span>
                     </div>
                     <div class="section-content">
-                        <div class="map-style-btns">
-                            <button class="btn btn-map active" data-style="dark" onclick="setMapStyle('dark')">DARK</button>
-                            <button class="btn btn-map" data-style="streets" onclick="setMapStyle('streets')">STREETS</button>
-                            <button class="btn btn-map" data-style="satellite" onclick="setMapStyle('satellite')">SAT</button>
-                        </div>
-                        <div class="map-tools mt-10">
+                        <!-- Layer Selection and Tools -->
+                        <div class="map-toolbar">
+                            <select class="map-layer-select" id="mapLayerSelect" onchange="setMapStyle(this.value)">
+                                <option value="dark">DARK</option>
+                                <option value="streets">STREETS</option>
+                                <option value="satellite">SATELLITE</option>
+                            </select>
                             <button class="btn btn-secondary btn-sm" onclick="recenterOnSystem()" title="Recenter on system location">
-                                <span>&#8982;</span> RECENTER
+                                &#8982; CENTER
                             </button>
                             <button class="btn btn-secondary btn-sm" id="measureBtn" onclick="toggleMeasure()" title="Measure distance">
-                                <span>&#128207;</span> MEASURE
+                                &#128207; MEASURE
                             </button>
                         </div>
                         <div id="measureInfo" class="measure-info hidden">
@@ -688,54 +678,56 @@
                             </div>
                             <button class="btn btn-danger btn-sm" onclick="clearMeasure()">CLEAR</button>
                         </div>
-                        <div class="toggle-group mt-10">
+                        <!-- Toggles with inline reset buttons -->
+                        <div class="toggle-row mt-10">
                             <label class="toggle">
                                 <input type="checkbox" id="toggleFollowGps" onchange="toggleFollowGps()">
                                 <span class="toggle-slider"></span>
                                 <span class="toggle-label">Follow GPS</span>
                             </label>
                         </div>
-                        <div class="toggle-group">
+                        <div class="toggle-row">
                             <label class="toggle">
                                 <input type="checkbox" id="toggleShowCep" checked onchange="toggleShowCep()">
                                 <span class="toggle-slider"></span>
                                 <span class="toggle-label">Show CEP</span>
                             </label>
+                            <button class="btn-inline-reset" onclick="resetCepCircles()" title="Clear CEP circles">&#8635;</button>
                         </div>
-                        <div class="toggle-group">
+                        <div class="toggle-row">
                             <label class="toggle">
                                 <input type="checkbox" id="toggleBreadcrumbs" onchange="toggleBreadcrumbs()">
                                 <span class="toggle-slider"></span>
                                 <span class="toggle-label">Target Heatmap</span>
                             </label>
+                            <button class="btn-inline-reset" onclick="resetHeatmap()" title="Clear heatmap">&#8635;</button>
                         </div>
-                        <div class="toggle-group">
+                        <div class="toggle-row">
                             <label class="toggle">
                                 <input type="checkbox" id="toggleSystemTrail" onchange="toggleSystemTrail()">
                                 <span class="toggle-slider"></span>
                                 <span class="toggle-label">System Trail</span>
                             </label>
+                            <button class="btn-inline-reset" onclick="resetSystemTrail()" title="Clear trail">&#8635;</button>
                         </div>
-                        <div class="toggle-group">
+                        <div class="toggle-row">
                             <label class="toggle">
                                 <input type="checkbox" id="toggle3dTerrain" onchange="toggle3dTerrain()">
                                 <span class="toggle-slider"></span>
                                 <span class="toggle-label">3D Terrain</span>
                             </label>
                         </div>
-                        <div class="toggle-group">
+                        <div class="toggle-row">
                             <label class="toggle">
                                 <input type="checkbox" id="toggle3dBuildings" onchange="toggle3dBuildings()">
                                 <span class="toggle-slider"></span>
                                 <span class="toggle-label">3D Buildings</span>
                             </label>
                         </div>
-                        <div class="reset-group mt-10">
-                            <span class="reset-label">RESET:</span>
-                            <button class="btn btn-reset btn-sm" onclick="resetHeatmap()" title="Clear target heatmap data">HEATMAP</button>
-                            <button class="btn btn-reset btn-sm" onclick="resetSystemTrail()" title="Clear system trail history">TRAIL</button>
-                            <button class="btn btn-reset btn-sm" onclick="resetAllGeo()" title="Clear all device geo estimates">GEO</button>
-                            <button class="btn btn-reset btn-sm" onclick="resetCepCircles()" title="Clear CEP circles only">CEP</button>
+                        <div class="map-reset-all mt-10">
+                            <button class="btn btn-reset btn-sm btn-full" onclick="resetAllGeo()" title="Clear all geo estimates">
+                                &#8635; RESET ALL GEO DATA
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -968,7 +960,13 @@
                         </div>
                         <!-- Peer List -->
                         <div class="network-peer-list mt-10" id="networkPeerList">
-                            <div class="peer-list-header">CONNECTED PEERS</div>
+                            <div class="peer-list-header">
+                                <span>CONNECTED PEERS</span>
+                                <div class="peer-filter-toggle">
+                                    <button class="peer-filter-btn active" id="filterAllPeers" onclick="setPeerFilter('all')" title="All Peers">ALL</button>
+                                    <button class="peer-filter-btn" id="filterBk9Peers" onclick="setPeerFilter('bluek9')" title="BlueK9 Only">BK9</button>
+                                </div>
+                            </div>
                             <div class="peer-list-container" id="peerListContainer">
                                 <!-- Peers populated by JS -->
                             </div>
@@ -1026,9 +1024,12 @@
                         <span class="section-toggle">&#9660;</span>
                     </div>
                     <!-- Search/Filter Bar -->
-                    <div class="survey-search">
-                        <input type="text" id="surveySearch" placeholder="Filter by BD address, name, manufacturer..." oninput="filterSurveyTable()">
-                        <button class="search-clear" onclick="clearSurveyFilter()" title="Clear filter">&times;</button>
+                    <div class="survey-toolbar">
+                        <div class="survey-search">
+                            <input type="text" id="surveySearch" placeholder="Filter by BD address, name, manufacturer..." oninput="filterSurveyTable()">
+                            <button class="search-clear" onclick="clearSurveyFilter()" title="Clear filter">&times;</button>
+                        </div>
+                        <button class="btn btn-sm btn-warning" onclick="clearResults()" title="Clear all results">CLEAR</button>
                     </div>
                     <div class="section-content table-container">
                         <table class="survey-table" id="surveyTable">
