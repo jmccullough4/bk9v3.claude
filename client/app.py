@@ -3167,7 +3167,13 @@ def active_geo_track(bd_address, interface='hci0', methods=None):
 
     method_str = '+'.join(methods)
     add_log(f"Starting active geo tracking for {bd_address} ({method_str})", "INFO")
-    session = active_geo_sessions.get(bd_address, {})
+
+    # Debug: Log session state
+    session = active_geo_sessions.get(bd_address)
+    if session is None:
+        add_log(f"ERROR: No session found for {bd_address} - sessions: {list(active_geo_sessions.keys())}", "ERROR")
+        return
+    add_log(f"Session state: active={session.get('active')}, interface={session.get('interface')}", "DEBUG")
 
     ping_count = 0
     successful_pings = 0
@@ -4482,7 +4488,7 @@ def apply_updates():
 @app.route('/api/system/restart', methods=['POST'])
 @login_required
 def restart_system():
-    """Restart the BlueK9 application."""
+    """Restart the BlueK9 application via start.sh script."""
     global scanning_active
 
     try:
@@ -4495,82 +4501,70 @@ def restart_system():
 
         add_log("System restart initiated by operator", "INFO")
 
-        # Schedule a restart - we'll do this via a background thread
+        # Schedule a restart via start.sh script
         def do_restart():
             import os
             import sys
             import subprocess
-            import signal
 
             time.sleep(2)  # Brief delay to allow response to be sent
 
-            # Get the current script path and working directory
-            python = sys.executable
-            script = os.path.abspath(__file__)
-            cwd = os.path.dirname(script)
+            # Path to start.sh script
+            script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            start_script = os.path.join(script_dir, 'scripts', 'start.sh')
 
-            add_log(f"Executing restart: {python} {script}", "INFO")
+            # Also check /apps/bk9v3.claude location
+            if not os.path.exists(start_script):
+                start_script = '/apps/bk9v3.claude/scripts/start.sh'
+
+            add_log(f"Restart script path: {start_script}", "INFO")
+
+            if not os.path.exists(start_script):
+                add_log(f"Start script not found at {start_script}", "ERROR")
+                return
 
             try:
                 # Create a restart script that waits for this process to die
-                # then starts the new one
-                restart_script = f'''
-import time
-import os
-import subprocess
-import sys
-
-# Wait for the old process to exit (check if port is free)
-import socket
-max_wait = 30
-for i in range(max_wait):
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(1)
-        result = s.connect_ex(('127.0.0.1', 5000))
-        s.close()
-        if result != 0:
-            # Port is free
-            break
-    except:
+                restart_script = f'''#!/bin/bash
+# Wait for port to be free
+for i in {{1..30}}; do
+    if ! netstat -tuln 2>/dev/null | grep -q ':5000 '; then
         break
-    time.sleep(1)
-
-# Small additional delay to ensure cleanup
-time.sleep(1)
-
-# Start the new process
-os.chdir("{cwd}")
-subprocess.Popen(["{python}", "{script}"])
+    fi
+    sleep 1
+done
+sleep 1
+# Start BlueK9 with --no-update to avoid update check on restart
+exec {start_script} --no-update
 '''
-                # Write restart script to temp file
-                restart_script_path = '/tmp/bluek9_restart.py'
+                # Write restart script
+                restart_script_path = '/tmp/bluek9_restart.sh'
                 with open(restart_script_path, 'w') as f:
                     f.write(restart_script)
+                os.chmod(restart_script_path, 0o755)
 
-                # Launch the restart script in background
+                # Launch the restart script in background with nohup
                 subprocess.Popen(
-                    [python, restart_script_path],
+                    ['nohup', '/bin/bash', restart_script_path],
                     start_new_session=True,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL
+                    stdout=open('/dev/null', 'w'),
+                    stderr=open('/dev/null', 'w'),
+                    preexec_fn=os.setpgrp
                 )
 
                 # Give it a moment to start
                 time.sleep(0.5)
 
-                # Now exit this process - the restart script will wait and start a new one
+                # Now exit this process
                 add_log("Old process exiting, restart script will start new instance", "INFO")
                 os._exit(0)
 
             except Exception as e:
                 add_log(f"Restart exec failed: {e}", "ERROR")
-                # Fallback: try os.execv
-                os.execv(python, [python, script])
 
         import threading
         restart_thread = threading.Thread(target=do_restart)
-        restart_thread.daemon = False  # Not daemon so it completes
+        restart_thread.daemon = False
         restart_thread.start()
 
         return jsonify({'status': 'restarting'})
