@@ -4677,24 +4677,45 @@ function loadPanelLayout() {
 function exportCollection(format = 'json') {
     addLogEntry(`Exporting collection data as ${format.toUpperCase()}...`, 'INFO');
 
-    // Use direct link approach for reliable download
-    // Create a hidden iframe or use window.location for download
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    const exportUrl = `/api/logs/export?format=${format}&_t=${Date.now()}`;
+    fetch(`/api/logs/export?format=${format}`, {
+        method: 'GET',
+        credentials: 'include'  // Include session cookies
+    })
+    .then(response => {
+        if (!response.ok) {
+            throw new Error(`Export failed: ${response.status}`);
+        }
+        // Get filename from Content-Disposition header if available
+        const contentDisposition = response.headers.get('Content-Disposition');
+        let filename = `bluek9_collection_${new Date().toISOString().slice(0,19).replace(/[:.]/g, '-')}.${format}`;
+        if (contentDisposition) {
+            const match = contentDisposition.match(/filename=([^;]+)/);
+            if (match) filename = match[1].replace(/"/g, '');
+        }
+        return response.blob().then(blob => ({ blob, filename }));
+    })
+    .then(({ blob, filename }) => {
+        // Create object URL and trigger download
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.style.display = 'none';
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
 
-    // Create hidden link and trigger download
-    const link = document.createElement('a');
-    link.href = exportUrl;
-    link.download = `bluek9_collection_${timestamp}.${format}`;
-    link.style.display = 'none';
-    document.body.appendChild(link);
-    link.click();
+        // Cleanup
+        setTimeout(() => {
+            window.URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+        }, 100);
 
-    // Cleanup after short delay
-    setTimeout(() => {
-        document.body.removeChild(link);
-        addLogEntry(`Collection export initiated (${format.toUpperCase()})`, 'INFO');
-    }, 100);
+        addLogEntry(`Collection exported: ${filename}`, 'INFO');
+    })
+    .catch(error => {
+        addLogEntry(`Export failed: ${error.message}`, 'ERROR');
+        console.error('Export error:', error);
+    });
 }
 
 // ==================== ACTIVE GEO TRACKING ====================
