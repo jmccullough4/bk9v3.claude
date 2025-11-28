@@ -903,6 +903,68 @@
                                     <!-- Populated by JS -->
                                 </div>
                             </div>
+
+                            <!-- Speed Test Section -->
+                            <div class="speedtest-section" id="speedtestSection">
+                                <div class="speedtest-header">
+                                    <span class="speedtest-title">NETWORK SPEED TEST</span>
+                                    <span class="speedtest-badge" id="speedtestBadge">READY</span>
+                                </div>
+                                <div class="speedtest-controls">
+                                    <select class="speedtest-peer-select" id="speedtestPeerSelect">
+                                        <option value="">Select target node...</option>
+                                    </select>
+                                    <button class="btn btn-sm btn-primary" id="speedtestStartBtn" onclick="startSpeedTest()">
+                                        <span class="btn-icon">▶</span> TEST
+                                    </button>
+                                    <button class="btn btn-sm btn-danger hidden" id="speedtestStopBtn" onclick="stopSpeedTest()">
+                                        <span class="btn-icon">■</span> STOP
+                                    </button>
+                                </div>
+                                <div class="speedtest-display hidden" id="speedtestDisplay">
+                                    <div class="speedtest-target">
+                                        <span class="speedtest-target-label">Testing:</span>
+                                        <span class="speedtest-target-name" id="speedtestTargetName">--</span>
+                                    </div>
+                                    <div class="speedtest-progress-container">
+                                        <div class="speedtest-progress-bar" id="speedtestProgressBar"></div>
+                                        <span class="speedtest-progress-text" id="speedtestProgressText">0%</span>
+                                    </div>
+                                    <div class="speedtest-live-speed">
+                                        <div class="speedtest-speed-value" id="speedtestLiveSpeed">0.00</div>
+                                        <div class="speedtest-speed-unit">Mbps</div>
+                                    </div>
+                                    <div class="speedtest-graph-container">
+                                        <canvas id="speedtestChart" height="100"></canvas>
+                                    </div>
+                                </div>
+                                <div class="speedtest-results hidden" id="speedtestResults">
+                                    <div class="speedtest-results-header">TEST RESULTS</div>
+                                    <div class="speedtest-results-grid">
+                                        <div class="speedtest-result-item">
+                                            <div class="speedtest-result-icon upload">▲</div>
+                                            <div class="speedtest-result-data">
+                                                <span class="speedtest-result-value" id="speedtestUpload">--</span>
+                                                <span class="speedtest-result-label">UPLOAD</span>
+                                            </div>
+                                        </div>
+                                        <div class="speedtest-result-item">
+                                            <div class="speedtest-result-icon download">▼</div>
+                                            <div class="speedtest-result-data">
+                                                <span class="speedtest-result-value" id="speedtestDownload">--</span>
+                                                <span class="speedtest-result-label">DOWNLOAD</span>
+                                            </div>
+                                        </div>
+                                        <div class="speedtest-result-item">
+                                            <div class="speedtest-result-icon retransmit">⟲</div>
+                                            <div class="speedtest-result-data">
+                                                <span class="speedtest-result-value" id="speedtestRetransmits">--</span>
+                                                <span class="speedtest-result-label">RETRANSMITS</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                         <!-- Peer List -->
                         <div class="network-peer-list mt-10" id="networkPeerList">

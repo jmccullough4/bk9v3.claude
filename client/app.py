@@ -553,6 +553,51 @@ def load_settings_from_db():
         logger.warning(f"Could not load settings from database: {e}")
 
 
+def get_targets_from_db():
+    """Get all targets from database as a list of dicts."""
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute('SELECT bd_address, alias, notes, priority FROM targets')
+        targets_list = []
+        for row in c.fetchall():
+            targets_list.append({
+                'bd_address': row['bd_address'],
+                'alias': row['alias'] or '',
+                'notes': row['notes'] or '',
+                'priority': row['priority'] or 1
+            })
+        conn.close()
+        return targets_list
+    except Exception as e:
+        logger.warning(f"Could not load targets from database: {e}")
+        return []
+
+
+def save_target_to_db(bd_address, alias='', notes='', priority=1, source=''):
+    """Save a target to the database (used for peer sync)."""
+    try:
+        conn = get_db()
+        c = conn.cursor()
+        # Check if target already exists
+        c.execute('SELECT bd_address FROM targets WHERE bd_address = ?', (bd_address.upper(),))
+        existing = c.fetchone()
+        if not existing:
+            c.execute('''
+                INSERT INTO targets (bd_address, alias, notes, priority)
+                VALUES (?, ?, ?, ?)
+            ''', (bd_address.upper(), alias, notes, priority))
+            conn.commit()
+            conn.close()
+            add_log(f"Target synced from {source}: {bd_address}", "INFO")
+            return True
+        conn.close()
+        return False
+    except Exception as e:
+        logger.warning(f"Could not save target to database: {e}")
+        return False
+
+
 def add_log(message, level='INFO'):
     """Add a log message and broadcast to clients."""
     timestamp = datetime.now().strftime('%H:%M:%S')
@@ -5425,6 +5470,21 @@ udp_listener_thread = None
 # BlueK9 peer discovery - tracks which peers are running BlueK9
 bluek9_peers = {}  # peer_ip -> {system_id, system_name, last_checkin, location, targets}
 
+# iperf3 Speed Test state
+speedtest_state = {
+    'running': False,
+    'target_ip': None,
+    'target_name': None,
+    'start_time': None,
+    'progress': 0,
+    'results': [],
+    'current_bandwidth': 0,
+    'final_result': None,
+    'error': None
+}
+speedtest_process = None
+speedtest_thread = None
+
 
 def start_udp_listener():
     """Start UDP listener for BlueK9 peer announcements."""
@@ -5951,7 +6011,10 @@ def broadcast_targets_to_peers():
     import urllib.request
     import urllib.error
 
-    if not targets:
+    # Get targets from database (not in-memory dict)
+    db_targets = get_targets_from_db()
+
+    if not db_targets:
         add_log("No targets to broadcast", "DEBUG")
         return {'sent': 0, 'received': 0}
 
@@ -5959,13 +6022,18 @@ def broadcast_targets_to_peers():
         add_log("No BlueK9 peers to broadcast targets to", "DEBUG")
         return {'sent': 0, 'received': 0}
 
+    add_log(f"Broadcasting {len(db_targets)} target(s) to {len(bluek9_peers)} peer(s)", "INFO")
+
     targets_data = {
         'system_id': CONFIG.get('SYSTEM_ID', 'BK9-001'),
-        'targets': list(targets.values())
+        'targets': db_targets
     }
 
     sent_count = 0
     received_count = 0
+
+    # Get current target BD addresses for duplicate checking
+    current_bd_addresses = {t['bd_address'].upper() for t in db_targets}
 
     for peer_ip, peer_info in list(bluek9_peers.items()):
         peer_name = peer_info.get('system_name', peer_ip)
@@ -5981,18 +6049,22 @@ def broadcast_targets_to_peers():
                 resp_data = json.loads(response.read().decode('utf-8'))
                 sent_count += 1
 
-                # Check if peer sent back targets
+                # Check if peer sent back targets - save to database
                 if resp_data.get('targets'):
+                    peer_source = peer_info.get('system_id', peer_ip)
                     for target in resp_data['targets']:
                         bd_addr = target.get('bd_address', '').upper()
-                        if bd_addr and bd_addr not in targets:
-                            targets[bd_addr] = {
-                                'bd_address': bd_addr,
-                                'alias': target.get('alias', ''),
-                                'added_timestamp': datetime.utcnow().isoformat() + 'Z',
-                                'source': peer_info.get('system_id', peer_ip)
-                            }
-                            received_count += 1
+                        if bd_addr and bd_addr not in current_bd_addresses:
+                            # Save to database
+                            if save_target_to_db(
+                                bd_addr,
+                                alias=target.get('alias', ''),
+                                notes=target.get('notes', f'Synced from {peer_source}'),
+                                priority=target.get('priority', 1),
+                                source=peer_source
+                            ):
+                                current_bd_addresses.add(bd_addr)
+                                received_count += 1
 
                 add_log(f"Synced targets with {peer_name}", "DEBUG")
 
@@ -6070,8 +6142,6 @@ def receive_peer_location():
 @app.route('/api/network/targets', methods=['POST'])
 def receive_peer_targets():
     """Receive shared targets from a BlueK9 peer and return our targets."""
-    global targets
-
     if request.headers.get('X-BlueK9-Targets') != 'true':
         return jsonify({'error': 'Invalid request'}), 400
 
@@ -6082,29 +6152,32 @@ def receive_peer_targets():
     source_system = data.get('system_id', 'Unknown')
     new_targets = 0
 
-    # Process incoming targets
+    # Process incoming targets - save to database
     for target in data.get('targets', []):
         bd_addr = target.get('bd_address', '').upper()
-        if bd_addr and bd_addr not in targets:
-            # Add target with source info
-            targets[bd_addr] = {
-                'bd_address': bd_addr,
-                'alias': target.get('alias', ''),
-                'added_timestamp': datetime.utcnow().isoformat() + 'Z',
-                'source': source_system  # Track which system shared this
-            }
-            new_targets += 1
+        if bd_addr:
+            # Save to database (handles duplicate checking internally)
+            if save_target_to_db(
+                bd_addr,
+                alias=target.get('alias', ''),
+                notes=target.get('notes', f'Synced from {source_system}'),
+                priority=target.get('priority', 1),
+                source=source_system
+            ):
+                new_targets += 1
 
     if new_targets > 0:
         add_log(f"Received {new_targets} new target(s) from {source_system}", "INFO")
         # Emit updated targets to web clients
-        socketio.emit('targets_update', list(targets.values()))
+        db_targets = get_targets_from_db()
+        socketio.emit('targets_update', db_targets)
 
-    # Return our targets for bidirectional sync
+    # Return our targets from database for bidirectional sync
+    our_targets = get_targets_from_db()
     response = {
         'status': 'received',
         'new_targets': new_targets,
-        'targets': list(targets.values())  # Send back our targets
+        'targets': our_targets  # Send back our targets from database
     }
     return jsonify(response)
 
@@ -6120,15 +6193,16 @@ def sync_targets_with_peers():
 
     result = broadcast_targets_to_peers()
 
-    # Emit updated targets to web clients
-    socketio.emit('targets_update', list(targets.values()))
+    # Emit updated targets to web clients from database
+    db_targets = get_targets_from_db()
+    socketio.emit('targets_update', db_targets)
 
     return jsonify({
         'status': 'synced',
         'peer_count': len(bluek9_peers),
         'sent_to': result.get('sent', 0),
         'received': result.get('received', 0),
-        'total_targets': len(targets)
+        'total_targets': len(db_targets)
     })
 
 
@@ -6297,6 +6371,268 @@ def toggle_network_route(route_id):
     except Exception as e:
         add_log(f"Route toggle error: {e}", "ERROR")
         return jsonify({'error': str(e)}), 500
+
+
+# ==================== iperf3 SPEED TEST ====================
+
+def run_speedtest(target_ip, target_name, duration=10):
+    """Run iperf3 speed test in background thread."""
+    global speedtest_state, speedtest_process
+
+    try:
+        speedtest_state['running'] = True
+        speedtest_state['target_ip'] = target_ip
+        speedtest_state['target_name'] = target_name
+        speedtest_state['start_time'] = datetime.now().isoformat()
+        speedtest_state['progress'] = 0
+        speedtest_state['results'] = []
+        speedtest_state['current_bandwidth'] = 0
+        speedtest_state['final_result'] = None
+        speedtest_state['error'] = None
+
+        add_log(f"Speed test started to {target_name} ({target_ip})", "INFO")
+
+        # Emit start event
+        socketio.emit('speedtest_update', {
+            'status': 'running',
+            'target_ip': target_ip,
+            'target_name': target_name,
+            'progress': 0,
+            'bandwidth': 0
+        })
+
+        # Run iperf3 with JSON output, reporting every second
+        cmd = ['iperf3', '-c', target_ip, '-t', str(duration), '-J', '-i', '1']
+        speedtest_process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+
+        # Read output progressively
+        output_data = ""
+        for line in speedtest_process.stdout:
+            output_data += line
+
+        speedtest_process.wait()
+
+        if speedtest_process.returncode == 0:
+            # Parse JSON results
+            try:
+                result = json.loads(output_data)
+
+                # Extract interval data for progress display
+                intervals = result.get('intervals', [])
+                total_intervals = len(intervals)
+
+                for idx, interval in enumerate(intervals):
+                    streams = interval.get('streams', [{}])
+                    if streams:
+                        stream = streams[0]
+                        bits_per_second = stream.get('bits_per_second', 0)
+                        mbps = bits_per_second / 1_000_000
+                        progress = int((idx + 1) / max(total_intervals, 1) * 100)
+
+                        speedtest_state['progress'] = progress
+                        speedtest_state['current_bandwidth'] = round(mbps, 2)
+                        speedtest_state['results'].append({
+                            'time': idx + 1,
+                            'mbps': round(mbps, 2)
+                        })
+
+                        # Emit progress update
+                        socketio.emit('speedtest_update', {
+                            'status': 'running',
+                            'target_ip': target_ip,
+                            'target_name': target_name,
+                            'progress': progress,
+                            'bandwidth': round(mbps, 2),
+                            'results': speedtest_state['results']
+                        })
+
+                # Get final results
+                end = result.get('end', {})
+                sum_sent = end.get('sum_sent', {})
+                sum_received = end.get('sum_received', {})
+
+                final_result = {
+                    'upload_mbps': round(sum_sent.get('bits_per_second', 0) / 1_000_000, 2),
+                    'download_mbps': round(sum_received.get('bits_per_second', 0) / 1_000_000, 2),
+                    'bytes_sent': sum_sent.get('bytes', 0),
+                    'bytes_received': sum_received.get('bytes', 0),
+                    'retransmits': sum_sent.get('retransmits', 0),
+                    'duration': sum_sent.get('seconds', duration),
+                    'target_ip': target_ip,
+                    'target_name': target_name,
+                    'timestamp': datetime.now().isoformat()
+                }
+
+                speedtest_state['final_result'] = final_result
+                speedtest_state['progress'] = 100
+
+                add_log(f"Speed test complete: {final_result['upload_mbps']} Mbps upload, {final_result['download_mbps']} Mbps download", "INFO")
+
+                # Emit completion
+                socketio.emit('speedtest_update', {
+                    'status': 'complete',
+                    'target_ip': target_ip,
+                    'target_name': target_name,
+                    'progress': 100,
+                    'final_result': final_result,
+                    'results': speedtest_state['results']
+                })
+
+            except json.JSONDecodeError as e:
+                speedtest_state['error'] = f"Failed to parse iperf3 output: {e}"
+                add_log(f"Speed test parse error: {e}", "ERROR")
+                socketio.emit('speedtest_update', {
+                    'status': 'error',
+                    'error': speedtest_state['error']
+                })
+        else:
+            stderr = speedtest_process.stderr.read()
+            speedtest_state['error'] = f"iperf3 failed: {stderr}"
+            add_log(f"Speed test failed: {stderr}", "ERROR")
+            socketio.emit('speedtest_update', {
+                'status': 'error',
+                'error': speedtest_state['error']
+            })
+
+    except Exception as e:
+        speedtest_state['error'] = str(e)
+        add_log(f"Speed test error: {e}", "ERROR")
+        socketio.emit('speedtest_update', {
+            'status': 'error',
+            'error': str(e)
+        })
+
+    finally:
+        speedtest_state['running'] = False
+        speedtest_process = None
+
+
+@app.route('/api/network/speedtest/start', methods=['POST'])
+@login_required
+def start_speedtest():
+    """Start iperf3 speed test to a peer."""
+    global speedtest_thread
+
+    if speedtest_state['running']:
+        return jsonify({'error': 'Speed test already running'}), 400
+
+    data = request.json or {}
+    target_ip = data.get('target_ip')
+    target_name = data.get('target_name', target_ip)
+    duration = min(data.get('duration', 10), 30)  # Max 30 seconds
+
+    if not target_ip:
+        return jsonify({'error': 'No target IP specified'}), 400
+
+    # Validate target is a BlueK9 peer or NetBird peer
+    valid_target = False
+    if target_ip in bluek9_peers:
+        valid_target = True
+        target_name = bluek9_peers[target_ip].get('system_name', target_ip)
+
+    # Also allow NetBird peers
+    netbird_peers = parse_netbird_status()
+    for peer in netbird_peers:
+        if peer.get('ip') == target_ip and peer.get('connected'):
+            valid_target = True
+            if not target_name or target_name == target_ip:
+                target_name = peer.get('hostname', target_ip)
+            break
+
+    if not valid_target:
+        return jsonify({'error': 'Target must be a connected peer'}), 400
+
+    # Start test in background
+    speedtest_thread = threading.Thread(
+        target=run_speedtest,
+        args=(target_ip, target_name, duration),
+        daemon=True
+    )
+    speedtest_thread.start()
+
+    return jsonify({
+        'status': 'started',
+        'target_ip': target_ip,
+        'target_name': target_name,
+        'duration': duration
+    })
+
+
+@app.route('/api/network/speedtest/stop', methods=['POST'])
+@login_required
+def stop_speedtest():
+    """Stop running speed test."""
+    global speedtest_process
+
+    if not speedtest_state['running']:
+        return jsonify({'status': 'not_running'})
+
+    if speedtest_process:
+        speedtest_process.terminate()
+        speedtest_process = None
+
+    speedtest_state['running'] = False
+    speedtest_state['error'] = 'Test cancelled by user'
+
+    socketio.emit('speedtest_update', {
+        'status': 'cancelled',
+        'message': 'Speed test cancelled'
+    })
+
+    add_log("Speed test cancelled by user", "INFO")
+    return jsonify({'status': 'stopped'})
+
+
+@app.route('/api/network/speedtest/status')
+@login_required
+def get_speedtest_status():
+    """Get current speed test status."""
+    return jsonify({
+        'running': speedtest_state['running'],
+        'target_ip': speedtest_state['target_ip'],
+        'target_name': speedtest_state['target_name'],
+        'progress': speedtest_state['progress'],
+        'current_bandwidth': speedtest_state['current_bandwidth'],
+        'results': speedtest_state['results'],
+        'final_result': speedtest_state['final_result'],
+        'error': speedtest_state['error']
+    })
+
+
+@app.route('/api/network/speedtest/peers')
+@login_required
+def get_speedtest_peers():
+    """Get list of peers available for speed testing (running iperf3 server)."""
+    peers = []
+
+    # Add BlueK9 peers
+    for ip, info in bluek9_peers.items():
+        peers.append({
+            'ip': ip,
+            'name': info.get('system_name', ip),
+            'type': 'bluek9',
+            'system_id': info.get('system_id', 'Unknown')
+        })
+
+    # Add connected NetBird peers (they should be running iperf3 server)
+    netbird_peers = parse_netbird_status()
+    bluek9_ips = set(bluek9_peers.keys())
+    for peer in netbird_peers:
+        ip = peer.get('ip')
+        if ip and peer.get('connected') and ip not in bluek9_ips:
+            peers.append({
+                'ip': ip,
+                'name': peer.get('hostname', ip),
+                'type': 'netbird',
+                'latency': peer.get('latency', 'N/A')
+            })
+
+    return jsonify({'peers': peers})
 
 
 @app.route('/api/network/monitor/start', methods=['POST'])

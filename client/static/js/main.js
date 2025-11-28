@@ -6246,6 +6246,7 @@ function toggleNetworkStats() {
         panel.classList.remove('hidden');
         initPeerLatencyChart();
         updateNetworkStatsDisplay();
+        refreshSpeedtestPeers();  // Refresh available peers for speed test
     } else {
         panel.classList.add('hidden');
     }
@@ -6481,6 +6482,272 @@ function updateLatencyChart(bluek9Nodes) {
     peerLatencyChart.update('none');  // No animation for smooth updates
 }
 
+
+// ==================== SPEED TEST ====================
+
+let speedtestChart = null;
+let speedtestRunning = false;
+
+/**
+ * Initialize speed test chart
+ */
+function initSpeedtestChart() {
+    const ctx = document.getElementById('speedtestChart');
+    if (!ctx) return;
+
+    speedtestChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: [],
+            datasets: [{
+                label: 'Speed (Mbps)',
+                data: [],
+                borderColor: '#00ffff',
+                backgroundColor: 'rgba(0, 255, 255, 0.1)',
+                borderWidth: 3,
+                pointRadius: 4,
+                pointBackgroundColor: '#00ffff',
+                fill: true,
+                tension: 0.4
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: {
+                duration: 300
+            },
+            plugins: {
+                legend: { display: false }
+            },
+            scales: {
+                x: {
+                    display: true,
+                    grid: { color: 'rgba(255,255,255,0.1)' },
+                    ticks: { color: '#00ffff', font: { size: 9 } }
+                },
+                y: {
+                    display: true,
+                    beginAtZero: true,
+                    grid: { color: 'rgba(255,255,255,0.1)' },
+                    ticks: {
+                        color: '#00ffff',
+                        font: { size: 10 },
+                        callback: (v) => v + ' Mbps'
+                    }
+                }
+            }
+        }
+    });
+}
+
+/**
+ * Refresh the list of available peers for speed testing
+ */
+async function refreshSpeedtestPeers() {
+    const select = document.getElementById('speedtestPeerSelect');
+    if (!select) return;
+
+    try {
+        const response = await fetch('/api/network/speedtest/peers');
+        if (!response.ok) return;
+
+        const data = await response.json();
+        const peers = data.peers || [];
+
+        // Keep current selection if possible
+        const currentValue = select.value;
+
+        // Clear and rebuild options
+        select.innerHTML = '<option value="">Select target node...</option>';
+
+        peers.forEach(peer => {
+            const option = document.createElement('option');
+            option.value = peer.ip;
+            option.dataset.name = peer.name;
+            const typeIcon = peer.type === 'bluek9' ? '🔷' : '🌐';
+            option.textContent = `${typeIcon} ${peer.name} (${peer.ip})`;
+            select.appendChild(option);
+        });
+
+        // Restore selection if still available
+        if (currentValue) {
+            select.value = currentValue;
+        }
+    } catch (e) {
+        console.error('Failed to refresh speedtest peers:', e);
+    }
+}
+
+/**
+ * Start a speed test
+ */
+async function startSpeedTest() {
+    const select = document.getElementById('speedtestPeerSelect');
+    const targetIp = select?.value;
+    const targetName = select?.selectedOptions[0]?.dataset.name || targetIp;
+
+    if (!targetIp) {
+        addLog('Please select a target node for speed test', 'WARNING');
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/network/speedtest/start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                target_ip: targetIp,
+                target_name: targetName,
+                duration: 10
+            })
+        });
+
+        const data = await response.json();
+        if (!response.ok) {
+            addLog(`Speed test failed: ${data.error}`, 'ERROR');
+            return;
+        }
+
+        // Show test display
+        speedtestRunning = true;
+        updateSpeedtestUI('running', targetName);
+
+        // Initialize chart if needed
+        if (!speedtestChart) {
+            initSpeedtestChart();
+        } else {
+            // Clear previous data
+            speedtestChart.data.labels = [];
+            speedtestChart.data.datasets[0].data = [];
+            speedtestChart.update();
+        }
+
+    } catch (e) {
+        addLog(`Speed test error: ${e.message}`, 'ERROR');
+    }
+}
+
+/**
+ * Stop running speed test
+ */
+async function stopSpeedTest() {
+    try {
+        await fetch('/api/network/speedtest/stop', { method: 'POST' });
+        updateSpeedtestUI('stopped');
+    } catch (e) {
+        console.error('Failed to stop speed test:', e);
+    }
+}
+
+/**
+ * Update speed test UI based on status
+ */
+function updateSpeedtestUI(status, targetName = '') {
+    const badge = document.getElementById('speedtestBadge');
+    const display = document.getElementById('speedtestDisplay');
+    const results = document.getElementById('speedtestResults');
+    const startBtn = document.getElementById('speedtestStartBtn');
+    const stopBtn = document.getElementById('speedtestStopBtn');
+    const targetNameEl = document.getElementById('speedtestTargetName');
+
+    switch (status) {
+        case 'running':
+            badge.textContent = 'TESTING';
+            badge.className = 'speedtest-badge running';
+            display.classList.remove('hidden');
+            results.classList.add('hidden');
+            startBtn.classList.add('hidden');
+            stopBtn.classList.remove('hidden');
+            if (targetName) targetNameEl.textContent = targetName;
+            break;
+
+        case 'complete':
+            badge.textContent = 'COMPLETE';
+            badge.className = 'speedtest-badge complete';
+            display.classList.add('hidden');
+            results.classList.remove('hidden');
+            startBtn.classList.remove('hidden');
+            stopBtn.classList.add('hidden');
+            speedtestRunning = false;
+            break;
+
+        case 'error':
+        case 'stopped':
+        case 'cancelled':
+            badge.textContent = status === 'error' ? 'ERROR' : 'READY';
+            badge.className = 'speedtest-badge ' + (status === 'error' ? 'error' : '');
+            display.classList.add('hidden');
+            startBtn.classList.remove('hidden');
+            stopBtn.classList.add('hidden');
+            speedtestRunning = false;
+            break;
+    }
+}
+
+/**
+ * Handle speed test WebSocket updates
+ */
+function handleSpeedtestUpdate(data) {
+    const progressBar = document.getElementById('speedtestProgressBar');
+    const progressText = document.getElementById('speedtestProgressText');
+    const liveSpeed = document.getElementById('speedtestLiveSpeed');
+
+    switch (data.status) {
+        case 'running':
+            // Update progress
+            if (progressBar) progressBar.style.width = `${data.progress || 0}%`;
+            if (progressText) progressText.textContent = `${data.progress || 0}%`;
+            if (liveSpeed) liveSpeed.textContent = (data.bandwidth || 0).toFixed(2);
+
+            // Update chart
+            if (speedtestChart && data.results) {
+                speedtestChart.data.labels = data.results.map(r => `${r.time}s`);
+                speedtestChart.data.datasets[0].data = data.results.map(r => r.mbps);
+                speedtestChart.update('none');
+            }
+            break;
+
+        case 'complete':
+            updateSpeedtestUI('complete');
+            if (data.final_result) {
+                document.getElementById('speedtestUpload').textContent =
+                    `${data.final_result.upload_mbps} Mbps`;
+                document.getElementById('speedtestDownload').textContent =
+                    `${data.final_result.download_mbps} Mbps`;
+                document.getElementById('speedtestRetransmits').textContent =
+                    data.final_result.retransmits;
+
+                // Final chart update
+                if (speedtestChart && data.results) {
+                    speedtestChart.data.labels = data.results.map(r => `${r.time}s`);
+                    speedtestChart.data.datasets[0].data = data.results.map(r => r.mbps);
+                    speedtestChart.update();
+                }
+            }
+            break;
+
+        case 'error':
+            updateSpeedtestUI('error');
+            addLog(`Speed test error: ${data.error}`, 'ERROR');
+            break;
+
+        case 'cancelled':
+            updateSpeedtestUI('cancelled');
+            break;
+    }
+}
+
+/**
+ * Initialize speed test WebSocket handler
+ */
+function initSpeedtestWebSocket() {
+    if (typeof socket !== 'undefined') {
+        socket.on('speedtest_update', handleSpeedtestUpdate);
+    }
+}
+
+
 // Extend the section states to include network section
 const originalSaveSectionStates = typeof saveSectionStates === 'function' ? saveSectionStates : null;
 function saveSectionStatesExtended() {
@@ -6503,6 +6770,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Initialize network WebSocket handlers after a short delay
     setTimeout(() => {
         initNetworkWebSocket();
+        initSpeedtestWebSocket();
         // Auto-start network monitor if setting is enabled
         const autoConnect = localStorage.getItem('bluek9_network_autoconnect') !== 'false';
         if (autoConnect) {
@@ -6510,5 +6778,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         // Initial cellular status check
         updateCellularStatus();
+        // Refresh speedtest peers
+        refreshSpeedtestPeers();
     }, 1000);
 });
