@@ -4418,14 +4418,15 @@ def check_for_updates():
 @app.route('/api/updates/apply', methods=['POST'])
 @login_required
 def apply_updates():
-    """Apply available updates from GitHub."""
+    """Apply available updates from GitHub and automatically restart."""
     result = {
         'success': False,
         'old_commit': None,
         'new_commit': None,
         'changes': [],
         'error': None,
-        'restart_required': True
+        'restart_required': True,
+        'auto_restart': True
     }
 
     try:
@@ -4473,6 +4474,18 @@ def apply_updates():
                     result['changes'] = proc.stdout.strip().split('\n') if proc.stdout.strip() else []
 
             add_log(f"Updates applied: {result['old_commit']} -> {result['new_commit']}", "INFO")
+
+            # Notify all clients that system is restarting
+            socketio.emit('system_restart')
+
+            # Schedule automatic restart after response is sent
+            def delayed_restart():
+                time.sleep(2)  # Give time for response to be sent
+                do_system_restart()
+
+            restart_thread = threading.Thread(target=delayed_restart, daemon=True)
+            restart_thread.start()
+
         else:
             result['error'] = proc.stderr or 'Failed to pull updates'
             add_log(f"Update failed: {result['error']}", "ERROR")
@@ -4485,50 +4498,34 @@ def apply_updates():
     return jsonify(result)
 
 
-@app.route('/api/system/restart', methods=['POST'])
-@login_required
-def restart_system():
-    """Restart the BlueK9 application via start.sh script."""
+def do_system_restart():
+    """Execute the actual system restart (can be called from multiple places)."""
     global scanning_active
 
+    # Stop any active scanning
+    scanning_active = False
+
+    # Stop any active geo tracking sessions
+    for bd_addr in list(active_geo_sessions.keys()):
+        stop_active_geo(bd_addr)
+
+    # Path to start.sh script
+    script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    start_script = os.path.join(script_dir, 'scripts', 'start.sh')
+
+    # Also check /apps/bk9v3.claude location
+    if not os.path.exists(start_script):
+        start_script = '/apps/bk9v3.claude/scripts/start.sh'
+
+    add_log(f"Restart script path: {start_script}", "INFO")
+
+    if not os.path.exists(start_script):
+        add_log(f"Start script not found at {start_script}", "ERROR")
+        return False
+
     try:
-        # Stop any active scanning
-        scanning_active = False
-
-        # Stop any active geo tracking sessions
-        for bd_addr in list(active_geo_sessions.keys()):
-            stop_active_geo(bd_addr)
-
-        add_log("System restart initiated by operator", "INFO")
-
-        # Notify all clients to reset their UI
-        socketio.emit('system_restart')
-
-        # Schedule a restart via start.sh script
-        def do_restart():
-            import os
-            import sys
-            import subprocess
-
-            time.sleep(2)  # Brief delay to allow response to be sent
-
-            # Path to start.sh script
-            script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            start_script = os.path.join(script_dir, 'scripts', 'start.sh')
-
-            # Also check /apps/bk9v3.claude location
-            if not os.path.exists(start_script):
-                start_script = '/apps/bk9v3.claude/scripts/start.sh'
-
-            add_log(f"Restart script path: {start_script}", "INFO")
-
-            if not os.path.exists(start_script):
-                add_log(f"Start script not found at {start_script}", "ERROR")
-                return
-
-            try:
-                # Create a restart script that waits for this process to die
-                restart_script = f'''#!/bin/bash
+        # Create a restart script that waits for this process to die
+        restart_script = f'''#!/bin/bash
 # Wait for port to be free
 for i in {{1..30}}; do
     if ! netstat -tuln 2>/dev/null | grep -q ':5000 '; then
@@ -4540,34 +4537,51 @@ sleep 1
 # Start BlueK9 with --no-update to avoid update check on restart
 exec {start_script} --no-update
 '''
-                # Write restart script
-                restart_script_path = '/tmp/bluek9_restart.sh'
-                with open(restart_script_path, 'w') as f:
-                    f.write(restart_script)
-                os.chmod(restart_script_path, 0o755)
+        # Write restart script
+        restart_script_path = '/tmp/bluek9_restart.sh'
+        with open(restart_script_path, 'w') as f:
+            f.write(restart_script)
+        os.chmod(restart_script_path, 0o755)
 
-                # Launch the restart script in background with nohup
-                subprocess.Popen(
-                    ['nohup', '/bin/bash', restart_script_path],
-                    start_new_session=True,
-                    stdout=open('/dev/null', 'w'),
-                    stderr=open('/dev/null', 'w'),
-                    preexec_fn=os.setpgrp
-                )
+        # Launch the restart script in background with nohup
+        subprocess.Popen(
+            ['nohup', '/bin/bash', restart_script_path],
+            start_new_session=True,
+            stdout=open('/dev/null', 'w'),
+            stderr=open('/dev/null', 'w'),
+            preexec_fn=os.setpgrp
+        )
 
-                # Give it a moment to start
-                time.sleep(0.5)
+        # Give it a moment to start
+        time.sleep(0.5)
 
-                # Now exit this process
-                add_log("Old process exiting, restart script will start new instance", "INFO")
-                os._exit(0)
+        # Now exit this process
+        add_log("Old process exiting, restart script will start new instance", "INFO")
+        os._exit(0)
 
-            except Exception as e:
-                add_log(f"Restart exec failed: {e}", "ERROR")
+    except Exception as e:
+        add_log(f"Restart exec failed: {e}", "ERROR")
+        return False
 
-        import threading
-        restart_thread = threading.Thread(target=do_restart)
-        restart_thread.daemon = False
+    return True
+
+
+@app.route('/api/system/restart', methods=['POST'])
+@login_required
+def restart_system():
+    """Restart the BlueK9 application via start.sh script."""
+    try:
+        add_log("System restart initiated by operator", "INFO")
+
+        # Notify all clients to reset their UI
+        socketio.emit('system_restart')
+
+        # Schedule restart in background thread
+        def delayed_restart():
+            time.sleep(2)  # Brief delay to allow response to be sent
+            do_system_restart()
+
+        restart_thread = threading.Thread(target=delayed_restart, daemon=False)
         restart_thread.start()
 
         return jsonify({'status': 'restarting'})
