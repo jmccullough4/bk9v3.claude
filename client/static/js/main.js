@@ -19,6 +19,9 @@ let deviceTypeChart = null;
 let currentMapStyle = 'dark';
 let breadcrumbMarkers = [];
 let currentTimezone = 'UTC';
+let contextMenuTarget = null;
+let manualTrackingBd = null;
+const commLines = {}; // bdAddress -> line layer info
 
 // Active operations tracking
 const activeOperations = new Map(); // id -> { type, label, bdAddress?, startTime, cancellable }
@@ -3405,8 +3408,6 @@ document.addEventListener('keydown', (e) => {
 
 // ==================== CONTEXT MENU ====================
 
-let contextMenuTarget = null;
-
 function createContextMenu() {
     // Remove existing menu if any
     const existing = document.getElementById('deviceContextMenu');
@@ -5070,7 +5071,6 @@ function updateGeoButtonState(bdAddress, active) {
 }
 
 // Communication line visuals for active geo tracking
-const commLines = {}; // bdAddress -> line layer info
 
 function showCommLine(bdAddress) {
     const device = devices[bdAddress];
@@ -5173,7 +5173,6 @@ function updateCommLines() {
 /**
  * Handle geo ping events from server
  */
-let manualTrackingBd = null;
 
 function handleGeoPing(data) {
     // Update device RSSI in real-time
