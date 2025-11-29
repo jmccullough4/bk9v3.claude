@@ -1379,12 +1379,16 @@ body {
     border-radius: 1px;
 }
 
-.legend-best .legend-line {
+.legend-total .legend-line {
+    background: linear-gradient(90deg, rgba(0, 212, 255, 0.5), rgba(0, 212, 255, 1));
+}
+
+.legend-active .legend-line {
     background: linear-gradient(90deg, rgba(48, 209, 88, 0.5), rgba(48, 209, 88, 1));
 }
 
-.legend-avg .legend-line {
-    background: linear-gradient(90deg, rgba(0, 212, 255, 0.5), rgba(0, 212, 255, 1));
+.legend-targets .legend-line {
+    background: linear-gradient(90deg, rgba(255, 59, 48, 0.5), rgba(255, 59, 48, 1));
 }
 
 .stats-footer {

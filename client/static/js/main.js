@@ -497,51 +497,65 @@ function handleNameResult(data) {
  * Initialize modern statistics visualization
  */
 // RSSI history for real-time display
-let rssiHistory = [];
-const MAX_RSSI_POINTS = 40;
+let activityHistory = [];
+const MAX_ACTIVITY_POINTS = 40;
 let signalPulseAnimation = null;
-let rssiChart = null;
+let activityChart = null;
 let lastDeviceCount = 0;
+let lastUpdateCount = 0;
 
 function initChart() {
     const ctx = document.getElementById('deviceTypeChart').getContext('2d');
 
-    // Create gradient for RSSI area
-    const rssiGradient = ctx.createLinearGradient(0, 0, 0, 80);
-    rssiGradient.addColorStop(0, 'rgba(0, 212, 255, 0.5)');
-    rssiGradient.addColorStop(1, 'rgba(0, 212, 255, 0)');
+    // Create gradient for device count area
+    const deviceGradient = ctx.createLinearGradient(0, 0, 0, 80);
+    deviceGradient.addColorStop(0, 'rgba(0, 212, 255, 0.5)');
+    deviceGradient.addColorStop(1, 'rgba(0, 212, 255, 0)');
 
-    // Initialize with null values (no data yet)
-    for (let i = 0; i < MAX_RSSI_POINTS; i++) {
-        rssiHistory.push({ avgRssi: null, maxRssi: null, deviceCount: 0 });
+    // Create gradient for target count
+    const targetGradient = ctx.createLinearGradient(0, 0, 0, 80);
+    targetGradient.addColorStop(0, 'rgba(255, 59, 48, 0.5)');
+    targetGradient.addColorStop(1, 'rgba(255, 59, 48, 0)');
+
+    // Initialize with zero values
+    for (let i = 0; i < MAX_ACTIVITY_POINTS; i++) {
+        activityHistory.push({ deviceCount: 0, targetCount: 0, activeCount: 0 });
     }
 
-    rssiChart = new Chart(ctx, {
+    activityChart = new Chart(ctx, {
         type: 'line',
         data: {
-            labels: Array(MAX_RSSI_POINTS).fill(''),
+            labels: Array(MAX_ACTIVITY_POINTS).fill(''),
             datasets: [
                 {
-                    label: 'Best RSSI',
-                    data: rssiHistory.map(d => d.maxRssi),
+                    label: 'Total Devices',
+                    data: activityHistory.map(d => d.deviceCount),
+                    borderColor: 'rgba(0, 212, 255, 1)',
+                    backgroundColor: deviceGradient,
+                    fill: true,
+                    tension: 0.3,
+                    borderWidth: 2,
+                    pointRadius: 0
+                },
+                {
+                    label: 'Active (30s)',
+                    data: activityHistory.map(d => d.activeCount),
                     borderColor: 'rgba(48, 209, 88, 1)',
                     backgroundColor: 'transparent',
                     fill: false,
                     tension: 0.3,
                     borderWidth: 2,
-                    pointRadius: 0,
-                    spanGaps: true
+                    pointRadius: 0
                 },
                 {
-                    label: 'Avg RSSI',
-                    data: rssiHistory.map(d => d.avgRssi),
-                    borderColor: 'rgba(0, 212, 255, 1)',
-                    backgroundColor: rssiGradient,
+                    label: 'Targets',
+                    data: activityHistory.map(d => d.targetCount),
+                    borderColor: 'rgba(255, 59, 48, 1)',
+                    backgroundColor: targetGradient,
                     fill: true,
                     tension: 0.3,
                     borderWidth: 2,
-                    pointRadius: 0,
-                    spanGaps: true
+                    pointRadius: 0
                 }
             ]
         },
@@ -560,9 +574,7 @@ function initChart() {
                 y: {
                     display: true,
                     position: 'right',
-                    min: -100,
-                    max: -30,
-                    reverse: false,
+                    beginAtZero: true,
                     grid: {
                         color: 'rgba(0, 212, 255, 0.1)',
                         drawBorder: false
@@ -570,8 +582,8 @@ function initChart() {
                     ticks: {
                         color: '#484f58',
                         font: { family: 'Share Tech Mono', size: 8 },
-                        maxTicksLimit: 3,
-                        callback: function(value) { return value + ' dBm'; }
+                        maxTicksLimit: 4,
+                        stepSize: 1
                     }
                 }
             },
@@ -581,12 +593,7 @@ function initChart() {
                     enabled: true,
                     backgroundColor: 'rgba(10, 14, 20, 0.9)',
                     borderColor: 'rgba(0, 212, 255, 0.5)',
-                    borderWidth: 1,
-                    callbacks: {
-                        label: function(context) {
-                            return context.dataset.label + ': ' + context.parsed.y + ' dBm';
-                        }
-                    }
+                    borderWidth: 1
                 }
             }
         }
@@ -595,8 +602,8 @@ function initChart() {
     // Initialize signal pulse canvas
     initSignalPulse();
 
-    // Update RSSI chart every second
-    setInterval(updateRssiChart, 1000);
+    // Update activity chart every second
+    setInterval(updateActivityChart, 1000);
 
     // Load version info
     loadVersionInfo();
@@ -699,43 +706,47 @@ function initSignalPulse() {
 }
 
 /**
- * Update RSSI chart with real signal strength data
+ * Update activity chart with device counts
  */
-function updateRssiChart() {
-    let totalRssi = 0;
-    let rssiCount = 0;
-    let maxRssi = -100;
+function updateActivityChart() {
+    const now = new Date();
+    const thirtySecondsAgo = new Date(now - 30000);
 
-    // Calculate current RSSI stats from all devices
+    // Count total devices
+    const totalDevices = Object.keys(devices).length;
+
+    // Count devices seen in last 30 seconds (active)
+    let activeCount = 0;
     Object.values(devices).forEach(d => {
-        if (d.rssi && d.rssi !== '--') {
-            const rssi = parseInt(d.rssi);
-            totalRssi += rssi;
-            rssiCount++;
-            if (rssi > maxRssi) maxRssi = rssi;
+        if (d.last_seen) {
+            const lastSeen = new Date(d.last_seen);
+            if (lastSeen > thirtySecondsAgo) {
+                activeCount++;
+            }
         }
     });
 
-    const avgRssi = rssiCount > 0 ? Math.round(totalRssi / rssiCount) : null;
-    const bestRssi = rssiCount > 0 ? maxRssi : null;
+    // Count targets currently detected
+    const targetCount = Object.values(devices).filter(d => d.is_target).length;
 
     // Add new data point
-    rssiHistory.push({
-        avgRssi: avgRssi,
-        maxRssi: bestRssi,
-        deviceCount: Object.keys(devices).length
+    activityHistory.push({
+        deviceCount: totalDevices,
+        activeCount: activeCount,
+        targetCount: targetCount
     });
 
     // Keep only last N points
-    if (rssiHistory.length > MAX_RSSI_POINTS) {
-        rssiHistory.shift();
+    if (activityHistory.length > MAX_ACTIVITY_POINTS) {
+        activityHistory.shift();
     }
 
     // Update chart
-    if (rssiChart) {
-        rssiChart.data.datasets[0].data = rssiHistory.map(d => d.maxRssi);
-        rssiChart.data.datasets[1].data = rssiHistory.map(d => d.avgRssi);
-        rssiChart.update('none');
+    if (activityChart) {
+        activityChart.data.datasets[0].data = activityHistory.map(d => d.deviceCount);
+        activityChart.data.datasets[1].data = activityHistory.map(d => d.activeCount);
+        activityChart.data.datasets[2].data = activityHistory.map(d => d.targetCount);
+        activityChart.update('none');
     }
 }
 
@@ -779,6 +790,11 @@ function updateDevice(device) {
 
     const targetCount = Object.values(devices).filter(d => d.is_target).length;
     document.getElementById('targetCount').textContent = targetCount;
+
+    // Update tools tracking UI if this is the tracked device
+    if (toolsTrackingActive && toolsTrackingBd === bdAddr) {
+        updateToolsTrackingDisplay(device);
+    }
 }
 
 // Survey table sorting state
@@ -5763,10 +5779,6 @@ let peerMarkers = {};
 let connectionLines = {};
 let showPeerLocations = true;
 let showPeerConnections = true;
-let showNetworkStats = false;
-let peerLatencyChart = null;
-let peerLatencyHistory = {};  // peer_ip -> [latency values]
-let networkStatsUpdateInterval = null;
 
 /**
  * Start WARHAMMER network monitoring
@@ -5851,14 +5863,6 @@ function handleWarhammerUpdate(data) {
         document.getElementById('networkRouteCount').textContent = networkRoutes.length;
     }
 
-    // Always update latency history (needed for settings chart even if stats panel hidden)
-    const bluek9Nodes = networkPeers.filter(p => p.is_bluek9);
-    updatePeerLatencyHistory(bluek9Nodes);
-
-    // Update network statistics display if visible
-    if (showNetworkStats) {
-        updateNetworkStatsDisplay();
-    }
 }
 
 // Peer filter state
@@ -6249,7 +6253,6 @@ function refreshNetworkSettings() {
 
 // Settings Network Tab state
 let settingsPeerFilter = 'all';
-let settingsLatencyChart = null;
 let settingsSpeedtestChart = null;
 
 /**
@@ -6258,130 +6261,7 @@ let settingsSpeedtestChart = null;
 function refreshSettingsNetworkTab() {
     refreshNetworkSettings();
     refreshSettingsSpeedtestPeers();
-    updateSettingsNetworkStats();
     updateSettingsPeerList();
-    initSettingsLatencyChart();
-}
-
-/**
- * Update network statistics in settings tab
- */
-function updateSettingsNetworkStats() {
-    // Use data from the existing networkPeers array
-    const bluek9Nodes = networkPeers.filter(p => p.is_bluek9);
-
-    // Update stat values
-    const nodesEl = document.getElementById('settingsStatNodes');
-    if (nodesEl) nodesEl.textContent = bluek9Nodes.length;
-
-    // Calculate average latency
-    let totalLatency = 0;
-    let latencyCount = 0;
-    bluek9Nodes.forEach(peer => {
-        const latencyMs = parseLatency(peer.latency);
-        if (latencyMs > 0) {
-            totalLatency += latencyMs;
-            latencyCount++;
-        }
-    });
-
-    const avgLatencyEl = document.getElementById('settingsStatLatency');
-    if (avgLatencyEl) {
-        avgLatencyEl.textContent = latencyCount > 0 ?
-            `${Math.round(totalLatency / latencyCount)} ms` : '--';
-    }
-
-    // Data synced (placeholder)
-    const syncedEl = document.getElementById('settingsStatSynced');
-    if (syncedEl) syncedEl.textContent = '0 KB';
-}
-
-/**
- * Initialize the latency chart in settings
- */
-function initSettingsLatencyChart() {
-    const ctx = document.getElementById('settingsLatencyChart');
-    if (!ctx) return;
-
-    if (settingsLatencyChart) {
-        settingsLatencyChart.destroy();
-    }
-
-    settingsLatencyChart = new Chart(ctx, {
-        type: 'line',
-        data: {
-            labels: [],
-            datasets: []
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            animation: { duration: 300 },
-            plugins: {
-                legend: {
-                    display: true,
-                    position: 'bottom',
-                    labels: { color: '#8b949e', font: { size: 10, family: 'Share Tech Mono' } }
-                }
-            },
-            scales: {
-                x: {
-                    display: true,
-                    grid: { color: 'rgba(255,255,255,0.1)' },
-                    ticks: { color: '#8b949e', font: { size: 9 } }
-                },
-                y: {
-                    display: true,
-                    beginAtZero: true,
-                    grid: { color: 'rgba(255,255,255,0.1)' },
-                    ticks: {
-                        color: '#8b949e',
-                        font: { size: 9 },
-                        callback: (v) => v + 'ms'
-                    }
-                }
-            }
-        }
-    });
-
-    // Update with current data
-    updateSettingsLatencyChart();
-}
-
-/**
- * Update settings latency chart
- */
-function updateSettingsLatencyChart() {
-    if (!settingsLatencyChart) return;
-
-    const bluek9Nodes = networkPeers.filter(p => p.is_bluek9);
-    if (bluek9Nodes.length === 0) return;
-
-    // Use the shared peerLatencyHistory if available
-    const labels = Object.keys(peerLatencyHistory).length > 0 ?
-        Array.from({ length: Math.max(...Object.values(peerLatencyHistory).map(h => h.length)) }, (_, i) => `${i + 1}`) :
-        ['1'];
-
-    const colors = ['#00d4ff', '#00ff88', '#ff6b6b', '#ffaa00', '#aa88ff'];
-    const datasets = bluek9Nodes.map((peer, idx) => {
-        const peerId = peer.system_id || peer.ip;  // Same key used in updateLatencyChart()
-        const name = truncateHostname(peer.system_name || peer.hostname);
-        const history = peerLatencyHistory[peerId] || [];
-
-        return {
-            label: name,
-            data: history,
-            borderColor: colors[idx % colors.length],
-            backgroundColor: 'transparent',
-            borderWidth: 2,
-            pointRadius: 2,
-            tension: 0.3
-        };
-    });
-
-    settingsLatencyChart.data.labels = labels;
-    settingsLatencyChart.data.datasets = datasets;
-    settingsLatencyChart.update('none');
 }
 
 /**
@@ -6748,281 +6628,6 @@ function syncTargetsWithPeers() {
         })
         .catch(e => addLogEntry(`Target sync failed: ${e}`, 'ERROR'));
 }
-
-/**
- * Toggle network statistics panel visibility
- */
-function toggleNetworkStats() {
-    showNetworkStats = document.getElementById('toggleShowNetStats').checked;
-    const panel = document.getElementById('networkStatsPanel');
-
-    if (showNetworkStats) {
-        panel.classList.remove('hidden');
-        initPeerLatencyChart();
-        updateNetworkStatsDisplay();
-        refreshSpeedtestPeers();  // Refresh available peers for speed test
-    } else {
-        panel.classList.add('hidden');
-    }
-}
-
-/**
- * Initialize the peer latency chart
- */
-function initPeerLatencyChart() {
-    const ctx = document.getElementById('peerLatencyChart');
-    if (!ctx) return;
-
-    if (peerLatencyChart) {
-        peerLatencyChart.destroy();
-    }
-
-    // Clear latency history when reinitializing chart
-    peerLatencyHistory = {};
-
-    peerLatencyChart = new Chart(ctx, {
-        type: 'line',
-        data: {
-            labels: [],
-            datasets: []
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            animation: { duration: 300 },
-            scales: {
-                x: {
-                    display: false
-                },
-                y: {
-                    beginAtZero: true,
-                    grid: { color: 'rgba(0, 255, 255, 0.1)' },
-                    ticks: {
-                        color: '#00ffff',
-                        font: { size: 10, family: 'monospace' }
-                    }
-                }
-            },
-            plugins: {
-                legend: {
-                    display: true,
-                    position: 'bottom',
-                    labels: {
-                        color: '#00ffff',
-                        font: { size: 10, family: 'monospace' },
-                        boxWidth: 12
-                    }
-                }
-            }
-        }
-    });
-}
-
-/**
- * Update network statistics display
- */
-function updateNetworkStatsDisplay() {
-    if (!showNetworkStats) return;
-
-    // Count online BlueK9 nodes
-    const bluek9Nodes = networkPeers.filter(p => p.is_bluek9);
-    document.getElementById('netStatNodesOnline').textContent = bluek9Nodes.length;
-
-    // Calculate average latency
-    let totalLatency = 0;
-    let latencyCount = 0;
-    bluek9Nodes.forEach(peer => {
-        if (peer.latency && peer.latency !== '0s') {
-            const ms = parseLatency(peer.latency);
-            if (ms > 0) {
-                totalLatency += ms;
-                latencyCount++;
-            }
-        }
-    });
-    const avgLatency = latencyCount > 0 ? (totalLatency / latencyCount).toFixed(1) : '--';
-    document.getElementById('netStatAvgLatency').textContent = avgLatency !== '--' ? `${avgLatency}ms` : '--';
-
-    // Calculate data synced (sum of transfer)
-    let totalTransfer = 0;
-    bluek9Nodes.forEach(peer => {
-        if (peer.transfer_rx) totalTransfer += parseTransfer(peer.transfer_rx);
-        if (peer.transfer_tx) totalTransfer += parseTransfer(peer.transfer_tx);
-    });
-    document.getElementById('netStatDataSynced').textContent = formatBytes(totalTransfer);
-
-    // Update peer status list
-    updateNetStatsPeersList(bluek9Nodes);
-
-    // Update latency chart
-    updateLatencyChart(bluek9Nodes);
-}
-
-/**
- * Parse latency string to milliseconds
- */
-function parseLatency(latencyStr) {
-    if (!latencyStr || latencyStr === '0s' || latencyStr === '-' || latencyStr === 'N/A' || latencyStr === '--') return 0;
-
-    // Handle formats like "57.443748ms", "1.5s", etc.
-    const msMatch = latencyStr.match(/([\d.]+)\s*ms/i);
-    if (msMatch) return parseFloat(msMatch[1]);
-
-    const sMatch = latencyStr.match(/([\d.]+)\s*s$/i);
-    if (sMatch) return parseFloat(sMatch[1]) * 1000;
-
-    // Try parsing as raw number (assume ms)
-    const num = parseFloat(latencyStr);
-    if (!isNaN(num)) return num;
-
-    return 0;
-}
-
-/**
- * Parse transfer string to bytes
- */
-function parseTransfer(transferStr) {
-    if (!transferStr || transferStr === '0 B') return 0;
-
-    const match = transferStr.match(/([\d.]+)\s*(B|KiB|MiB|GiB|KB|MB|GB)/i);
-    if (!match) return 0;
-
-    const value = parseFloat(match[1]);
-    const unit = match[2].toUpperCase();
-
-    switch (unit) {
-        case 'B': return value;
-        case 'KIB': case 'KB': return value * 1024;
-        case 'MIB': case 'MB': return value * 1024 * 1024;
-        case 'GIB': case 'GB': return value * 1024 * 1024 * 1024;
-        default: return value;
-    }
-}
-
-/**
- * Format bytes to human readable
- */
-function formatBytes(bytes) {
-    if (bytes === 0) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
-}
-
-/**
- * Update the BlueK9 peers status list in stats panel
- */
-function updateNetStatsPeersList(bluek9Nodes) {
-    const container = document.getElementById('netStatsPeersList');
-    if (!container) return;
-
-    if (bluek9Nodes.length === 0) {
-        container.innerHTML = '<div class="net-stats-peer-item no-peers">No BlueK9 nodes connected</div>';
-        return;
-    }
-
-    container.innerHTML = bluek9Nodes.map(peer => {
-        const latency = peer.latency && peer.latency !== '0s' ? peer.latency : '--';
-        const connType = peer.connection_type || 'Unknown';
-        const status = peer.connected ? 'online' : 'offline';
-        const name = truncateHostname(peer.system_name || peer.name || peer.hostname);
-
-        return `
-            <div class="net-stats-peer-item">
-                <div class="net-stats-peer-status ${status}"></div>
-                <div class="net-stats-peer-info">
-                    <div class="net-stats-peer-name">${name}</div>
-                    <div class="net-stats-peer-details">
-                        <span class="peer-latency">${latency}</span>
-                        <span class="peer-conn-type">${connType}</span>
-                    </div>
-                </div>
-            </div>
-        `;
-    }).join('');
-}
-
-/**
- * Update the latency history for all peers
- * This is called periodically to track latency over time
- */
-function updatePeerLatencyHistory(bluek9Nodes) {
-    const maxDataPoints = 30;  // Keep last 30 data points
-
-    // Get current peer IDs
-    const currentPeerIds = new Set(bluek9Nodes.map(p => p.system_id || p.ip));
-
-    // Remove stale peer entries from history
-    Object.keys(peerLatencyHistory).forEach(peerId => {
-        if (!currentPeerIds.has(peerId)) {
-            delete peerLatencyHistory[peerId];
-        }
-    });
-
-    // Update history for each peer
-    bluek9Nodes.forEach(peer => {
-        const peerId = peer.system_id || peer.ip;
-        if (!peerLatencyHistory[peerId]) {
-            peerLatencyHistory[peerId] = [];
-        }
-
-        const latency = parseLatency(peer.latency);
-        // Only add non-zero latencies to avoid filling with zeros
-        if (latency > 0) {
-            peerLatencyHistory[peerId].push(latency);
-
-            // Keep only last N points
-            if (peerLatencyHistory[peerId].length > maxDataPoints) {
-                peerLatencyHistory[peerId].shift();
-            }
-        }
-    });
-}
-
-/**
- * Update the latency chart with current peer data
- */
-function updateLatencyChart(bluek9Nodes) {
-    // Always update history first
-    updatePeerLatencyHistory(bluek9Nodes);
-
-    // Skip chart update if chart doesn't exist
-    if (!peerLatencyChart) return;
-
-    // Build chart datasets
-    const colors = ['#00ffff', '#ff6b6b', '#4ecdc4', '#ffe66d', '#95e1d3', '#f38181'];
-    const datasets = [];
-    let colorIdx = 0;
-
-    bluek9Nodes.forEach(peer => {
-        const peerId = peer.system_id || peer.ip;
-        const name = peer.system_name || peer.name || peerId;
-        const color = colors[colorIdx % colors.length];
-
-        datasets.push({
-            label: name,
-            data: peerLatencyHistory[peerId] || [],
-            borderColor: color,
-            backgroundColor: color + '20',
-            borderWidth: 2,
-            pointRadius: 0,
-            tension: 0.3,
-            fill: true
-        });
-        colorIdx++;
-    });
-
-    // Update labels (time points) - based only on current peer histories
-    const histories = Object.values(peerLatencyHistory);
-    const maxLen = histories.length > 0 ? Math.max(...histories.map(h => h.length)) : 1;
-    const labels = Array(maxLen).fill('');
-
-    peerLatencyChart.data.labels = labels;
-    peerLatencyChart.data.datasets = datasets;
-    peerLatencyChart.update('none');  // No animation for smooth updates
-}
-
 
 // ==================== SPEED TEST ====================
 
@@ -7489,17 +7094,33 @@ function stopToolsTracking() {
 }
 
 /**
- * Update Tools tracking display with geo ping data
+ * Update Tools tracking display with device or geo ping data
  */
 function updateToolsTrackingDisplay(data) {
-    if (!toolsTrackingActive || data.bd_address !== toolsTrackingBd) return;
+    if (!toolsTrackingActive) return;
 
-    // Update RSSI
+    // Get RSSI from device data
     const rssi = data.rssi || '--';
-    document.getElementById('toolsTrackingRssi').textContent = rssi !== '--' ? `${rssi} dBm` : '--';
-    document.getElementById('toolsCompassRssi').textContent = rssi;
+    const rssiEl = document.getElementById('toolsTrackingRssi');
+    const compassRssiEl = document.getElementById('toolsCompassRssi');
 
-    // Update bearing if available
+    if (rssiEl) {
+        rssiEl.textContent = rssi !== '--' ? `${rssi} dBm` : '--';
+        // Color code RSSI
+        if (rssi !== '--') {
+            const rssiNum = parseInt(rssi);
+            if (rssiNum >= -50) {
+                rssiEl.style.color = 'var(--success)';
+            } else if (rssiNum >= -70) {
+                rssiEl.style.color = 'var(--warning)';
+            } else {
+                rssiEl.style.color = 'var(--danger)';
+            }
+        }
+    }
+    if (compassRssiEl) compassRssiEl.textContent = rssi;
+
+    // Update bearing if available (from geo ping data)
     if (data.direction && data.direction.bearing !== undefined) {
         document.getElementById('toolsTrackingBearing').textContent = `${Math.round(data.direction.bearing)}°`;
 
@@ -7510,9 +7131,27 @@ function updateToolsTrackingDisplay(data) {
         }
     }
 
-    // Update distance estimate
+    // Update distance estimate from emitter location if available
     if (data.distance_estimate) {
         document.getElementById('toolsTrackingDistance').textContent = `~${data.distance_estimate}m`;
+    } else if (data.emitter_accuracy) {
+        // Use CEP radius as rough distance estimate
+        document.getElementById('toolsTrackingDistance').textContent = `CEP: ${data.emitter_accuracy}m`;
+    }
+
+    // Update last seen timestamp
+    if (data.last_seen) {
+        const lastSeen = new Date(data.last_seen);
+        const now = new Date();
+        const diffSec = Math.floor((now - lastSeen) / 1000);
+        const statusEl = document.getElementById('toolsTrackingStatus');
+        if (statusEl && diffSec <= 5) {
+            statusEl.textContent = 'ACTIVE';
+            statusEl.style.color = 'var(--success)';
+        } else if (diffSec <= 30) {
+            statusEl.textContent = 'STALE';
+            statusEl.style.color = 'var(--warning)';
+        }
     }
 }
 
