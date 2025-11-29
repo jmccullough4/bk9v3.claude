@@ -4187,14 +4187,19 @@ function checkForUpdates() {
                 details.innerHTML = detailsHtml;
 
                 // Show recent changes if available
+                // Note: API returns array of strings from git log --oneline (e.g. "abc1234 Fix something")
                 if (data.recent_changes && data.recent_changes.length > 0) {
                     changesSection.classList.remove('hidden');
-                    changesList.innerHTML = data.recent_changes.map(change =>
-                        `<div class="change-item">
-                            <span class="change-hash">${change.hash}</span>
-                            <span class="change-msg">${change.message}</span>
-                        </div>`
-                    ).join('');
+                    changesList.innerHTML = data.recent_changes.map(change => {
+                        // Parse "hash message" format from git log --oneline
+                        const parts = change.split(' ');
+                        const hash = parts[0] || '';
+                        const message = parts.slice(1).join(' ') || '';
+                        return `<div class="change-item">
+                            <span class="change-hash">${hash}</span>
+                            <span class="change-msg">${message}</span>
+                        </div>`;
+                    }).join('');
                 }
 
                 // Show apply button
@@ -4333,11 +4338,13 @@ function loadSystemInfo() {
             if (data.version) {
                 document.getElementById('sysInfoVersion').textContent = data.version;
             }
-            if (data.git_commit) {
-                document.getElementById('sysInfoCommit').textContent = data.git_commit.substring(0, 8);
+            // API returns 'commit' not 'git_commit'
+            if (data.commit) {
+                document.getElementById('sysInfoCommit').textContent = data.commit.substring(0, 8);
             }
-            if (data.git_branch) {
-                document.getElementById('sysInfoBranch').textContent = data.git_branch;
+            // API returns 'branch' not 'git_branch'
+            if (data.branch) {
+                document.getElementById('sysInfoBranch').textContent = data.branch;
             }
             if (data.last_updated) {
                 document.getElementById('sysInfoLastUpdate').textContent = data.last_updated;
@@ -6788,6 +6795,7 @@ async function stopSpeedTest() {
 
 /**
  * Update speed test UI based on status
+ * Note: Main UI elements may not exist, so all element access uses null checks
  */
 function updateSpeedtestUI(status, targetName = '') {
     const badge = document.getElementById('speedtestBadge');
@@ -6799,33 +6807,39 @@ function updateSpeedtestUI(status, targetName = '') {
 
     switch (status) {
         case 'running':
-            badge.textContent = 'TESTING';
-            badge.className = 'speedtest-badge running';
-            display.classList.remove('hidden');
-            results.classList.add('hidden');
-            startBtn.classList.add('hidden');
-            stopBtn.classList.remove('hidden');
-            if (targetName) targetNameEl.textContent = targetName;
+            if (badge) {
+                badge.textContent = 'TESTING';
+                badge.className = 'speedtest-badge running';
+            }
+            if (display) display.classList.remove('hidden');
+            if (results) results.classList.add('hidden');
+            if (startBtn) startBtn.classList.add('hidden');
+            if (stopBtn) stopBtn.classList.remove('hidden');
+            if (targetName && targetNameEl) targetNameEl.textContent = targetName;
             break;
 
         case 'complete':
-            badge.textContent = 'COMPLETE';
-            badge.className = 'speedtest-badge complete';
-            display.classList.add('hidden');
-            results.classList.remove('hidden');
-            startBtn.classList.remove('hidden');
-            stopBtn.classList.add('hidden');
+            if (badge) {
+                badge.textContent = 'COMPLETE';
+                badge.className = 'speedtest-badge complete';
+            }
+            if (display) display.classList.add('hidden');
+            if (results) results.classList.remove('hidden');
+            if (startBtn) startBtn.classList.remove('hidden');
+            if (stopBtn) stopBtn.classList.add('hidden');
             speedtestRunning = false;
             break;
 
         case 'error':
         case 'stopped':
         case 'cancelled':
-            badge.textContent = status === 'error' ? 'ERROR' : 'READY';
-            badge.className = 'speedtest-badge ' + (status === 'error' ? 'error' : '');
-            display.classList.add('hidden');
-            startBtn.classList.remove('hidden');
-            stopBtn.classList.add('hidden');
+            if (badge) {
+                badge.textContent = status === 'error' ? 'ERROR' : 'READY';
+                badge.className = 'speedtest-badge ' + (status === 'error' ? 'error' : '');
+            }
+            if (display) display.classList.add('hidden');
+            if (startBtn) startBtn.classList.remove('hidden');
+            if (stopBtn) stopBtn.classList.add('hidden');
             speedtestRunning = false;
             break;
     }
@@ -6833,6 +6847,7 @@ function updateSpeedtestUI(status, targetName = '') {
 
 /**
  * Handle speed test WebSocket updates
+ * Note: Main UI speedtest elements have been removed, only settings tab exists now
  */
 function handleSpeedtestUpdate(data) {
     const progressBar = document.getElementById('speedtestProgressBar');
@@ -6841,12 +6856,12 @@ function handleSpeedtestUpdate(data) {
 
     switch (data.status) {
         case 'running':
-            // Update progress
+            // Update progress (with null checks for elements that may not exist)
             if (progressBar) progressBar.style.width = `${data.progress || 0}%`;
             if (progressText) progressText.textContent = `${data.progress || 0}%`;
             if (liveSpeed) liveSpeed.textContent = (data.bandwidth || 0).toFixed(2);
 
-            // Update chart
+            // Update chart if it exists
             if (speedtestChart && data.results) {
                 speedtestChart.data.labels = data.results.map(r => `${r.time}s`);
                 speedtestChart.data.datasets[0].data = data.results.map(r => r.mbps);
@@ -6857,12 +6872,14 @@ function handleSpeedtestUpdate(data) {
         case 'complete':
             updateSpeedtestUI('complete');
             if (data.final_result) {
-                document.getElementById('speedtestUpload').textContent =
-                    `${data.final_result.upload_mbps} Mbps`;
-                document.getElementById('speedtestDownload').textContent =
-                    `${data.final_result.download_mbps} Mbps`;
-                document.getElementById('speedtestRetransmits').textContent =
-                    data.final_result.retransmits;
+                // Update result elements with null checks
+                const uploadEl = document.getElementById('speedtestUpload');
+                const downloadEl = document.getElementById('speedtestDownload');
+                const retransmitsEl = document.getElementById('speedtestRetransmits');
+
+                if (uploadEl) uploadEl.textContent = `${data.final_result.upload_mbps} Mbps`;
+                if (downloadEl) downloadEl.textContent = `${data.final_result.download_mbps} Mbps`;
+                if (retransmitsEl) retransmitsEl.textContent = data.final_result.retransmits;
 
                 // Final chart update
                 if (speedtestChart && data.results) {
@@ -6883,7 +6900,7 @@ function handleSpeedtestUpdate(data) {
             break;
     }
 
-    // Also update settings tab if it's open
+    // Update settings tab (this is the primary UI now)
     handleSettingsSpeedtestUpdate(data);
 }
 
