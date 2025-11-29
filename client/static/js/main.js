@@ -2513,38 +2513,10 @@ function loadTargets() {
             data.forEach(target => {
                 targets[target.bd_address] = target;
             });
-            updateTargetList();
+            // Update both modal and quick target lists
+            refreshModalTargetList();
+            updateQuickTargetList();
         });
-}
-
-function updateTargetList() {
-    const list = document.getElementById('targetList');
-    list.innerHTML = '';
-
-    Object.values(targets).forEach(target => {
-        const item = document.createElement('div');
-        item.className = 'target-item';
-
-        // Check if target is in detected devices
-        const detected = devices[target.bd_address];
-        const statusClass = detected ? 'target-detected' : 'target-not-detected';
-
-        item.innerHTML = `
-            <div class="item-info">
-                <span class="item-primary ${statusClass}">${target.bd_address}</span>
-                <span class="item-secondary">${target.alias || 'No alias'}</span>
-            </div>
-            <button class="item-delete" onclick="deleteTarget('${target.bd_address}')">&times;</button>
-        `;
-
-        // Right-click context menu for targets
-        item.addEventListener('contextmenu', (e) => {
-            e.preventDefault();
-            showTargetContextMenu(e, target.bd_address);
-        });
-
-        list.appendChild(item);
-    });
 }
 
 function showTargetContextMenu(event, bdAddress) {
@@ -7873,6 +7845,13 @@ function refreshModalTargetList() {
                 </button>
             </div>
         `;
+
+        // Right-click context menu for targets
+        item.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            showTargetContextMenu(e, bdAddress);
+        });
+
         listContainer.appendChild(item);
     });
 }
@@ -7913,6 +7892,13 @@ function updateQuickTargetList() {
             <span class="quick-target-bd">${alias || shortBd}</span>
             <span class="quick-target-rssi">${device.rssi ? device.rssi + ' dBm' : '--'}</span>
         `;
+
+        // Right-click context menu for quick targets
+        item.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            showTargetContextMenu(e, bdAddress);
+        });
+
         listContainer.appendChild(item);
     });
 
