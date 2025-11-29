@@ -3811,6 +3811,40 @@ function openSettingsModal() {
     document.getElementById('settingsModal').classList.remove('hidden');
 }
 
+/**
+ * Open settings modal to a specific tab
+ */
+function openSettings(tabName) {
+    openSettingsModal();
+
+    if (tabName) {
+        // Switch to the specified tab
+        const tabId = 'settings' + tabName.charAt(0).toUpperCase() + tabName.slice(1);
+        const tabEl = document.getElementById(tabId);
+
+        if (tabEl) {
+            // Hide all tabs
+            document.querySelectorAll('.settings-content').forEach(el => el.classList.remove('active'));
+            document.querySelectorAll('.settings-tab').forEach(el => el.classList.remove('active'));
+
+            // Show selected tab
+            tabEl.classList.add('active');
+
+            // Find and activate the corresponding tab button
+            document.querySelectorAll('.settings-tab').forEach(btn => {
+                if (btn.textContent.toLowerCase().includes(tabName.toLowerCase())) {
+                    btn.classList.add('active');
+                }
+            });
+
+            // If opening network tab, refresh network data
+            if (tabName === 'network') {
+                refreshSettingsNetworkTab();
+            }
+        }
+    }
+}
+
 function closeSettingsModal() {
     document.getElementById('settingsModal').classList.add('hidden');
 }
@@ -3823,6 +3857,11 @@ function showSettingsTab(tabName) {
     // Show selected tab
     document.getElementById('settings' + tabName.charAt(0).toUpperCase() + tabName.slice(1)).classList.add('active');
     event.target.classList.add('active');
+
+    // If opening network tab, refresh network data
+    if (tabName.toLowerCase() === 'network') {
+        refreshSettingsNetworkTab();
+    }
 }
 
 function updateGpsSettingsFields() {
@@ -6179,7 +6218,377 @@ function refreshNetworkSettings() {
             document.getElementById('settingsNetworkStatus').textContent = data.running ? 'CONNECTED' : 'DISCONNECTED';
             document.getElementById('settingsNetworkPeers').textContent = `${data.connected_peers || 0} / ${data.peer_count || 0}`;
             document.getElementById('settingsNetworkRoutes').textContent = data.route_count || '0';
+
+            // Also update new fields if they exist
+            const bk9El = document.getElementById('settingsNetworkBk9');
+            if (bk9El) bk9El.textContent = data.bluek9_count || '0';
         });
+}
+
+// Settings Network Tab state
+let settingsPeerFilter = 'all';
+let settingsLatencyChart = null;
+let settingsSpeedtestChart = null;
+
+/**
+ * Refresh the Settings Network tab with current data
+ */
+function refreshSettingsNetworkTab() {
+    refreshNetworkSettings();
+    refreshSettingsSpeedtestPeers();
+    updateSettingsNetworkStats();
+    updateSettingsPeerList();
+    initSettingsLatencyChart();
+}
+
+/**
+ * Update network statistics in settings tab
+ */
+function updateSettingsNetworkStats() {
+    // Use data from the existing networkPeers array
+    const bluek9Nodes = networkPeers.filter(p => p.is_bluek9);
+
+    // Update stat values
+    const nodesEl = document.getElementById('settingsStatNodes');
+    if (nodesEl) nodesEl.textContent = bluek9Nodes.length;
+
+    // Calculate average latency
+    let totalLatency = 0;
+    let latencyCount = 0;
+    bluek9Nodes.forEach(peer => {
+        const latencyMs = parseLatency(peer.latency);
+        if (latencyMs > 0) {
+            totalLatency += latencyMs;
+            latencyCount++;
+        }
+    });
+
+    const avgLatencyEl = document.getElementById('settingsStatLatency');
+    if (avgLatencyEl) {
+        avgLatencyEl.textContent = latencyCount > 0 ?
+            `${Math.round(totalLatency / latencyCount)} ms` : '--';
+    }
+
+    // Data synced (placeholder)
+    const syncedEl = document.getElementById('settingsStatSynced');
+    if (syncedEl) syncedEl.textContent = '0 KB';
+}
+
+/**
+ * Initialize the latency chart in settings
+ */
+function initSettingsLatencyChart() {
+    const ctx = document.getElementById('settingsLatencyChart');
+    if (!ctx) return;
+
+    if (settingsLatencyChart) {
+        settingsLatencyChart.destroy();
+    }
+
+    settingsLatencyChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: [],
+            datasets: []
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: { duration: 300 },
+            plugins: {
+                legend: {
+                    display: true,
+                    position: 'bottom',
+                    labels: { color: '#8b949e', font: { size: 10, family: 'Share Tech Mono' } }
+                }
+            },
+            scales: {
+                x: {
+                    display: true,
+                    grid: { color: 'rgba(255,255,255,0.1)' },
+                    ticks: { color: '#8b949e', font: { size: 9 } }
+                },
+                y: {
+                    display: true,
+                    beginAtZero: true,
+                    grid: { color: 'rgba(255,255,255,0.1)' },
+                    ticks: {
+                        color: '#8b949e',
+                        font: { size: 9 },
+                        callback: (v) => v + 'ms'
+                    }
+                }
+            }
+        }
+    });
+
+    // Update with current data
+    updateSettingsLatencyChart();
+}
+
+/**
+ * Update settings latency chart
+ */
+function updateSettingsLatencyChart() {
+    if (!settingsLatencyChart) return;
+
+    const bluek9Nodes = networkPeers.filter(p => p.is_bluek9);
+    if (bluek9Nodes.length === 0) return;
+
+    // Use the shared peerLatencyHistory if available
+    const labels = Object.keys(peerLatencyHistory).length > 0 ?
+        Array.from({ length: Math.max(...Object.values(peerLatencyHistory).map(h => h.length)) }, (_, i) => `${i + 1}`) :
+        ['1'];
+
+    const colors = ['#00d4ff', '#00ff88', '#ff6b6b', '#ffaa00', '#aa88ff'];
+    const datasets = bluek9Nodes.map((peer, idx) => {
+        const name = truncateHostname(peer.system_name || peer.hostname);
+        const history = peerLatencyHistory[name] || [];
+
+        return {
+            label: name,
+            data: history,
+            borderColor: colors[idx % colors.length],
+            backgroundColor: 'transparent',
+            borderWidth: 2,
+            pointRadius: 2,
+            tension: 0.3
+        };
+    });
+
+    settingsLatencyChart.data.labels = labels;
+    settingsLatencyChart.data.datasets = datasets;
+    settingsLatencyChart.update('none');
+}
+
+/**
+ * Update peer list in settings tab
+ */
+function updateSettingsPeerList() {
+    const container = document.getElementById('settingsPeerList');
+    if (!container) return;
+
+    let filteredPeers = networkPeers;
+    if (settingsPeerFilter === 'bluek9') {
+        filteredPeers = networkPeers.filter(p => p.is_bluek9);
+    }
+
+    if (filteredPeers.length === 0) {
+        const msg = settingsPeerFilter === 'bluek9' ? 'No BlueK9 peers connected' : 'No peers connected';
+        container.innerHTML = `<div class="settings-peer-item empty">${msg}</div>`;
+        return;
+    }
+
+    // Sort: BlueK9 first, then connected, then by name
+    const sortedPeers = [...filteredPeers].sort((a, b) => {
+        if (a.is_bluek9 !== b.is_bluek9) return b.is_bluek9 ? 1 : -1;
+        if (a.connected !== b.connected) return b.connected ? 1 : -1;
+        return (a.hostname || '').localeCompare(b.hostname || '');
+    });
+
+    container.innerHTML = sortedPeers.map(peer => {
+        const name = truncateHostname(peer.is_bluek9 ? (peer.system_name || peer.hostname) : peer.hostname);
+        const badge = peer.is_bluek9 ? '<span class="peer-bluek9-badge">BK9</span>' : '';
+        const status = peer.connected ? 'online' : 'offline';
+        const latency = peer.latency || '--';
+
+        return `
+            <div class="settings-peer-item">
+                <div class="peer-status-dot ${status} ${peer.is_bluek9 ? 'bluek9' : ''}"></div>
+                <div class="settings-peer-info">
+                    <div class="settings-peer-name">${name} ${badge}</div>
+                    <div class="settings-peer-details">
+                        <span>${peer.ip}</span>
+                        <span>${latency}</span>
+                        <span>${peer.connection_type || ''}</span>
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+/**
+ * Set peer filter in settings
+ */
+function setSettingsPeerFilter(filter) {
+    settingsPeerFilter = filter;
+    document.getElementById('settingsFilterAll').classList.toggle('active', filter === 'all');
+    document.getElementById('settingsFilterBk9').classList.toggle('active', filter === 'bluek9');
+    updateSettingsPeerList();
+}
+
+/**
+ * Refresh speedtest peers dropdown in settings
+ */
+async function refreshSettingsSpeedtestPeers() {
+    const select = document.getElementById('settingsSpeedtestPeer');
+    if (!select) return;
+
+    try {
+        const response = await fetch('/api/network/speedtest/peers');
+        if (!response.ok) return;
+
+        const data = await response.json();
+        const peers = data.peers || [];
+
+        select.innerHTML = '<option value="">Select target node...</option>';
+        peers.forEach(peer => {
+            const option = document.createElement('option');
+            option.value = peer.ip;
+            option.dataset.name = peer.name;
+            const icon = peer.type === 'bluek9' ? '🔷' : '🌐';
+            option.textContent = `${icon} ${truncateHostname(peer.name)} (${peer.ip})`;
+            select.appendChild(option);
+        });
+    } catch (e) {
+        console.error('Failed to refresh settings speedtest peers:', e);
+    }
+}
+
+/**
+ * Start speed test from settings tab
+ */
+function startSpeedTestFromSettings() {
+    const select = document.getElementById('settingsSpeedtestPeer');
+    const targetIp = select?.value;
+    const targetName = select?.selectedOptions[0]?.dataset.name || targetIp;
+
+    if (!targetIp) {
+        addLog('Please select a target node for speed test', 'WARNING');
+        return;
+    }
+
+    // Use the existing speed test function
+    fetch('/api/network/speedtest/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            target_ip: targetIp,
+            target_name: targetName,
+            duration: 10
+        })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.error) {
+            addLog(`Speed test failed: ${data.error}`, 'ERROR');
+            return;
+        }
+
+        // Show live display
+        const liveEl = document.getElementById('settingsSpeedtestLive');
+        const resultsEl = document.getElementById('settingsSpeedtestResults');
+        const startBtn = document.getElementById('settingsSpeedtestStart');
+        const stopBtn = document.getElementById('settingsSpeedtestStop');
+
+        if (liveEl) liveEl.classList.remove('hidden');
+        if (resultsEl) resultsEl.classList.add('hidden');
+        if (startBtn) startBtn.classList.add('hidden');
+        if (stopBtn) stopBtn.classList.remove('hidden');
+
+        // Initialize chart if needed
+        if (!settingsSpeedtestChart) {
+            initSettingsSpeedtestChart();
+        } else {
+            settingsSpeedtestChart.data.labels = [];
+            settingsSpeedtestChart.data.datasets[0].data = [];
+            settingsSpeedtestChart.update();
+        }
+    })
+    .catch(e => addLog(`Speed test error: ${e.message}`, 'ERROR'));
+}
+
+/**
+ * Initialize speed test chart in settings
+ */
+function initSettingsSpeedtestChart() {
+    const ctx = document.getElementById('settingsSpeedtestChart');
+    if (!ctx) return;
+
+    settingsSpeedtestChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: [],
+            datasets: [{
+                label: 'Speed (Mbps)',
+                data: [],
+                borderColor: '#00ffff',
+                backgroundColor: 'rgba(0, 255, 255, 0.1)',
+                borderWidth: 3,
+                pointRadius: 4,
+                fill: true,
+                tension: 0.4
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: { duration: 300 },
+            plugins: { legend: { display: false } },
+            scales: {
+                x: { display: true, grid: { color: 'rgba(255,255,255,0.1)' }, ticks: { color: '#00ffff', font: { size: 9 } } },
+                y: { display: true, beginAtZero: true, grid: { color: 'rgba(255,255,255,0.1)' }, ticks: { color: '#00ffff', font: { size: 9 } } }
+            }
+        }
+    });
+}
+
+/**
+ * Handle speed test updates for settings tab
+ */
+function handleSettingsSpeedtestUpdate(data) {
+    const progressBar = document.getElementById('settingsSpeedtestProgress');
+    const progressText = document.getElementById('settingsSpeedtestPercent');
+    const speedEl = document.getElementById('settingsSpeedtestSpeed');
+
+    switch (data.status) {
+        case 'running':
+            if (progressBar) progressBar.style.width = `${data.progress || 0}%`;
+            if (progressText) progressText.textContent = `${data.progress || 0}%`;
+            if (speedEl) speedEl.textContent = (data.bandwidth || 0).toFixed(2);
+
+            if (settingsSpeedtestChart && data.results) {
+                settingsSpeedtestChart.data.labels = data.results.map(r => `${r.time}s`);
+                settingsSpeedtestChart.data.datasets[0].data = data.results.map(r => r.mbps);
+                settingsSpeedtestChart.update('none');
+            }
+            break;
+
+        case 'complete':
+            // Show results
+            const liveEl = document.getElementById('settingsSpeedtestLive');
+            const resultsEl = document.getElementById('settingsSpeedtestResults');
+            const startBtn = document.getElementById('settingsSpeedtestStart');
+            const stopBtn = document.getElementById('settingsSpeedtestStop');
+
+            if (liveEl) liveEl.classList.add('hidden');
+            if (resultsEl) resultsEl.classList.remove('hidden');
+            if (startBtn) startBtn.classList.remove('hidden');
+            if (stopBtn) stopBtn.classList.add('hidden');
+
+            if (data.final_result) {
+                const upEl = document.getElementById('settingsResultUpload');
+                const downEl = document.getElementById('settingsResultDownload');
+                const retEl = document.getElementById('settingsResultRetransmits');
+
+                if (upEl) upEl.textContent = `${data.final_result.upload_mbps} Mbps`;
+                if (downEl) downEl.textContent = `${data.final_result.download_mbps} Mbps`;
+                if (retEl) retEl.textContent = data.final_result.retransmits;
+            }
+            break;
+
+        case 'error':
+        case 'cancelled':
+            const liveEl2 = document.getElementById('settingsSpeedtestLive');
+            const startBtn2 = document.getElementById('settingsSpeedtestStart');
+            const stopBtn2 = document.getElementById('settingsSpeedtestStop');
+
+            if (liveEl2) liveEl2.classList.add('hidden');
+            if (startBtn2) startBtn2.classList.remove('hidden');
+            if (stopBtn2) stopBtn2.classList.add('hidden');
+            break;
+    }
 }
 
 // ==================== CELLULAR SIGNAL FUNCTIONS ====================
@@ -6818,6 +7227,9 @@ function handleSpeedtestUpdate(data) {
             updateSpeedtestUI('cancelled');
             break;
     }
+
+    // Also update settings tab if it's open
+    handleSettingsSpeedtestUpdate(data);
 }
 
 /**
@@ -6863,4 +7275,679 @@ document.addEventListener('DOMContentLoaded', () => {
         // Refresh speedtest peers
         refreshSpeedtestPeers();
     }, 1000);
+});
+
+// ==================== TOOLS MODAL ====================
+
+let toolsTrackingActive = false;
+let toolsTrackingBd = null;
+let toolsTrackingInterval = null;
+
+/**
+ * Open the Tools modal
+ */
+function openToolsModal() {
+    document.getElementById('toolsModal').classList.remove('hidden');
+    populateToolsTargetSelect();
+}
+
+/**
+ * Close the Tools modal
+ */
+function closeToolsModal() {
+    document.getElementById('toolsModal').classList.add('hidden');
+    // Stop any active tracking when closing
+    if (toolsTrackingActive) {
+        stopToolsTracking();
+    }
+}
+
+/**
+ * Switch between tools tabs
+ */
+function showToolsTab(tabName) {
+    // Hide all content
+    document.querySelectorAll('.tools-content').forEach(el => {
+        el.classList.remove('active');
+    });
+
+    // Deactivate all tabs
+    document.querySelectorAll('.tools-tab').forEach(el => {
+        el.classList.remove('active');
+    });
+
+    // Show selected content
+    const contentId = `tools${tabName.charAt(0).toUpperCase() + tabName.slice(1)}`;
+    const contentEl = document.getElementById(contentId);
+    if (contentEl) contentEl.classList.add('active');
+
+    // Activate selected tab
+    event.target.classList.add('active');
+}
+
+/**
+ * Populate the target select dropdown in tools
+ */
+function populateToolsTargetSelect() {
+    const select = document.getElementById('toolsTrackTargetSelect');
+    if (!select) return;
+
+    // Keep first option
+    select.innerHTML = '<option value="">Select target...</option>';
+
+    // Add targets first
+    Object.keys(targets).forEach(bd => {
+        const device = devices[bd] || {};
+        const name = device.device_name || truncateHostname(bd);
+        const option = document.createElement('option');
+        option.value = bd;
+        option.textContent = `[TARGET] ${name} (${bd})`;
+        option.className = 'target-option';
+        select.appendChild(option);
+    });
+
+    // Add other devices
+    Object.keys(devices).forEach(bd => {
+        if (targets[bd]) return; // Already added as target
+        const device = devices[bd];
+        const name = device.device_name || 'Unknown';
+        const option = document.createElement('option');
+        option.value = bd;
+        option.textContent = `${name} (${bd})`;
+        select.appendChild(option);
+    });
+}
+
+/**
+ * Start target tracking from Tools modal
+ */
+function startToolsTracking() {
+    const select = document.getElementById('toolsTrackTargetSelect');
+    const bdAddress = select ? select.value : null;
+
+    if (!bdAddress) {
+        addLogEntry('Select a target device to track', 'WARNING');
+        return;
+    }
+
+    toolsTrackingBd = bdAddress;
+    toolsTrackingActive = true;
+
+    // Update UI
+    document.getElementById('toolsBtnStartTrack').disabled = true;
+    document.getElementById('toolsBtnStopTrack').disabled = false;
+    document.getElementById('toolsTrackingStatus').textContent = 'ACTIVE';
+    document.getElementById('toolsTrackingStatus').style.color = 'var(--success)';
+
+    // Start tracking via API
+    fetch(`/api/device/${bdAddress}/geo/track`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'started' || data.status === 'already_running') {
+            addLogEntry(`Tools: Started tracking ${bdAddress}`, 'INFO');
+            addOperation(`tools-track-${bdAddress}`, 'TRACK', 'Tools Tracking', {
+                bdAddress,
+                cancellable: true,
+                cancelFn: () => stopToolsTracking()
+            });
+        }
+    })
+    .catch(e => {
+        addLogEntry(`Tools tracking error: ${e}`, 'ERROR');
+        stopToolsTracking();
+    });
+}
+
+/**
+ * Stop target tracking from Tools modal
+ */
+function stopToolsTracking() {
+    if (toolsTrackingBd) {
+        fetch(`/api/device/${toolsTrackingBd}/geo/stop`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        }).catch(() => {});
+
+        removeOperation(`tools-track-${toolsTrackingBd}`);
+    }
+
+    toolsTrackingActive = false;
+    toolsTrackingBd = null;
+
+    // Update UI
+    document.getElementById('toolsBtnStartTrack').disabled = false;
+    document.getElementById('toolsBtnStopTrack').disabled = true;
+    document.getElementById('toolsTrackingStatus').textContent = 'IDLE';
+    document.getElementById('toolsTrackingStatus').style.color = '';
+    document.getElementById('toolsTrackingRssi').textContent = '--';
+    document.getElementById('toolsTrackingBearing').textContent = '--';
+    document.getElementById('toolsTrackingDistance').textContent = '--';
+    document.getElementById('toolsCompassRssi').textContent = '--';
+}
+
+/**
+ * Update Tools tracking display with geo ping data
+ */
+function updateToolsTrackingDisplay(data) {
+    if (!toolsTrackingActive || data.bd_address !== toolsTrackingBd) return;
+
+    // Update RSSI
+    const rssi = data.rssi || '--';
+    document.getElementById('toolsTrackingRssi').textContent = rssi !== '--' ? `${rssi} dBm` : '--';
+    document.getElementById('toolsCompassRssi').textContent = rssi;
+
+    // Update bearing if available
+    if (data.direction && data.direction.bearing !== undefined) {
+        document.getElementById('toolsTrackingBearing').textContent = `${Math.round(data.direction.bearing)}°`;
+
+        // Rotate compass arrow
+        const arrow = document.getElementById('toolsCompassArrow');
+        if (arrow) {
+            arrow.style.transform = `translate(-50%, -100%) rotate(${data.direction.bearing}deg)`;
+        }
+    }
+
+    // Update distance estimate
+    if (data.distance_estimate) {
+        document.getElementById('toolsTrackingDistance').textContent = `~${data.distance_estimate}m`;
+    }
+}
+
+/**
+ * Read phone book via PBAP
+ */
+function readPhoneBook() {
+    const bdAddress = document.getElementById('pbapTargetAddr').value.trim();
+    const bookType = document.getElementById('pbapBookType').value;
+
+    if (!bdAddress || !/^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/.test(bdAddress)) {
+        addLogEntry('Enter a valid BD address (XX:XX:XX:XX:XX:XX)', 'WARNING');
+        return;
+    }
+
+    addLogEntry(`PBAP: Reading ${bookType} from ${bdAddress}...`, 'INFO');
+
+    // Show loading state
+    const resultsList = document.getElementById('pbapResultsList');
+    const resultsDiv = document.getElementById('pbapResults');
+    resultsDiv.classList.remove('hidden');
+    resultsList.innerHTML = '<div class="loading-text">Attempting PBAP connection...</div>';
+
+    fetch(`/api/tools/pbap/${bdAddress}/${bookType}`)
+        .then(r => r.json())
+        .then(data => {
+            if (data.status === 'success' && data.entries) {
+                resultsList.innerHTML = '';
+                if (data.entries.length === 0) {
+                    resultsList.innerHTML = '<div class="no-results">No entries found</div>';
+                } else {
+                    data.entries.forEach(entry => {
+                        const item = document.createElement('div');
+                        item.className = 'pbap-entry';
+                        item.innerHTML = `
+                            <span class="pbap-name">${entry.name || 'Unknown'}</span>
+                            <span class="pbap-number">${entry.number || entry.tel || ''}</span>
+                        `;
+                        resultsList.appendChild(item);
+                    });
+                }
+                addLogEntry(`PBAP: Retrieved ${data.entries.length} entries`, 'INFO');
+            } else {
+                resultsList.innerHTML = `<div class="error-text">${data.error || 'PBAP access failed'}</div>`;
+                addLogEntry(`PBAP failed: ${data.error || 'Unknown error'}`, 'ERROR');
+            }
+        })
+        .catch(e => {
+            resultsList.innerHTML = `<div class="error-text">Connection failed: ${e}</div>`;
+            addLogEntry(`PBAP error: ${e}`, 'ERROR');
+        });
+}
+
+/**
+ * Discover services via SDP
+ */
+function discoverServices() {
+    const bdAddress = document.getElementById('sdpTargetAddr').value.trim();
+
+    if (!bdAddress || !/^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/.test(bdAddress)) {
+        addLogEntry('Enter a valid BD address (XX:XX:XX:XX:XX:XX)', 'WARNING');
+        return;
+    }
+
+    addLogEntry(`SDP: Discovering services on ${bdAddress}...`, 'INFO');
+
+    // Show loading state
+    const resultsList = document.getElementById('sdpResultsList');
+    const resultsDiv = document.getElementById('sdpResults');
+    resultsDiv.classList.remove('hidden');
+    resultsList.innerHTML = '<div class="loading-text">Running SDP browse...</div>';
+
+    fetch(`/api/tools/sdp/${bdAddress}`)
+        .then(r => r.json())
+        .then(data => {
+            if (data.status === 'success' && data.services) {
+                resultsList.innerHTML = '';
+                if (data.services.length === 0) {
+                    resultsList.innerHTML = '<div class="no-results">No services discovered</div>';
+                } else {
+                    data.services.forEach(svc => {
+                        const item = document.createElement('div');
+                        item.className = 'sdp-service';
+                        item.innerHTML = `
+                            <div class="sdp-service-name">${svc.name || 'Unknown Service'}</div>
+                            <div class="sdp-service-details">
+                                ${svc.protocol ? `<span>Protocol: ${svc.protocol}</span>` : ''}
+                                ${svc.channel ? `<span>Channel: ${svc.channel}</span>` : ''}
+                                ${svc.uuid ? `<span class="sdp-uuid">UUID: ${svc.uuid}</span>` : ''}
+                            </div>
+                        `;
+                        resultsList.appendChild(item);
+                    });
+                }
+                addLogEntry(`SDP: Found ${data.services.length} services`, 'INFO');
+            } else {
+                resultsList.innerHTML = `<div class="error-text">${data.error || 'SDP browse failed'}</div>`;
+                addLogEntry(`SDP failed: ${data.error || 'Unknown error'}`, 'ERROR');
+            }
+        })
+        .catch(e => {
+            resultsList.innerHTML = `<div class="error-text">Connection failed: ${e}</div>`;
+            addLogEntry(`SDP error: ${e}`, 'ERROR');
+        });
+}
+
+/**
+ * Run comprehensive device analysis
+ */
+function runDeviceAnalysis() {
+    const bdAddress = document.getElementById('analysisTargetAddr').value.trim();
+    const doOui = document.getElementById('analysisOuiLookup').checked;
+    const doClass = document.getElementById('analysisDeviceClass').checked;
+    const doServices = document.getElementById('analysisServiceScan').checked;
+
+    if (!bdAddress || !/^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/.test(bdAddress)) {
+        addLogEntry('Enter a valid BD address (XX:XX:XX:XX:XX:XX)', 'WARNING');
+        return;
+    }
+
+    addLogEntry(`Analysis: Running deep analysis on ${bdAddress}...`, 'INFO');
+
+    // Show loading state
+    const resultsContent = document.getElementById('analysisResultsContent');
+    const resultsDiv = document.getElementById('analysisResults');
+    resultsDiv.classList.remove('hidden');
+    resultsContent.innerHTML = '<div class="loading-text">Analyzing device...</div>';
+
+    fetch(`/api/tools/analyze/${bdAddress}?oui=${doOui}&class=${doClass}&services=${doServices}`)
+        .then(r => r.json())
+        .then(data => {
+            if (data.status === 'success') {
+                let html = '<div class="analysis-report">';
+
+                // OUI/Manufacturer info
+                if (data.oui) {
+                    html += `
+                        <div class="analysis-section">
+                            <div class="analysis-section-title">Manufacturer (OUI)</div>
+                            <div class="analysis-item"><strong>Company:</strong> ${data.oui.company || 'Unknown'}</div>
+                            <div class="analysis-item"><strong>Prefix:</strong> ${data.oui.prefix || bdAddress.substring(0, 8)}</div>
+                            ${data.oui.country ? `<div class="analysis-item"><strong>Country:</strong> ${data.oui.country}</div>` : ''}
+                        </div>
+                    `;
+                }
+
+                // Device class info
+                if (data.device_class) {
+                    html += `
+                        <div class="analysis-section">
+                            <div class="analysis-section-title">Device Classification</div>
+                            <div class="analysis-item"><strong>Major Class:</strong> ${data.device_class.major || 'Unknown'}</div>
+                            <div class="analysis-item"><strong>Minor Class:</strong> ${data.device_class.minor || 'Unknown'}</div>
+                            <div class="analysis-item"><strong>Services:</strong> ${data.device_class.services ? data.device_class.services.join(', ') : 'None'}</div>
+                        </div>
+                    `;
+                }
+
+                // Services
+                if (data.services && data.services.length > 0) {
+                    html += `
+                        <div class="analysis-section">
+                            <div class="analysis-section-title">Services (${data.services.length})</div>
+                            ${data.services.map(svc => `<div class="analysis-item">• ${svc.name || svc}</div>`).join('')}
+                        </div>
+                    `;
+                }
+
+                // Risk assessment
+                if (data.risk) {
+                    const riskColor = data.risk.level === 'high' ? 'var(--danger)' :
+                                     data.risk.level === 'medium' ? 'var(--warning)' : 'var(--success)';
+                    html += `
+                        <div class="analysis-section">
+                            <div class="analysis-section-title">Risk Assessment</div>
+                            <div class="analysis-item"><strong>Level:</strong> <span style="color:${riskColor}">${data.risk.level.toUpperCase()}</span></div>
+                            ${data.risk.notes ? data.risk.notes.map(n => `<div class="analysis-item">• ${n}</div>`).join('') : ''}
+                        </div>
+                    `;
+                }
+
+                html += '</div>';
+                resultsContent.innerHTML = html;
+                addLogEntry(`Analysis complete for ${bdAddress}`, 'INFO');
+            } else {
+                resultsContent.innerHTML = `<div class="error-text">${data.error || 'Analysis failed'}</div>`;
+                addLogEntry(`Analysis failed: ${data.error || 'Unknown error'}`, 'ERROR');
+            }
+        })
+        .catch(e => {
+            resultsContent.innerHTML = `<div class="error-text">Analysis failed: ${e}</div>`;
+            addLogEntry(`Analysis error: ${e}`, 'ERROR');
+        });
+}
+
+// Hook into geo ping handler to update Tools tracking display
+const originalHandleGeoPing = handleGeoPing;
+handleGeoPing = function(data) {
+    originalHandleGeoPing(data);
+    updateToolsTrackingDisplay(data);
+};
+
+// ==================== TARGETS MODAL ====================
+
+/**
+ * Open the Targets modal
+ */
+function openTargetsModal() {
+    document.getElementById('targetsModal').classList.remove('hidden');
+    refreshModalTargetList();
+}
+
+/**
+ * Close the Targets modal
+ */
+function closeTargetsModal() {
+    document.getElementById('targetsModal').classList.add('hidden');
+}
+
+/**
+ * Add target from modal form
+ */
+function addTargetFromModal() {
+    const bdAddressInput = document.getElementById('modalTargetBdAddress');
+    const aliasInput = document.getElementById('modalTargetAlias');
+
+    const bdAddress = bdAddressInput.value.trim().toUpperCase();
+    const alias = aliasInput.value.trim();
+
+    if (!bdAddress || !/^([0-9A-F]{2}:){5}[0-9A-F]{2}$/.test(bdAddress)) {
+        addLogEntry('Invalid BD address format. Use XX:XX:XX:XX:XX:XX', 'WARNING');
+        return;
+    }
+
+    fetch('/api/targets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bd_address: bdAddress, alias: alias || null })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'added') {
+            targets[bdAddress] = { alias: alias || null };
+            addLogEntry(`Target added: ${bdAddress}${alias ? ' (' + alias + ')' : ''}`, 'INFO');
+            bdAddressInput.value = '';
+            aliasInput.value = '';
+            refreshModalTargetList();
+            updateQuickTargetList();
+            updateDeviceTable();
+        } else {
+            addLogEntry(data.error || 'Failed to add target', 'ERROR');
+        }
+    })
+    .catch(e => addLogEntry(`Error adding target: ${e}`, 'ERROR'));
+}
+
+/**
+ * Refresh the target list in the modal
+ */
+function refreshModalTargetList() {
+    const listContainer = document.getElementById('modalTargetList');
+    const countEl = document.getElementById('modalTargetCount');
+    const countBadge = document.getElementById('targetCountBadge');
+
+    const targetKeys = Object.keys(targets);
+
+    if (countEl) countEl.textContent = targetKeys.length;
+    if (countBadge) countBadge.textContent = targetKeys.length;
+
+    if (!listContainer) return;
+
+    if (targetKeys.length === 0) {
+        listContainer.innerHTML = '<div class="targets-empty">No targets configured</div>';
+        return;
+    }
+
+    listContainer.innerHTML = '';
+    targetKeys.forEach(bdAddress => {
+        const target = targets[bdAddress];
+        const device = devices[bdAddress] || {};
+        const alias = target.alias || target.name || '';
+        const deviceName = device.device_name || '';
+        const lastSeen = device.last_seen ? formatDateTimeInTimezone(device.last_seen) : 'Never seen';
+        const rssi = device.rssi ? `${device.rssi} dBm` : '--';
+
+        const item = document.createElement('div');
+        item.className = 'target-item';
+        item.innerHTML = `
+            <div class="target-item-main">
+                <div class="target-item-bd">${bdAddress}</div>
+                <div class="target-item-info">
+                    ${alias ? `<span class="target-alias">${alias}</span>` : ''}
+                    ${deviceName ? `<span class="target-name">${deviceName}</span>` : ''}
+                </div>
+            </div>
+            <div class="target-item-stats">
+                <span class="target-rssi">${rssi}</span>
+                <span class="target-seen">${lastSeen}</span>
+            </div>
+            <div class="target-item-actions">
+                <button class="btn btn-sm btn-danger" onclick="removeTarget('${bdAddress}')" title="Remove">
+                    &#10005;
+                </button>
+            </div>
+        `;
+        listContainer.appendChild(item);
+    });
+}
+
+/**
+ * Update the quick target list in the left panel
+ */
+function updateQuickTargetList() {
+    const listContainer = document.getElementById('quickTargetList');
+    const countBadge = document.getElementById('targetCountBadge');
+
+    const targetKeys = Object.keys(targets);
+
+    if (countBadge) countBadge.textContent = targetKeys.length;
+
+    if (!listContainer) return;
+
+    if (targetKeys.length === 0) {
+        listContainer.innerHTML = '<div class="no-targets-hint">No targets configured</div>';
+        return;
+    }
+
+    // Show up to 5 targets in quick view
+    const displayTargets = targetKeys.slice(0, 5);
+    listContainer.innerHTML = '';
+
+    displayTargets.forEach(bdAddress => {
+        const target = targets[bdAddress];
+        const device = devices[bdAddress] || {};
+        const alias = target.alias || target.name || '';
+        const shortBd = bdAddress.substring(0, 8) + '...';
+
+        const item = document.createElement('div');
+        item.className = 'quick-target-item';
+        item.onclick = () => focusOnDevice(bdAddress);
+        item.innerHTML = `
+            <span class="quick-target-icon">&#127919;</span>
+            <span class="quick-target-bd">${alias || shortBd}</span>
+            <span class="quick-target-rssi">${device.rssi ? device.rssi + ' dBm' : '--'}</span>
+        `;
+        listContainer.appendChild(item);
+    });
+
+    if (targetKeys.length > 5) {
+        const more = document.createElement('div');
+        more.className = 'quick-target-more';
+        more.textContent = `+${targetKeys.length - 5} more...`;
+        more.onclick = openTargetsModal;
+        listContainer.appendChild(more);
+    }
+}
+
+/**
+ * Clear all targets
+ */
+function clearAllTargets() {
+    if (!confirm('Remove all targets? This action cannot be undone.')) return;
+
+    const targetKeys = Object.keys(targets);
+    let cleared = 0;
+
+    targetKeys.forEach(bdAddress => {
+        fetch(`/api/targets/${bdAddress}`, { method: 'DELETE' })
+            .then(r => r.json())
+            .then(data => {
+                if (data.status === 'removed') {
+                    delete targets[bdAddress];
+                    cleared++;
+                    if (cleared === targetKeys.length) {
+                        addLogEntry(`Cleared ${cleared} targets`, 'INFO');
+                        refreshModalTargetList();
+                        updateQuickTargetList();
+                        updateDeviceTable();
+                    }
+                }
+            })
+            .catch(() => {});
+    });
+}
+
+/**
+ * Export targets to JSON file
+ */
+function exportTargets() {
+    const targetData = Object.entries(targets).map(([bd, data]) => ({
+        bd_address: bd,
+        alias: data.alias || data.name || null
+    }));
+
+    const blob = new Blob([JSON.stringify(targetData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `bluek9_targets_${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+
+    addLogEntry(`Exported ${targetData.length} targets`, 'INFO');
+}
+
+/**
+ * Import targets from file
+ */
+function importTargets(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        try {
+            let importedTargets = [];
+
+            if (file.name.endsWith('.json')) {
+                importedTargets = JSON.parse(e.target.result);
+            } else if (file.name.endsWith('.csv') || file.name.endsWith('.txt')) {
+                // Parse as CSV/text: one BD address per line, optional comma-separated alias
+                const lines = e.target.result.split('\n');
+                lines.forEach(line => {
+                    line = line.trim();
+                    if (!line || line.startsWith('#')) return;
+                    const parts = line.split(',');
+                    const bd = parts[0].trim().toUpperCase();
+                    if (/^([0-9A-F]{2}:){5}[0-9A-F]{2}$/.test(bd)) {
+                        importedTargets.push({
+                            bd_address: bd,
+                            alias: parts[1] ? parts[1].trim() : null
+                        });
+                    }
+                });
+            }
+
+            if (importedTargets.length === 0) {
+                addLogEntry('No valid targets found in file', 'WARNING');
+                return;
+            }
+
+            // Add each target
+            let added = 0;
+            importedTargets.forEach(t => {
+                if (targets[t.bd_address]) return; // Skip existing
+
+                fetch('/api/targets', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(t)
+                })
+                .then(r => r.json())
+                .then(data => {
+                    if (data.status === 'added') {
+                        targets[t.bd_address] = { alias: t.alias };
+                        added++;
+                    }
+                })
+                .finally(() => {
+                    if (added > 0) {
+                        refreshModalTargetList();
+                        updateQuickTargetList();
+                        updateDeviceTable();
+                    }
+                });
+            });
+
+            addLogEntry(`Importing ${importedTargets.length} targets...`, 'INFO');
+
+        } catch (err) {
+            addLogEntry(`Failed to parse import file: ${err}`, 'ERROR');
+        }
+    };
+    reader.readAsText(file);
+
+    // Reset file input
+    event.target.value = '';
+}
+
+// Update refreshTargetList to also update quick view and modal
+const originalRefreshTargetList = typeof refreshTargetList === 'function' ? refreshTargetList : null;
+function refreshTargetListExtended() {
+    if (originalRefreshTargetList) originalRefreshTargetList();
+    updateQuickTargetList();
+    refreshModalTargetList();
+}
+
+// Override refreshTargetList if it exists
+if (originalRefreshTargetList) {
+    refreshTargetList = refreshTargetListExtended;
+}
+
+// Initialize quick target list on load
+document.addEventListener('DOMContentLoaded', () => {
+    setTimeout(() => {
+        updateQuickTargetList();
+    }, 1500);
 });

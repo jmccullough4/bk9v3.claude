@@ -116,6 +116,228 @@
         </div>
     </div>
 
+    <!-- Tools Modal -->
+    <div id="toolsModal" class="modal hidden">
+        <div class="modal-content modal-large">
+            <div class="modal-header">
+                <span>&#128295; ANALYSIS TOOLS</span>
+                <button class="modal-close" onclick="closeToolsModal()">&times;</button>
+            </div>
+            <div class="modal-body tools-body">
+                <!-- Tools Tabs -->
+                <div class="tools-tabs">
+                    <button class="tools-tab active" onclick="showToolsTab('tracking')">Target Tracking</button>
+                    <button class="tools-tab" onclick="showToolsTab('phonebook')">Phone Book</button>
+                    <button class="tools-tab" onclick="showToolsTab('services')">Services</button>
+                    <button class="tools-tab" onclick="showToolsTab('analysis')">Analysis</button>
+                </div>
+
+                <!-- Target Tracking Tab -->
+                <div id="toolsTracking" class="tools-content active">
+                    <div class="tools-group">
+                        <h3>Active Geolocation Tracking</h3>
+                        <p class="tools-hint">Track a specific target device and estimate its location using RSSI triangulation.</p>
+                        <div class="form-row">
+                            <label>Target Device:</label>
+                            <select id="toolsTrackTargetSelect" class="input">
+                                <option value="">Select target...</option>
+                            </select>
+                        </div>
+                        <div class="tracking-status-display mt-10">
+                            <div class="tracking-compass">
+                                <div class="compass-ring">
+                                    <div class="compass-arrow" id="toolsCompassArrow"></div>
+                                    <div class="compass-rssi" id="toolsCompassRssi">--</div>
+                                </div>
+                            </div>
+                            <div class="tracking-info">
+                                <div class="tracking-stat">
+                                    <span class="stat-label">STATUS:</span>
+                                    <span class="stat-value" id="toolsTrackingStatus">IDLE</span>
+                                </div>
+                                <div class="tracking-stat">
+                                    <span class="stat-label">RSSI:</span>
+                                    <span class="stat-value" id="toolsTrackingRssi">--</span>
+                                </div>
+                                <div class="tracking-stat">
+                                    <span class="stat-label">BEARING:</span>
+                                    <span class="stat-value" id="toolsTrackingBearing">--</span>
+                                </div>
+                                <div class="tracking-stat">
+                                    <span class="stat-label">DISTANCE:</span>
+                                    <span class="stat-value" id="toolsTrackingDistance">--</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="btn-group mt-10">
+                            <button class="btn btn-success" id="toolsBtnStartTrack" onclick="startToolsTracking()">
+                                &#9654; START TRACKING
+                            </button>
+                            <button class="btn btn-danger" id="toolsBtnStopTrack" onclick="stopToolsTracking()" disabled>
+                                &#9632; STOP
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Phone Book Tab -->
+                <div id="toolsPhonebook" class="tools-content">
+                    <div class="tools-group">
+                        <h3>Bluetooth Phone Book Access (PBAP)</h3>
+                        <p class="tools-hint">Attempt to read phone book data from target Bluetooth devices. Requires device pairing or vulnerable target.</p>
+                        <div class="form-row">
+                            <label>Target BD Address:</label>
+                            <input type="text" id="pbapTargetAddr" class="input" placeholder="XX:XX:XX:XX:XX:XX">
+                        </div>
+                        <div class="form-row">
+                            <label>Phone Book Type:</label>
+                            <select id="pbapBookType" class="input">
+                                <option value="pb">Main Phone Book (pb)</option>
+                                <option value="ich">Incoming Calls (ich)</option>
+                                <option value="och">Outgoing Calls (och)</option>
+                                <option value="mch">Missed Calls (mch)</option>
+                                <option value="cch">Combined Calls (cch)</option>
+                            </select>
+                        </div>
+                        <div class="btn-group mt-10">
+                            <button class="btn btn-primary" onclick="readPhoneBook()">
+                                &#128214; READ PHONE BOOK
+                            </button>
+                        </div>
+                        <div class="pbap-results mt-10 hidden" id="pbapResults">
+                            <div class="pbap-results-header">PHONE BOOK ENTRIES</div>
+                            <div class="pbap-results-list" id="pbapResultsList">
+                                <!-- Results populated by JS -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Services Tab -->
+                <div id="toolsServices" class="tools-content">
+                    <div class="tools-group">
+                        <h3>Service Discovery Protocol (SDP)</h3>
+                        <p class="tools-hint">Discover available Bluetooth services on target devices.</p>
+                        <div class="form-row">
+                            <label>Target BD Address:</label>
+                            <input type="text" id="sdpTargetAddr" class="input" placeholder="XX:XX:XX:XX:XX:XX">
+                        </div>
+                        <div class="btn-group mt-10">
+                            <button class="btn btn-primary" onclick="discoverServices()">
+                                &#128269; DISCOVER SERVICES
+                            </button>
+                        </div>
+                        <div class="sdp-results mt-10 hidden" id="sdpResults">
+                            <div class="sdp-results-header">DISCOVERED SERVICES</div>
+                            <div class="sdp-results-list" id="sdpResultsList">
+                                <!-- Results populated by JS -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Analysis Tab -->
+                <div id="toolsAnalysis" class="tools-content">
+                    <div class="tools-group">
+                        <h3>Device Analysis</h3>
+                        <p class="tools-hint">Deep analysis of detected Bluetooth devices.</p>
+                        <div class="form-row">
+                            <label>Target BD Address:</label>
+                            <input type="text" id="analysisTargetAddr" class="input" placeholder="XX:XX:XX:XX:XX:XX">
+                        </div>
+                        <div class="analysis-options">
+                            <label class="toggle">
+                                <input type="checkbox" id="analysisOuiLookup" checked>
+                                <span class="toggle-slider"></span>
+                                <span class="toggle-label">OUI/Manufacturer Lookup</span>
+                            </label>
+                            <label class="toggle">
+                                <input type="checkbox" id="analysisDeviceClass" checked>
+                                <span class="toggle-slider"></span>
+                                <span class="toggle-label">Device Class Analysis</span>
+                            </label>
+                            <label class="toggle">
+                                <input type="checkbox" id="analysisServiceScan">
+                                <span class="toggle-slider"></span>
+                                <span class="toggle-label">Service Scan (slow)</span>
+                            </label>
+                        </div>
+                        <div class="btn-group mt-10">
+                            <button class="btn btn-primary" onclick="runDeviceAnalysis()">
+                                &#128270; ANALYZE DEVICE
+                            </button>
+                        </div>
+                        <div class="analysis-results mt-10 hidden" id="analysisResults">
+                            <div class="analysis-results-content" id="analysisResultsContent">
+                                <!-- Results populated by JS -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Targets Modal -->
+    <div id="targetsModal" class="modal hidden">
+        <div class="modal-content modal-medium">
+            <div class="modal-header">
+                <span>&#127919; TARGET MANAGEMENT</span>
+                <button class="modal-close" onclick="closeTargetsModal()">&times;</button>
+            </div>
+            <div class="modal-body targets-body">
+                <!-- Add Target Form -->
+                <div class="targets-add-section">
+                    <h3>Add New Target</h3>
+                    <div class="targets-add-form">
+                        <div class="input-row">
+                            <input type="text" id="modalTargetBdAddress" class="input" placeholder="BD Address (XX:XX:XX:XX:XX:XX)">
+                        </div>
+                        <div class="input-row">
+                            <input type="text" id="modalTargetAlias" class="input" placeholder="Alias (optional)">
+                        </div>
+                        <button class="btn btn-primary" onclick="addTargetFromModal()">
+                            &#10010; ADD TARGET
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Target List -->
+                <div class="targets-list-section">
+                    <div class="targets-list-header">
+                        <h3>Active Targets (<span id="modalTargetCount">0</span>)</h3>
+                        <div class="targets-actions">
+                            <button class="btn btn-sm btn-secondary" onclick="syncTargetsWithPeers()" title="Sync with peers">
+                                &#8644; SYNC
+                            </button>
+                            <button class="btn btn-sm btn-danger" onclick="clearAllTargets()" title="Remove all targets">
+                                &#128465; CLEAR
+                            </button>
+                        </div>
+                    </div>
+                    <div class="targets-list-container" id="modalTargetList">
+                        <!-- Targets populated by JS -->
+                        <div class="targets-empty">No targets configured</div>
+                    </div>
+                </div>
+
+                <!-- Import/Export -->
+                <div class="targets-io-section">
+                    <h3>Import / Export</h3>
+                    <div class="btn-group">
+                        <button class="btn btn-secondary" onclick="exportTargets()">
+                            &#128190; Export
+                        </button>
+                        <label class="btn btn-secondary">
+                            &#128194; Import
+                            <input type="file" id="importTargetsFile" accept=".json,.csv,.txt" onchange="importTargets(event)" hidden>
+                        </label>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Settings Modal -->
     <div id="settingsModal" class="modal hidden">
         <div class="modal-content modal-large">
@@ -323,6 +545,10 @@
                                 <span class="info-value" id="settingsNetworkPeers">--</span>
                             </div>
                             <div class="info-row">
+                                <span class="info-label">BlueK9 Nodes:</span>
+                                <span class="info-value" id="settingsNetworkBk9">--</span>
+                            </div>
+                            <div class="info-row">
                                 <span class="info-label">Active Routes:</span>
                                 <span class="info-value" id="settingsNetworkRoutes">--</span>
                             </div>
@@ -331,9 +557,99 @@
                             <button class="btn btn-secondary" onclick="refreshNetworkSettings()">Refresh Status</button>
                         </div>
                     </div>
+
+                    <!-- Network Statistics -->
                     <div class="settings-group">
-                        <h3>Peer Location Sharing</h3>
-                        <p class="settings-hint">Share your GPS position with other WARHAMMER nodes.</p>
+                        <h3>Network Statistics</h3>
+                        <p class="settings-hint">Real-time network performance metrics.</p>
+                        <div class="settings-stats-grid">
+                            <div class="settings-stat-item">
+                                <span class="settings-stat-value" id="settingsStatNodes">0</span>
+                                <span class="settings-stat-label">NODES ONLINE</span>
+                            </div>
+                            <div class="settings-stat-item">
+                                <span class="settings-stat-value" id="settingsStatLatency">--</span>
+                                <span class="settings-stat-label">AVG LATENCY</span>
+                            </div>
+                            <div class="settings-stat-item">
+                                <span class="settings-stat-value" id="settingsStatSynced">0 KB</span>
+                                <span class="settings-stat-label">DATA SYNCED</span>
+                            </div>
+                        </div>
+                        <div class="settings-chart-container mt-10">
+                            <div class="settings-chart-title">PEER LATENCY (ms)</div>
+                            <canvas id="settingsLatencyChart" height="150"></canvas>
+                        </div>
+                    </div>
+
+                    <!-- Speed Test -->
+                    <div class="settings-group">
+                        <h3>Network Speed Test</h3>
+                        <p class="settings-hint">Test throughput to peer nodes via iperf3.</p>
+                        <div class="settings-speedtest">
+                            <div class="speedtest-controls">
+                                <select class="input" id="settingsSpeedtestPeer">
+                                    <option value="">Select target node...</option>
+                                </select>
+                                <button class="btn btn-primary" id="settingsSpeedtestStart" onclick="startSpeedTestFromSettings()">
+                                    ▶ TEST
+                                </button>
+                                <button class="btn btn-danger hidden" id="settingsSpeedtestStop" onclick="stopSpeedTest()">
+                                    ■ STOP
+                                </button>
+                            </div>
+                            <div class="speedtest-live hidden" id="settingsSpeedtestLive">
+                                <div class="speedtest-progress-container">
+                                    <div class="speedtest-progress-bar" id="settingsSpeedtestProgress"></div>
+                                    <span class="speedtest-progress-text" id="settingsSpeedtestPercent">0%</span>
+                                </div>
+                                <div class="speedtest-live-speed">
+                                    <span class="speedtest-speed-value" id="settingsSpeedtestSpeed">0.00</span>
+                                    <span class="speedtest-speed-unit">Mbps</span>
+                                </div>
+                                <div class="speedtest-graph-container">
+                                    <canvas id="settingsSpeedtestChart" height="100"></canvas>
+                                </div>
+                            </div>
+                            <div class="speedtest-results hidden" id="settingsSpeedtestResults">
+                                <div class="speedtest-results-grid">
+                                    <div class="speedtest-result-item">
+                                        <span class="speedtest-result-icon upload">▲</span>
+                                        <span class="speedtest-result-value" id="settingsResultUpload">--</span>
+                                        <span class="speedtest-result-label">UPLOAD</span>
+                                    </div>
+                                    <div class="speedtest-result-item">
+                                        <span class="speedtest-result-icon download">▼</span>
+                                        <span class="speedtest-result-value" id="settingsResultDownload">--</span>
+                                        <span class="speedtest-result-label">DOWNLOAD</span>
+                                    </div>
+                                    <div class="speedtest-result-item">
+                                        <span class="speedtest-result-icon retransmit">⟲</span>
+                                        <span class="speedtest-result-value" id="settingsResultRetransmits">--</span>
+                                        <span class="speedtest-result-label">RETRANSMITS</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Connected Peers -->
+                    <div class="settings-group">
+                        <h3>Connected Peers</h3>
+                        <p class="settings-hint">View all network peers and their status.</p>
+                        <div class="settings-peer-filter">
+                            <button class="peer-filter-btn active" id="settingsFilterAll" onclick="setSettingsPeerFilter('all')">ALL</button>
+                            <button class="peer-filter-btn" id="settingsFilterBk9" onclick="setSettingsPeerFilter('bluek9')">BK9 ONLY</button>
+                        </div>
+                        <div class="settings-peer-list" id="settingsPeerList">
+                            <!-- Peers populated by JS -->
+                        </div>
+                    </div>
+
+                    <!-- Peer Settings -->
+                    <div class="settings-group">
+                        <h3>Peer Settings</h3>
+                        <p class="settings-hint">Configure peer communication options.</p>
                         <div class="toggle-group">
                             <label class="toggle">
                                 <input type="checkbox" id="settingsShareLocation" checked>
@@ -349,6 +665,8 @@
                             </label>
                         </div>
                     </div>
+
+                    <!-- Route Management -->
                     <div class="settings-group">
                         <h3>Route Management</h3>
                         <p class="settings-hint">Manage network routes. Routes marked as "persistent" cannot be modified.</p>
@@ -599,6 +917,8 @@
                         </div>
                     </div>
                 </div>
+                <button class="targets-btn" onclick="openTargetsModal()" title="Targets">&#127919;</button>
+                <button class="tools-btn" onclick="openToolsModal()" title="Tools">&#128295;</button>
                 <button class="settings-btn" onclick="openSettingsModal()" title="Settings">&#9881;</button>
                 <span class="operator-info">OP: {{ username }}</span>
                 <a href="{{ url_for('logout') }}" class="logout-btn">LOGOUT</a>
@@ -786,26 +1106,22 @@
                     </div>
                 </div>
 
-                <!-- Target Management -->
+                <!-- Target Quick View -->
                 <div class="panel-section" id="sectionTargets">
                     <div class="section-header collapsible" onclick="toggleSection('sectionTargets')">
                         <span class="section-icon">&#127919;</span>
                         <span>TARGETS</span>
+                        <span class="target-count-badge" id="targetCountBadge">0</span>
                         <span class="section-toggle">&#9660;</span>
                     </div>
                     <div class="section-content">
-                        <div class="input-group">
-                            <input type="text" id="targetBdAddress" class="input" placeholder="BD Address (XX:XX:XX:XX:XX:XX)">
+                        <div class="quick-target-list" id="quickTargetList">
+                            <!-- Quick view of targets -->
+                            <div class="no-targets-hint">No targets configured</div>
                         </div>
-                        <div class="input-group">
-                            <input type="text" id="targetAlias" class="input" placeholder="Alias (optional)">
-                        </div>
-                        <button class="btn btn-primary btn-full" onclick="addTarget()">
-                            ADD TARGET
+                        <button class="btn btn-primary btn-full mt-10" onclick="openTargetsModal()">
+                            &#127919; MANAGE TARGETS
                         </button>
-                        <div class="target-list mt-10" id="targetList">
-                            <!-- Targets will be populated here -->
-                        </div>
                     </div>
                 </div>
 
@@ -831,20 +1147,18 @@
                                 <span class="status-label">ONLINE:</span>
                                 <span class="status-value network-online" id="networkOnlineCount">0</span>
                             </div>
-                            <div class="status-item">
-                                <span class="status-label">ROUTES:</span>
-                                <span class="status-value" id="networkRouteCount">0</span>
-                            </div>
                         </div>
                         <div class="btn-group mt-10">
                             <button class="btn btn-success" id="btnStartNetwork" onclick="startNetworkMonitor()">
-                                <span>&#9654;</span> CONNECT
+                                &#9654; CONNECT
                             </button>
                             <button class="btn btn-danger" id="btnStopNetwork" onclick="stopNetworkMonitor()" disabled>
-                                <span>&#9632;</span> DISCONNECT
+                                &#9632; DISCONNECT
                             </button>
-                            <button class="btn btn-secondary" id="btnSyncTargets" onclick="syncTargetsWithPeers()" title="Sync targets with all BlueK9 peers">
-                                <span>&#8644;</span> SYNC TARGETS
+                        </div>
+                        <div class="btn-group mt-10">
+                            <button class="btn btn-secondary btn-full" id="btnSyncTargets" onclick="syncTargetsWithPeers()" title="Sync targets with all BlueK9 peers">
+                                &#8644; SYNC TARGETS
                             </button>
                         </div>
                         <div class="toggle-group mt-10">
@@ -861,125 +1175,10 @@
                                 <span class="toggle-label">Show Connections</span>
                             </label>
                         </div>
-                        <div class="toggle-group">
-                            <label class="toggle">
-                                <input type="checkbox" id="toggleShowNetStats" onchange="toggleNetworkStats()">
-                                <span class="toggle-slider"></span>
-                                <span class="toggle-label">Show Network Stats</span>
-                            </label>
-                        </div>
-                        <!-- Network Statistics Panel -->
-                        <div class="network-stats-panel hidden" id="networkStatsPanel">
-                            <div class="net-stats-header">BLUEK9 NETWORK STATISTICS</div>
-                            <div class="net-stats-summary">
-                                <div class="net-stat-item">
-                                    <span class="net-stat-label">NODES ONLINE</span>
-                                    <span class="net-stat-value" id="netStatNodesOnline">0</span>
-                                </div>
-                                <div class="net-stat-item">
-                                    <span class="net-stat-label">AVG LATENCY</span>
-                                    <span class="net-stat-value" id="netStatAvgLatency">--</span>
-                                </div>
-                                <div class="net-stat-item">
-                                    <span class="net-stat-label">DATA SYNCED</span>
-                                    <span class="net-stat-value" id="netStatDataSynced">0 KB</span>
-                                </div>
-                            </div>
-                            <div class="net-stats-chart-container">
-                                <div class="net-stats-chart-title">PEER LATENCY (ms)</div>
-                                <canvas id="peerLatencyChart" height="120"></canvas>
-                            </div>
-                            <div class="net-stats-peers">
-                                <div class="net-stats-peers-header">BLUEK9 NODE STATUS</div>
-                                <div class="net-stats-peers-list" id="netStatsPeersList">
-                                    <!-- Populated by JS -->
-                                </div>
-                            </div>
-
-                            <!-- Speed Test Section -->
-                            <div class="speedtest-section" id="speedtestSection">
-                                <div class="speedtest-header">
-                                    <span class="speedtest-title">NETWORK SPEED TEST</span>
-                                    <span class="speedtest-badge" id="speedtestBadge">READY</span>
-                                </div>
-                                <div class="speedtest-controls">
-                                    <select class="speedtest-peer-select" id="speedtestPeerSelect">
-                                        <option value="">Select target node...</option>
-                                    </select>
-                                    <button class="btn btn-sm btn-primary" id="speedtestStartBtn" onclick="startSpeedTest()">
-                                        <span class="btn-icon">▶</span> TEST
-                                    </button>
-                                    <button class="btn btn-sm btn-danger hidden" id="speedtestStopBtn" onclick="stopSpeedTest()">
-                                        <span class="btn-icon">■</span> STOP
-                                    </button>
-                                </div>
-                                <div class="speedtest-display hidden" id="speedtestDisplay">
-                                    <div class="speedtest-target">
-                                        <span class="speedtest-target-label">Testing:</span>
-                                        <span class="speedtest-target-name" id="speedtestTargetName">--</span>
-                                    </div>
-                                    <div class="speedtest-progress-container">
-                                        <div class="speedtest-progress-bar" id="speedtestProgressBar"></div>
-                                        <span class="speedtest-progress-text" id="speedtestProgressText">0%</span>
-                                    </div>
-                                    <div class="speedtest-live-speed">
-                                        <div class="speedtest-speed-value" id="speedtestLiveSpeed">0.00</div>
-                                        <div class="speedtest-speed-unit">Mbps</div>
-                                    </div>
-                                    <div class="speedtest-graph-container">
-                                        <canvas id="speedtestChart" height="100"></canvas>
-                                    </div>
-                                </div>
-                                <div class="speedtest-results hidden" id="speedtestResults">
-                                    <div class="speedtest-results-header">TEST RESULTS</div>
-                                    <div class="speedtest-results-grid">
-                                        <div class="speedtest-result-item">
-                                            <div class="speedtest-result-icon upload">▲</div>
-                                            <div class="speedtest-result-data">
-                                                <span class="speedtest-result-value" id="speedtestUpload">--</span>
-                                                <span class="speedtest-result-label">UPLOAD</span>
-                                            </div>
-                                        </div>
-                                        <div class="speedtest-result-item">
-                                            <div class="speedtest-result-icon download">▼</div>
-                                            <div class="speedtest-result-data">
-                                                <span class="speedtest-result-value" id="speedtestDownload">--</span>
-                                                <span class="speedtest-result-label">DOWNLOAD</span>
-                                            </div>
-                                        </div>
-                                        <div class="speedtest-result-item">
-                                            <div class="speedtest-result-icon retransmit">⟲</div>
-                                            <div class="speedtest-result-data">
-                                                <span class="speedtest-result-value" id="speedtestRetransmits">--</span>
-                                                <span class="speedtest-result-label">RETRANSMITS</span>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                        <!-- Peer List -->
-                        <div class="network-peer-list mt-10" id="networkPeerList">
-                            <div class="peer-list-header">
-                                <span>CONNECTED PEERS</span>
-                                <div class="peer-filter-toggle">
-                                    <button class="peer-filter-btn active" id="filterAllPeers" onclick="setPeerFilter('all')" title="All Peers">ALL</button>
-                                    <button class="peer-filter-btn" id="filterBk9Peers" onclick="setPeerFilter('bluek9')" title="BlueK9 Only">BK9</button>
-                                </div>
-                            </div>
-                            <div class="peer-list-container" id="peerListContainer">
-                                <!-- Peers populated by JS -->
-                            </div>
-                        </div>
-                        <!-- Route Management -->
-                        <div class="network-route-list mt-10" id="networkRouteList">
-                            <div class="route-list-header">
-                                <span>NETWORK ROUTES</span>
-                                <button class="btn btn-sm btn-secondary" onclick="openAddRouteModal()" title="Add Route">+</button>
-                            </div>
-                            <div class="route-list-container" id="routeListContainer">
-                                <!-- Routes populated by JS -->
-                            </div>
+                        <div class="network-settings-link mt-10">
+                            <button class="btn btn-secondary btn-sm btn-full" onclick="openSettings('network')">
+                                &#9881; Network Settings
+                            </button>
                         </div>
                     </div>
                 </div>
