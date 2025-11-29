@@ -186,8 +186,10 @@
                         <h3>Bluetooth Phone Book Access (PBAP)</h3>
                         <p class="tools-hint">Attempt to read phone book data from target Bluetooth devices. Requires device pairing or vulnerable target.</p>
                         <div class="form-row">
-                            <label>Target BD Address:</label>
-                            <input type="text" id="pbapTargetAddr" class="input" placeholder="XX:XX:XX:XX:XX:XX">
+                            <label>Target Device:</label>
+                            <select id="pbapTargetSelect" class="input">
+                                <option value="">Select target...</option>
+                            </select>
                         </div>
                         <div class="form-row">
                             <label>Phone Book Type:</label>
@@ -219,8 +221,10 @@
                         <h3>Service Discovery Protocol (SDP)</h3>
                         <p class="tools-hint">Discover available Bluetooth services on target devices.</p>
                         <div class="form-row">
-                            <label>Target BD Address:</label>
-                            <input type="text" id="sdpTargetAddr" class="input" placeholder="XX:XX:XX:XX:XX:XX">
+                            <label>Target Device:</label>
+                            <select id="sdpTargetSelect" class="input">
+                                <option value="">Select target...</option>
+                            </select>
                         </div>
                         <div class="btn-group mt-10">
                             <button class="btn btn-primary" onclick="discoverServices()">
@@ -242,8 +246,10 @@
                         <h3>Device Analysis</h3>
                         <p class="tools-hint">Deep analysis of detected Bluetooth devices.</p>
                         <div class="form-row">
-                            <label>Target BD Address:</label>
-                            <input type="text" id="analysisTargetAddr" class="input" placeholder="XX:XX:XX:XX:XX:XX">
+                            <label>Target Device:</label>
+                            <select id="analysisTargetSelect" class="input">
+                                <option value="">Select target...</option>
+                            </select>
                         </div>
                         <div class="analysis-options">
                             <label class="toggle">

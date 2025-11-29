@@ -4405,10 +4405,8 @@ function pollForServerRestart() {
     })
         .then(r => {
             if (r.ok) {
-                updateRestartStatus('Server online! Reloading...');
-                setTimeout(() => {
-                    window.location.reload();
-                }, 1000);
+                updateRestartStatus('Server online! Redirecting to login...');
+                startLoginCountdown(10);
             } else {
                 setTimeout(pollForServerRestart, 1000);
             }
@@ -4417,6 +4415,26 @@ function pollForServerRestart() {
             // Server not ready yet
             setTimeout(pollForServerRestart, 1000);
         });
+}
+
+/**
+ * Start countdown before redirecting to login
+ */
+function startLoginCountdown(seconds) {
+    let remaining = seconds;
+
+    const countdownInterval = setInterval(() => {
+        updateRestartStatus(`Redirecting to login in ${remaining}...`);
+        remaining--;
+
+        if (remaining < 0) {
+            clearInterval(countdownInterval);
+            window.location.href = '/login';
+        }
+    }, 1000);
+
+    // Initial display
+    updateRestartStatus(`Redirecting to login in ${remaining}...`);
 }
 
 // ==================== CONFIG EXPORT/IMPORT ====================
@@ -5833,7 +5851,11 @@ function handleWarhammerUpdate(data) {
         document.getElementById('networkRouteCount').textContent = networkRoutes.length;
     }
 
-    // Update network statistics if visible
+    // Always update latency history (needed for settings chart even if stats panel hidden)
+    const bluek9Nodes = networkPeers.filter(p => p.is_bluek9);
+    updatePeerLatencyHistory(bluek9Nodes);
+
+    // Update network statistics display if visible
     if (showNetworkStats) {
         updateNetworkStatsDisplay();
     }
@@ -6840,14 +6862,18 @@ function updateNetworkStatsDisplay() {
  * Parse latency string to milliseconds
  */
 function parseLatency(latencyStr) {
-    if (!latencyStr || latencyStr === '0s' || latencyStr === '-') return 0;
+    if (!latencyStr || latencyStr === '0s' || latencyStr === '-' || latencyStr === 'N/A' || latencyStr === '--') return 0;
 
     // Handle formats like "57.443748ms", "1.5s", etc.
-    const msMatch = latencyStr.match(/([\d.]+)ms/);
+    const msMatch = latencyStr.match(/([\d.]+)\s*ms/i);
     if (msMatch) return parseFloat(msMatch[1]);
 
-    const sMatch = latencyStr.match(/([\d.]+)s/);
+    const sMatch = latencyStr.match(/([\d.]+)\s*s$/i);
     if (sMatch) return parseFloat(sMatch[1]) * 1000;
+
+    // Try parsing as raw number (assume ms)
+    const num = parseFloat(latencyStr);
+    if (!isNaN(num)) return num;
 
     return 0;
 }
@@ -6918,11 +6944,10 @@ function updateNetStatsPeersList(bluek9Nodes) {
 }
 
 /**
- * Update the latency chart with current peer data
+ * Update the latency history for all peers
+ * This is called periodically to track latency over time
  */
-function updateLatencyChart(bluek9Nodes) {
-    if (!peerLatencyChart || !showNetworkStats) return;
-
+function updatePeerLatencyHistory(bluek9Nodes) {
     const maxDataPoints = 30;  // Keep last 30 data points
 
     // Get current peer IDs
@@ -6943,13 +6968,27 @@ function updateLatencyChart(bluek9Nodes) {
         }
 
         const latency = parseLatency(peer.latency);
-        peerLatencyHistory[peerId].push(latency);
+        // Only add non-zero latencies to avoid filling with zeros
+        if (latency > 0) {
+            peerLatencyHistory[peerId].push(latency);
 
-        // Keep only last N points
-        if (peerLatencyHistory[peerId].length > maxDataPoints) {
-            peerLatencyHistory[peerId].shift();
+            // Keep only last N points
+            if (peerLatencyHistory[peerId].length > maxDataPoints) {
+                peerLatencyHistory[peerId].shift();
+            }
         }
     });
+}
+
+/**
+ * Update the latency chart with current peer data
+ */
+function updateLatencyChart(bluek9Nodes) {
+    // Always update history first
+    updatePeerLatencyHistory(bluek9Nodes);
+
+    // Skip chart update if chart doesn't exist
+    if (!peerLatencyChart) return;
 
     // Build chart datasets
     const colors = ['#00ffff', '#ff6b6b', '#4ecdc4', '#ffe66d', '#95e1d3', '#f38181'];
@@ -7337,35 +7376,45 @@ function showToolsTab(tabName) {
 }
 
 /**
- * Populate the target select dropdown in tools
+ * Populate all target select dropdowns in tools
  */
 function populateToolsTargetSelect() {
-    const select = document.getElementById('toolsTrackTargetSelect');
-    if (!select) return;
+    // All target selects in the Tools modal
+    const selectIds = [
+        'toolsTrackTargetSelect',
+        'pbapTargetSelect',
+        'sdpTargetSelect',
+        'analysisTargetSelect'
+    ];
 
-    // Keep first option
-    select.innerHTML = '<option value="">Select target...</option>';
+    selectIds.forEach(selectId => {
+        const select = document.getElementById(selectId);
+        if (!select) return;
 
-    // Add targets first
-    Object.keys(targets).forEach(bd => {
-        const device = devices[bd] || {};
-        const name = device.device_name || truncateHostname(bd);
-        const option = document.createElement('option');
-        option.value = bd;
-        option.textContent = `[TARGET] ${name} (${bd})`;
-        option.className = 'target-option';
-        select.appendChild(option);
-    });
+        // Keep first option
+        select.innerHTML = '<option value="">Select target...</option>';
 
-    // Add other devices
-    Object.keys(devices).forEach(bd => {
-        if (targets[bd]) return; // Already added as target
-        const device = devices[bd];
-        const name = device.device_name || 'Unknown';
-        const option = document.createElement('option');
-        option.value = bd;
-        option.textContent = `${name} (${bd})`;
-        select.appendChild(option);
+        // Add targets first
+        Object.keys(targets).forEach(bd => {
+            const device = devices[bd] || {};
+            const name = device.device_name || truncateHostname(bd);
+            const option = document.createElement('option');
+            option.value = bd;
+            option.textContent = `[TARGET] ${name} (${bd})`;
+            option.className = 'target-option';
+            select.appendChild(option);
+        });
+
+        // Add other devices
+        Object.keys(devices).forEach(bd => {
+            if (targets[bd]) return; // Already added as target
+            const device = devices[bd];
+            const name = device.device_name || 'Unknown';
+            const option = document.createElement('option');
+            option.value = bd;
+            option.textContent = `${name} (${bd})`;
+            select.appendChild(option);
+        });
     });
 }
 
@@ -7471,11 +7520,12 @@ function updateToolsTrackingDisplay(data) {
  * Read phone book via PBAP
  */
 function readPhoneBook() {
-    const bdAddress = document.getElementById('pbapTargetAddr').value.trim();
+    const select = document.getElementById('pbapTargetSelect');
+    const bdAddress = select ? select.value : '';
     const bookType = document.getElementById('pbapBookType').value;
 
-    if (!bdAddress || !/^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/.test(bdAddress)) {
-        addLogEntry('Enter a valid BD address (XX:XX:XX:XX:XX:XX)', 'WARNING');
+    if (!bdAddress) {
+        addLogEntry('Select a target device for PBAP', 'WARNING');
         return;
     }
 
@@ -7521,10 +7571,11 @@ function readPhoneBook() {
  * Discover services via SDP
  */
 function discoverServices() {
-    const bdAddress = document.getElementById('sdpTargetAddr').value.trim();
+    const select = document.getElementById('sdpTargetSelect');
+    const bdAddress = select ? select.value : '';
 
-    if (!bdAddress || !/^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/.test(bdAddress)) {
-        addLogEntry('Enter a valid BD address (XX:XX:XX:XX:XX:XX)', 'WARNING');
+    if (!bdAddress) {
+        addLogEntry('Select a target device for SDP discovery', 'WARNING');
         return;
     }
 
@@ -7574,13 +7625,14 @@ function discoverServices() {
  * Run comprehensive device analysis
  */
 function runDeviceAnalysis() {
-    const bdAddress = document.getElementById('analysisTargetAddr').value.trim();
+    const select = document.getElementById('analysisTargetSelect');
+    const bdAddress = select ? select.value : '';
     const doOui = document.getElementById('analysisOuiLookup').checked;
     const doClass = document.getElementById('analysisDeviceClass').checked;
     const doServices = document.getElementById('analysisServiceScan').checked;
 
-    if (!bdAddress || !/^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/.test(bdAddress)) {
-        addLogEntry('Enter a valid BD address (XX:XX:XX:XX:XX:XX)', 'WARNING');
+    if (!bdAddress) {
+        addLogEntry('Select a target device for analysis', 'WARNING');
         return;
     }
 
