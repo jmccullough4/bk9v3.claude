@@ -19,6 +19,9 @@ from flask import Flask, render_template, request, jsonify, session, redirect, u
 from flask_socketio import SocketIO, emit
 import struct
 
+# Dynamically determine install directory (parent of client/)
+INSTALL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 # Configuration
 CONFIG = {
     'SECRET_KEY': os.urandom(24).hex(),
@@ -3581,14 +3584,12 @@ def target_survey(interface='hci0'):
 
     These methods work on non-discoverable devices that are still connectable.
     Returns dict of BD addresses with their survey results.
+
+    Note: Called from start_target_survey() which handles the active flag.
     """
-    global target_survey_active, target_survey_results
+    global target_survey_results
 
-    if target_survey_active:
-        add_log("Target survey already running", "WARNING")
-        return target_survey_results
-
-    target_survey_active = True
+    # Reset results for this run
     target_survey_results = {}
 
     try:
@@ -3838,7 +3839,6 @@ def target_survey(interface='hci0'):
         add_log(f"Target survey error: {e}", "ERROR")
         return target_survey_results
     finally:
-        target_survey_active = False
         # Reset page timeout to default
         try:
             subprocess.run(
@@ -3847,6 +3847,7 @@ def target_survey(interface='hci0'):
             )
         except:
             pass
+        # Note: target_survey_active is set to False by start_target_survey() worker
 
 
 def start_target_survey(interface='hci0'):
@@ -5788,7 +5789,7 @@ def get_version():
         result = subprocess.run(
             ['git', 'rev-parse', '--short', 'HEAD'],
             capture_output=True, text=True, timeout=2,
-            cwd='/apps/bk9v3.claude'
+            cwd=INSTALL_DIR
         )
         if result.returncode == 0:
             commit = result.stdout.strip()
@@ -5799,7 +5800,7 @@ def get_version():
         result = subprocess.run(
             ['git', 'rev-parse', '--abbrev-ref', 'HEAD'],
             capture_output=True, text=True, timeout=2,
-            cwd='/apps/bk9v3.claude'
+            cwd=INSTALL_DIR
         )
         if result.returncode == 0:
             version_info['branch'] = result.stdout.strip()
@@ -5825,12 +5826,10 @@ def check_for_updates():
     }
 
     try:
-        install_dir = '/apps/bk9v3.claude'
-
         # Get current branch
         result = subprocess.run(
             ['git', 'rev-parse', '--abbrev-ref', 'HEAD'],
-            capture_output=True, text=True, timeout=5, cwd=install_dir
+            capture_output=True, text=True, timeout=5, cwd=INSTALL_DIR
         )
         current_branch = result.stdout.strip() if result.returncode == 0 else 'main'
         update_info['current_branch'] = current_branch
@@ -5838,7 +5837,7 @@ def check_for_updates():
         # Get current commit
         result = subprocess.run(
             ['git', 'rev-parse', '--short', 'HEAD'],
-            capture_output=True, text=True, timeout=5, cwd=install_dir
+            capture_output=True, text=True, timeout=5, cwd=INSTALL_DIR
         )
         if result.returncode == 0:
             update_info['current_commit'] = result.stdout.strip()
@@ -5846,21 +5845,21 @@ def check_for_updates():
         # Fetch from remote (fetch all branches)
         subprocess.run(
             ['git', 'fetch', 'origin', '--prune'],
-            capture_output=True, text=True, timeout=30, cwd=install_dir
+            capture_output=True, text=True, timeout=30, cwd=INSTALL_DIR
         )
 
         # Get remote commit for the current branch
         remote_ref = f'origin/{current_branch}'
         result = subprocess.run(
             ['git', 'rev-parse', '--short', remote_ref],
-            capture_output=True, text=True, timeout=5, cwd=install_dir
+            capture_output=True, text=True, timeout=5, cwd=INSTALL_DIR
         )
         if result.returncode != 0:
             # If current branch doesn't exist on remote, try main/master
             for fallback in ['origin/main', 'origin/master']:
                 result = subprocess.run(
                     ['git', 'rev-parse', '--short', fallback],
-                    capture_output=True, text=True, timeout=5, cwd=install_dir
+                    capture_output=True, text=True, timeout=5, cwd=INSTALL_DIR
                 )
                 if result.returncode == 0:
                     remote_ref = fallback
@@ -5876,7 +5875,7 @@ def check_for_updates():
             # Count commits behind
             result = subprocess.run(
                 ['git', 'rev-list', '--count', f'HEAD..{remote_ref}'],
-                capture_output=True, text=True, timeout=5, cwd=install_dir
+                capture_output=True, text=True, timeout=5, cwd=INSTALL_DIR
             )
             if result.returncode == 0:
                 try:
@@ -5888,7 +5887,7 @@ def check_for_updates():
             if update_info['update_available'] and update_info['commits_behind'] > 0:
                 result = subprocess.run(
                     ['git', 'log', '--oneline', '-10', f'HEAD..{remote_ref}'],
-                    capture_output=True, text=True, timeout=5, cwd=install_dir
+                    capture_output=True, text=True, timeout=5, cwd=INSTALL_DIR
                 )
                 if result.returncode == 0 and result.stdout.strip():
                     update_info['recent_changes'] = result.stdout.strip().split('\n')
@@ -5919,12 +5918,10 @@ def apply_updates():
     }
 
     try:
-        install_dir = '/apps/bk9v3.claude'
-
         # Get current branch
         proc = subprocess.run(
             ['git', 'rev-parse', '--abbrev-ref', 'HEAD'],
-            capture_output=True, text=True, timeout=5, cwd=install_dir
+            capture_output=True, text=True, timeout=5, cwd=INSTALL_DIR
         )
         current_branch = proc.stdout.strip() if proc.returncode == 0 else 'main'
         result['current_branch'] = current_branch
@@ -5932,30 +5929,30 @@ def apply_updates():
         # Get current commit
         proc = subprocess.run(
             ['git', 'rev-parse', '--short', 'HEAD'],
-            capture_output=True, text=True, timeout=5, cwd=install_dir
+            capture_output=True, text=True, timeout=5, cwd=INSTALL_DIR
         )
         result['old_commit'] = proc.stdout.strip() if proc.returncode == 0 else None
 
         # Stash any local changes
-        subprocess.run(['git', 'stash'], capture_output=True, timeout=10, cwd=install_dir)
+        subprocess.run(['git', 'stash'], capture_output=True, timeout=10, cwd=INSTALL_DIR)
 
         # Pull updates from the current branch
         add_log(f"Pulling updates for branch: {current_branch}", "INFO")
         proc = subprocess.run(
             ['git', 'pull', 'origin', current_branch],
-            capture_output=True, text=True, timeout=60, cwd=install_dir
+            capture_output=True, text=True, timeout=60, cwd=INSTALL_DIR
         )
         if proc.returncode != 0:
             # Try main as fallback
             proc = subprocess.run(
                 ['git', 'pull', 'origin', 'main'],
-                capture_output=True, text=True, timeout=60, cwd=install_dir
+                capture_output=True, text=True, timeout=60, cwd=INSTALL_DIR
             )
         if proc.returncode != 0:
             # Try master as last fallback
             proc = subprocess.run(
                 ['git', 'pull', 'origin', 'master'],
-                capture_output=True, text=True, timeout=60, cwd=install_dir
+                capture_output=True, text=True, timeout=60, cwd=INSTALL_DIR
             )
 
         if proc.returncode == 0:
@@ -5964,7 +5961,7 @@ def apply_updates():
             # Get new commit
             proc = subprocess.run(
                 ['git', 'rev-parse', '--short', 'HEAD'],
-                capture_output=True, text=True, timeout=5, cwd=install_dir
+                capture_output=True, text=True, timeout=5, cwd=INSTALL_DIR
             )
             result['new_commit'] = proc.stdout.strip() if proc.returncode == 0 else None
 
@@ -5972,7 +5969,7 @@ def apply_updates():
             if result['old_commit'] and result['new_commit']:
                 proc = subprocess.run(
                     ['git', 'log', '--oneline', f"{result['old_commit']}..{result['new_commit']}"],
-                    capture_output=True, text=True, timeout=5, cwd=install_dir
+                    capture_output=True, text=True, timeout=5, cwd=INSTALL_DIR
                 )
                 if proc.returncode == 0:
                     result['changes'] = proc.stdout.strip().split('\n') if proc.stdout.strip() else []
