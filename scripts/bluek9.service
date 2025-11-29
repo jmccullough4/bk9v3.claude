@@ -1,0 +1,23 @@
+[Unit]
+Description=BlueK9 Bluetooth Surveillance System
+Documentation=https://github.com/jmccullough4/bk9v3.claude
+After=network-online.target bluetooth.target
+Wants=network-online.target bluetooth.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/apps/bk9v3.claude
+Environment="HOME=/root"
+Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+ExecStart=/apps/bk9v3.claude/scripts/start.sh
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Give time for network to be fully ready before starting (for git updates)
+ExecStartPre=/bin/sleep 5
+
+[Install]
+WantedBy=multi-user.target
