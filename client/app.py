@@ -2491,6 +2491,9 @@ advanced_scan_active = False
 advanced_scan_thread = None
 hidden_scan_active = False
 hidden_scan_thread = None
+target_survey_active = False
+target_survey_thread = None
+target_survey_results = {}  # bd_address -> survey result
 sdp_probe_cache = {}  # bd_address -> {services: [], timestamp: float}
 address_sweep_results = {}  # oui -> [found_addresses]
 
@@ -3563,6 +3566,225 @@ def stop_hidden_device_hunt():
     global hidden_scan_active
     hidden_scan_active = False
     add_log("Hidden device hunt stop requested", "INFO")
+
+
+def target_survey(interface='hci0'):
+    """
+    Actively probe all targets to determine if they are in the area.
+
+    Uses multiple probe techniques against each target BD address:
+    - L2CAP ping (l2ping)
+    - SDP probe for services
+    - Name request (hcitool name)
+    - RSSI measurement (requires brief connection)
+
+    Returns dict of BD addresses with their survey results.
+    """
+    global target_survey_active, target_survey_results
+
+    if target_survey_active:
+        add_log("Target survey already running", "WARNING")
+        return target_survey_results
+
+    target_survey_active = True
+    target_survey_results = {}
+
+    try:
+        # Get targets from database
+        db_targets = get_targets_from_db()
+
+        if not db_targets:
+            add_log("No targets defined for survey", "WARNING")
+            return target_survey_results
+
+        add_log(f"Starting target survey: probing {len(db_targets)} target(s)", "INFO")
+        socketio.emit('target_survey_started', {
+            'target_count': len(db_targets),
+            'targets': [t['bd_address'] for t in db_targets]
+        })
+
+        # Optimize HCI parameters for best probe response
+        set_hci_scan_parameters(interface, inquiry_mode='extended', page_scan_type='interlaced')
+
+        for i, target in enumerate(db_targets):
+            if not target_survey_active:
+                add_log("Target survey cancelled", "INFO")
+                break
+
+            bd_address = target['bd_address'].upper()
+            alias = target.get('alias', '')
+            display_name = f"{alias} ({bd_address})" if alias else bd_address
+
+            add_log(f"Probing target {i+1}/{len(db_targets)}: {display_name}", "INFO")
+            socketio.emit('target_survey_progress', {
+                'current': i + 1,
+                'total': len(db_targets),
+                'bd_address': bd_address,
+                'alias': alias
+            })
+
+            result = {
+                'bd_address': bd_address,
+                'alias': alias,
+                'present': False,
+                'methods_responded': [],
+                'rssi': None,
+                'device_name': None,
+                'services': [],
+                'probe_time': time.time()
+            }
+
+            # Method 1: L2CAP ping (most reliable for Classic BT)
+            try:
+                l2ping_result = subprocess.run(
+                    ['l2ping', '-i', interface, '-c', '2', '-t', '3', bd_address],
+                    capture_output=True, text=True, timeout=8
+                )
+                if 'bytes from' in l2ping_result.stdout.lower():
+                    result['present'] = True
+                    result['methods_responded'].append('l2ping')
+                    # Try to extract RTT
+                    rtt_match = re.search(r'time=(\d+\.?\d*)ms', l2ping_result.stdout)
+                    if rtt_match:
+                        result['rtt_ms'] = float(rtt_match.group(1))
+                    add_log(f"  L2PING: {bd_address} responded", "DEBUG")
+            except subprocess.TimeoutExpired:
+                add_log(f"  L2PING: {bd_address} timeout", "DEBUG")
+            except Exception as e:
+                add_log(f"  L2PING error: {e}", "DEBUG")
+
+            if not target_survey_active:
+                break
+
+            # Method 2: Name request
+            try:
+                name_result = subprocess.run(
+                    ['hcitool', '-i', interface, 'name', bd_address],
+                    capture_output=True, text=True, timeout=10
+                )
+                name = name_result.stdout.strip()
+                if name:
+                    result['present'] = True
+                    result['methods_responded'].append('name')
+                    result['device_name'] = name
+                    add_log(f"  NAME: {bd_address} = '{name}'", "DEBUG")
+            except subprocess.TimeoutExpired:
+                add_log(f"  NAME: {bd_address} timeout", "DEBUG")
+            except Exception as e:
+                add_log(f"  NAME error: {e}", "DEBUG")
+
+            if not target_survey_active:
+                break
+
+            # Method 3: SDP probe (check services)
+            try:
+                sdp_result = sdp_probe(bd_address, interface)
+                if sdp_result['responded']:
+                    result['present'] = True
+                    result['methods_responded'].append('sdp')
+                    result['services'] = sdp_result.get('services', [])
+                    add_log(f"  SDP: {bd_address} has {len(result['services'])} services", "DEBUG")
+            except Exception as e:
+                add_log(f"  SDP error: {e}", "DEBUG")
+
+            if not target_survey_active:
+                break
+
+            # Method 4: RSSI measurement (requires connection)
+            try:
+                # Create connection
+                subprocess.run(['hcitool', '-i', interface, 'cc', bd_address],
+                              capture_output=True, timeout=5)
+                time.sleep(0.3)
+                # Get RSSI
+                rssi_result = subprocess.run(
+                    ['hcitool', '-i', interface, 'rssi', bd_address],
+                    capture_output=True, text=True, timeout=3
+                )
+                rssi_match = re.search(r'RSSI return value:\s*(-?\d+)', rssi_result.stdout)
+                if rssi_match:
+                    result['present'] = True
+                    result['methods_responded'].append('rssi')
+                    result['rssi'] = int(rssi_match.group(1))
+                    add_log(f"  RSSI: {bd_address} = {result['rssi']} dBm", "DEBUG")
+            except Exception as e:
+                add_log(f"  RSSI error: {e}", "DEBUG")
+            finally:
+                # Disconnect
+                try:
+                    subprocess.run(['hcitool', '-i', interface, 'dc', bd_address],
+                                  capture_output=True, timeout=2)
+                except:
+                    pass
+
+            # Store result
+            target_survey_results[bd_address] = result
+
+            # Emit individual result
+            socketio.emit('target_survey_result', result)
+
+            # If target found, process it as a device and potentially alert
+            if result['present']:
+                add_log(f"TARGET FOUND: {display_name} via {result['methods_responded']}", "WARNING")
+                device_data = {
+                    'bd_address': bd_address,
+                    'device_name': result.get('device_name'),
+                    'device_type': 'classic',
+                    'manufacturer': get_manufacturer(bd_address),
+                    'rssi': result.get('rssi'),
+                    'discovery_method': 'target_survey'
+                }
+                process_found_device(device_data)
+            else:
+                add_log(f"Target not detected: {display_name}", "DEBUG")
+
+        # Summary
+        found_count = sum(1 for r in target_survey_results.values() if r['present'])
+        add_log(f"Target survey complete: {found_count}/{len(db_targets)} targets detected", "INFO")
+
+        socketio.emit('target_survey_complete', {
+            'total': len(db_targets),
+            'found': found_count,
+            'results': list(target_survey_results.values())
+        })
+
+        return target_survey_results
+
+    except Exception as e:
+        add_log(f"Target survey error: {e}", "ERROR")
+        return target_survey_results
+    finally:
+        target_survey_active = False
+
+
+def start_target_survey(interface='hci0'):
+    """Start target survey in a background thread."""
+    global target_survey_active, target_survey_thread
+
+    if target_survey_active:
+        add_log("Target survey already running", "WARNING")
+        return False
+
+    target_survey_active = True
+
+    def survey_worker():
+        global target_survey_active
+        try:
+            target_survey(interface)
+        finally:
+            target_survey_active = False
+
+    target_survey_thread = threading.Thread(target=survey_worker, daemon=True)
+    target_survey_thread.start()
+    add_log("Target survey started in background", "INFO")
+    return True
+
+
+def stop_target_survey():
+    """Stop the target survey."""
+    global target_survey_active
+    target_survey_active = False
+    add_log("Target survey stop requested", "INFO")
 
 
 def stimulate_ble_devices(interface='hci0'):
@@ -5463,7 +5685,7 @@ def get_config():
 def get_version():
     """Get application version from git."""
     version_info = {
-        'version': 'v3.1.0',
+        'version': 'v3.2.0',
         'commit': None,
         'branch': None,
         'session_id': SESSION_ID  # Used by frontend to detect restarts
@@ -5479,7 +5701,7 @@ def get_version():
         if result.returncode == 0:
             commit = result.stdout.strip()
             version_info['commit'] = commit
-            version_info['version'] = f'v3.1.0-{commit}'
+            version_info['version'] = f'v3.2.0-{commit}'
 
         # Get branch name
         result = subprocess.run(
@@ -5801,7 +6023,7 @@ def start_scan():
 @login_required
 def stop_scan():
     """Stop all active scanning operations."""
-    global scanning_active, advanced_scan_active, hidden_scan_active
+    global scanning_active, advanced_scan_active, hidden_scan_active, target_survey_active
 
     stopped = []
 
@@ -5822,6 +6044,11 @@ def stop_scan():
     if hidden_scan_active:
         stop_hidden_device_hunt()
         stopped.append('hidden')
+
+    # Stop target survey if running
+    if target_survey_active:
+        stop_target_survey()
+        stopped.append('target_survey')
 
     add_log(f"Scan stop requested. Stopped: {', '.join(stopped) if stopped else 'none active'}", "INFO")
     return jsonify({'status': 'stopped', 'stopped': stopped})
@@ -5985,6 +6212,69 @@ def hidden_scan_status():
     """Get status of hidden device hunt."""
     return jsonify({
         'active': hidden_scan_active
+    })
+
+
+@app.route('/api/scan/target_survey', methods=['POST'])
+@login_required
+def target_survey_endpoint():
+    """
+    Run target survey - actively probe all targets to determine presence.
+
+    This scan uses multiple techniques against each target BD address:
+    - L2CAP ping (l2ping)
+    - Name request
+    - SDP service probe
+    - RSSI measurement
+
+    POST body:
+    {
+        "interface": "hci0"  // HCI interface (default: hci0)
+    }
+    """
+    data = request.json or {}
+    interface = data.get('interface', 'hci0')
+
+    # Get target count first
+    db_targets = get_targets_from_db()
+    if not db_targets:
+        return jsonify({
+            'status': 'no_targets',
+            'message': 'No targets defined. Add targets first.'
+        })
+
+    success = start_target_survey(interface)
+    if success:
+        return jsonify({
+            'status': 'started',
+            'target_count': len(db_targets),
+            'message': f'Probing {len(db_targets)} target(s)...'
+        })
+    else:
+        return jsonify({
+            'status': 'already_running',
+            'message': 'Target survey already in progress'
+        })
+
+
+@app.route('/api/scan/target_survey/stop', methods=['POST'])
+@login_required
+def stop_target_survey_endpoint():
+    """Stop the running target survey."""
+    stop_target_survey()
+    return jsonify({'status': 'stopped'})
+
+
+@app.route('/api/scan/target_survey/status', methods=['GET'])
+@login_required
+def target_survey_status():
+    """Get status of target survey."""
+    found_count = sum(1 for r in target_survey_results.values() if r.get('present'))
+    return jsonify({
+        'active': target_survey_active,
+        'results_count': len(target_survey_results),
+        'found_count': found_count,
+        'results': list(target_survey_results.values()) if target_survey_results else []
     })
 
 
