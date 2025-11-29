@@ -3584,14 +3584,12 @@ def target_survey(interface='hci0'):
 
     These methods work on non-discoverable devices that are still connectable.
     Returns dict of BD addresses with their survey results.
+
+    Note: Called from start_target_survey() which handles the active flag.
     """
-    global target_survey_active, target_survey_results
+    global target_survey_results
 
-    if target_survey_active:
-        add_log("Target survey already running", "WARNING")
-        return target_survey_results
-
-    target_survey_active = True
+    # Reset results for this run
     target_survey_results = {}
 
     try:
@@ -3841,7 +3839,6 @@ def target_survey(interface='hci0'):
         add_log(f"Target survey error: {e}", "ERROR")
         return target_survey_results
     finally:
-        target_survey_active = False
         # Reset page timeout to default
         try:
             subprocess.run(
@@ -3850,6 +3847,7 @@ def target_survey(interface='hci0'):
             )
         except:
             pass
+        # Note: target_survey_active is set to False by start_target_survey() worker
 
 
 def start_target_survey(interface='hci0'):
