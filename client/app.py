@@ -2482,6 +2482,766 @@ def stimulate_bluetooth_classic(interface='hci0'):
         return []
 
 
+# ==================== ADVANCED BLUETOOTH RADIO OPTIMIZATION ====================
+# Techniques for capturing non-discoverable and paired Classic Bluetooth devices
+# Designed for Sena UD100 (Class 1, 100m range) and Intel AX210 adapters
+
+# Global state for advanced scanning
+advanced_scan_active = False
+advanced_scan_thread = None
+sdp_probe_cache = {}  # bd_address -> {services: [], timestamp: float}
+address_sweep_results = {}  # oui -> [found_addresses]
+
+
+def set_hci_scan_parameters(interface='hci0', inquiry_mode='extended', page_scan_type='interlaced'):
+    """
+    Configure HCI controller for optimal device discovery.
+
+    Inquiry Modes:
+    - 'standard' (0x00): Standard inquiry result format
+    - 'rssi' (0x01): Inquiry result with RSSI
+    - 'extended' (0x02): Extended inquiry result with EIR data
+
+    Page Scan Types:
+    - 'standard' (0x00): Standard page scan (R0)
+    - 'interlaced' (0x01): Interlaced page scan - more aggressive, catches devices faster
+
+    Page Scan Modes:
+    - R0: 1.28s window - standard
+    - R1: Extended first scan (mandatory)
+    - R2: Extended all scans
+    """
+    try:
+        # Set inquiry mode via HCI command
+        # OGF 0x03 (Host Controller & Baseband), OCF 0x0045 (Write Inquiry Mode)
+        inquiry_modes = {'standard': '00', 'rssi': '01', 'extended': '02'}
+        mode_byte = inquiry_modes.get(inquiry_mode, '02')
+
+        result = subprocess.run(
+            ['hcitool', '-i', interface, 'cmd', '0x03', '0x0045', mode_byte],
+            capture_output=True, text=True, timeout=5
+        )
+        add_log(f"Set inquiry mode to {inquiry_mode} on {interface}", "DEBUG")
+
+        # Set page scan type
+        # OGF 0x03, OCF 0x0047 (Write Page Scan Type)
+        page_types = {'standard': '00', 'interlaced': '01'}
+        page_byte = page_types.get(page_scan_type, '01')
+
+        subprocess.run(
+            ['hcitool', '-i', interface, 'cmd', '0x03', '0x0047', page_byte],
+            capture_output=True, timeout=5
+        )
+        add_log(f"Set page scan type to {page_scan_type} on {interface}", "DEBUG")
+
+        # Set inquiry scan type to interlaced for better discovery
+        # OGF 0x03, OCF 0x0043 (Write Inquiry Scan Type)
+        subprocess.run(
+            ['hcitool', '-i', interface, 'cmd', '0x03', '0x0043', '01'],
+            capture_output=True, timeout=5
+        )
+
+        # Optimize page scan timing for catching paired devices
+        # OGF 0x03, OCF 0x001C (Write Page Scan Activity)
+        # Window: 0x0012 (11.25ms) - wider window catches more devices
+        # Interval: 0x0800 (1.28s) - standard interval
+        subprocess.run(
+            ['hcitool', '-i', interface, 'cmd', '0x03', '0x001C',
+             '00', '08',  # Interval: 0x0800 (little-endian)
+             '12', '00'], # Window: 0x0012 (little-endian)
+            capture_output=True, timeout=5
+        )
+        add_log(f"Optimized page scan timing on {interface}", "DEBUG")
+
+        # Optimize inquiry scan timing
+        # OGF 0x03, OCF 0x001E (Write Inquiry Scan Activity)
+        subprocess.run(
+            ['hcitool', '-i', interface, 'cmd', '0x03', '0x001E',
+             '00', '08',  # Interval: 0x0800
+             '12', '00'], # Window: 0x0012
+            capture_output=True, timeout=5
+        )
+
+        return True
+    except Exception as e:
+        add_log(f"Failed to set HCI parameters on {interface}: {e}", "WARNING")
+        return False
+
+
+def aggressive_inquiry(interface='hci0', duration=15):
+    """
+    Perform aggressive inquiry using multiple techniques to maximize Classic device detection.
+
+    Techniques:
+    1. Extended inquiry with RSSI and EIR data
+    2. Multiple LAP codes (GIAC, LIAC, and reserved)
+    3. Periodic inquiry for catching intermittent devices
+    4. Interlaced scanning mode
+    """
+    devices_found = []
+    seen_addresses = set()
+
+    try:
+        add_log(f"Starting aggressive inquiry on {interface} ({duration}s)", "INFO")
+
+        # Configure optimal HCI parameters first
+        set_hci_scan_parameters(interface, inquiry_mode='extended', page_scan_type='interlaced')
+
+        # Ensure adapter is up and discoverable mode is off (we want to scan, not be found)
+        subprocess.run(['hciconfig', interface, 'up'], capture_output=True, timeout=5)
+        subprocess.run(['hciconfig', interface, 'noscan'], capture_output=True, timeout=5)
+
+        # LAP codes to try:
+        # 0x9E8B33 - GIAC (General Inquiry Access Code) - most common
+        # 0x9E8B00 - LIAC (Limited Inquiry Access Code) - devices in limited discoverable
+        # 0x9E8B01-0x9E8B3F - Reserved LAPs that some devices respond to
+        lap_codes = [
+            '9e8b33',  # GIAC - General
+            '9e8b00',  # LIAC - Limited
+            '9e8b01',  # Reserved - some headsets
+            '9e8b02',  # Reserved
+            '9e8b10',  # Reserved - some cars
+            '9e8b1f',  # Reserved
+            '9e8b3e',  # Reserved
+        ]
+
+        # Phase 1: Extended inquiry with each LAP code
+        for lap in lap_codes:
+            try:
+                # Send HCI Inquiry command
+                # OGF 0x01 (Link Control), OCF 0x0001 (Inquiry)
+                # LAP (3 bytes, little-endian), inquiry_length (1 byte), num_responses (1 byte)
+                # inquiry_length 0x08 = 10.24 seconds max, 0x30 = max 61.44 seconds
+                result = subprocess.run(
+                    ['hcitool', '-i', interface, 'cmd', '0x01', '0x0001',
+                     lap[4:6], lap[2:4], lap[0:2],  # LAP in little-endian
+                     '04',  # Inquiry length: 4 * 1.28s = 5.12s
+                     '00'], # Num responses: unlimited
+                    capture_output=True, text=True, timeout=8
+                )
+            except subprocess.TimeoutExpired:
+                pass
+            except Exception as e:
+                add_log(f"LAP {lap} inquiry failed: {e}", "DEBUG")
+
+        # Phase 2: Standard hcitool inquiry with flush
+        try:
+            result = subprocess.run(
+                ['hcitool', '-i', interface, 'inq', '--flush', f'--length={min(duration, 20)}'],
+                capture_output=True, text=True, timeout=duration + 5
+            )
+
+            # Parse inquiry results
+            for line in result.stdout.splitlines():
+                match = re.search(r'([0-9A-Fa-f:]{17})', line)
+                if match:
+                    bd_addr = match.group(1).upper()
+                    if bd_addr not in seen_addresses:
+                        seen_addresses.add(bd_addr)
+                        # Extract class if present
+                        class_match = re.search(r'class:\s*(0x[0-9A-Fa-f]+)', line, re.I)
+                        device_class = class_match.group(1) if class_match else None
+
+                        devices_found.append({
+                            'bd_address': bd_addr,
+                            'device_name': None,
+                            'device_type': 'classic',
+                            'device_class': device_class,
+                            'manufacturer': get_manufacturer(bd_addr),
+                            'discovery_method': 'aggressive_inquiry'
+                        })
+        except subprocess.TimeoutExpired:
+            add_log("Inquiry timeout (expected)", "DEBUG")
+        except Exception as e:
+            add_log(f"Inquiry error: {e}", "WARNING")
+
+        # Phase 3: Use hcitool scan with extended options
+        try:
+            result = subprocess.run(
+                ['hcitool', '-i', interface, 'scan', '--flush', '--length=8', '--class'],
+                capture_output=True, text=True, timeout=15
+            )
+
+            for line in result.stdout.splitlines():
+                if 'Scanning' in line:
+                    continue
+                parts = line.strip().split('\t')
+                if len(parts) >= 1:
+                    match = re.match(r'([0-9A-Fa-f:]{17})', parts[0])
+                    if match:
+                        bd_addr = match.group(1).upper()
+                        if bd_addr not in seen_addresses:
+                            seen_addresses.add(bd_addr)
+                            name = parts[1] if len(parts) > 1 else None
+                            devices_found.append({
+                                'bd_address': bd_addr,
+                                'device_name': name,
+                                'device_type': 'classic',
+                                'manufacturer': get_manufacturer(bd_addr),
+                                'discovery_method': 'aggressive_scan'
+                            })
+        except subprocess.TimeoutExpired:
+            pass
+        except Exception as e:
+            add_log(f"Scan error: {e}", "WARNING")
+
+        add_log(f"Aggressive inquiry found {len(devices_found)} devices", "INFO")
+        return devices_found
+
+    except Exception as e:
+        add_log(f"Aggressive inquiry error: {e}", "ERROR")
+        return devices_found
+
+
+def sdp_probe(bd_address, interface='hci0'):
+    """
+    Probe a device using SDP (Service Discovery Protocol) to force a response.
+
+    This technique works on paired/connected devices that aren't discoverable:
+    1. Attempt to connect and query SDP records
+    2. Device must respond to SDP queries even if not discoverable
+    3. Extracts service list and device info
+
+    Requires the device to be within range and not actively rejecting connections.
+    """
+    global sdp_probe_cache
+
+    try:
+        add_log(f"SDP probing {bd_address} on {interface}", "DEBUG")
+
+        services = []
+        device_info = {'bd_address': bd_address, 'services': [], 'responded': False}
+
+        # Use sdptool to browse all services
+        try:
+            result = subprocess.run(
+                ['sdptool', '-i', interface, 'browse', bd_address],
+                capture_output=True, text=True, timeout=15
+            )
+
+            if result.stdout and 'Service Name' in result.stdout:
+                device_info['responded'] = True
+
+                # Parse service records
+                current_service = {}
+                for line in result.stdout.splitlines():
+                    line = line.strip()
+                    if line.startswith('Service Name:'):
+                        if current_service:
+                            services.append(current_service)
+                        current_service = {'name': line.split(':', 1)[1].strip()}
+                    elif line.startswith('Service RecHandle:'):
+                        current_service['handle'] = line.split(':', 1)[1].strip()
+                    elif line.startswith('Service Class ID List:'):
+                        current_service['class_ids'] = []
+                    elif '"0x' in line and current_service:
+                        uuid_match = re.search(r'"(0x[0-9A-Fa-f]+)"', line)
+                        if uuid_match and 'class_ids' in current_service:
+                            current_service['class_ids'].append(uuid_match.group(1))
+                    elif line.startswith('Protocol Descriptor List:'):
+                        current_service['protocols'] = []
+                    elif 'RFCOMM' in line:
+                        channel_match = re.search(r'Channel:\s*(\d+)', line)
+                        if channel_match:
+                            current_service['rfcomm_channel'] = int(channel_match.group(1))
+                    elif 'L2CAP' in line:
+                        psm_match = re.search(r'PSM:\s*(0x[0-9A-Fa-f]+|\d+)', line)
+                        if psm_match:
+                            current_service['l2cap_psm'] = psm_match.group(1)
+
+                if current_service:
+                    services.append(current_service)
+
+                device_info['services'] = services
+                add_log(f"SDP probe {bd_address}: found {len(services)} services", "INFO")
+
+        except subprocess.TimeoutExpired:
+            add_log(f"SDP browse timeout for {bd_address}", "DEBUG")
+        except Exception as e:
+            add_log(f"SDP browse error: {e}", "DEBUG")
+
+        # Try specific service searches if browse failed
+        if not services:
+            # Common service UUIDs to probe
+            service_uuids = [
+                ('0x1101', 'Serial Port'),
+                ('0x1103', 'Dialup Networking'),
+                ('0x1105', 'OBEX Object Push'),
+                ('0x1106', 'OBEX File Transfer'),
+                ('0x110A', 'Audio Source'),
+                ('0x110B', 'Audio Sink'),
+                ('0x110C', 'A/V Remote Control Target'),
+                ('0x110E', 'A/V Remote Control'),
+                ('0x1112', 'Headset AG'),
+                ('0x111E', 'Handsfree'),
+                ('0x111F', 'Handsfree AG'),
+                ('0x1124', 'HID'),
+                ('0x112F', 'Phonebook Access'),
+                ('0x1132', 'Message Access'),
+                ('0x1200', 'PnP Information'),
+            ]
+
+            for uuid, name in service_uuids:
+                try:
+                    result = subprocess.run(
+                        ['sdptool', '-i', interface, 'search', '--bdaddr', bd_address, uuid],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    if 'Service Name' in result.stdout or 'Searching' not in result.stderr:
+                        if result.returncode == 0 and result.stdout.strip():
+                            device_info['responded'] = True
+                            services.append({'name': name, 'uuid': uuid})
+                except subprocess.TimeoutExpired:
+                    pass
+                except:
+                    pass
+
+            device_info['services'] = services
+
+        # Cache results
+        sdp_probe_cache[bd_address] = {
+            'services': services,
+            'timestamp': time.time(),
+            'responded': device_info['responded']
+        }
+
+        return device_info
+
+    except Exception as e:
+        add_log(f"SDP probe error for {bd_address}: {e}", "ERROR")
+        return {'bd_address': bd_address, 'services': [], 'responded': False}
+
+
+def l2cap_ping_sweep(bd_address, interface='hci0', psm_range=None):
+    """
+    Attempt L2CAP connections to detect device presence.
+
+    PSM (Protocol/Service Multiplexer) common values:
+    - 0x0001: SDP
+    - 0x0003: RFCOMM
+    - 0x000F: BNEP (Bluetooth Network)
+    - 0x0011: HID Control
+    - 0x0013: HID Interrupt
+    - 0x0015: AVCTP (AV Control)
+    - 0x0017: AVDTP (AV Distribution)
+    - 0x001B: ATT (Attribute Protocol)
+    """
+    if psm_range is None:
+        psm_range = [0x0001, 0x0003, 0x000F, 0x0011, 0x0013, 0x0015, 0x0017]
+
+    device_responded = False
+    responding_psms = []
+
+    try:
+        for psm in psm_range:
+            try:
+                # Use l2ping with specific options
+                # -s 0 sends minimal data, -c 1 for single attempt
+                result = subprocess.run(
+                    ['l2ping', '-i', interface, '-c', '1', '-t', '2', bd_address],
+                    capture_output=True, text=True, timeout=4
+                )
+
+                if 'bytes from' in result.stdout or 'time' in result.stdout:
+                    device_responded = True
+                    responding_psms.append(psm)
+                    add_log(f"L2CAP response from {bd_address}", "DEBUG")
+                    break  # One response is enough to confirm presence
+
+            except subprocess.TimeoutExpired:
+                pass
+            except Exception as e:
+                pass
+
+        return {'responded': device_responded, 'psms': responding_psms}
+
+    except Exception as e:
+        add_log(f"L2CAP sweep error for {bd_address}: {e}", "WARNING")
+        return {'responded': False, 'psms': []}
+
+
+def rfcomm_probe(bd_address, interface='hci0', channels=None):
+    """
+    Probe RFCOMM channels to detect device and enumerate services.
+
+    Many paired devices have open RFCOMM channels that will respond
+    even when not in discoverable mode.
+    """
+    if channels is None:
+        channels = list(range(1, 16))  # Channels 1-15
+
+    responding_channels = []
+
+    try:
+        for channel in channels:
+            try:
+                # Try to connect briefly
+                result = subprocess.run(
+                    ['rfcomm', '-i', interface, 'connect', '/dev/rfcomm99', bd_address, str(channel)],
+                    capture_output=True, text=True, timeout=3
+                )
+                # Even a rejection means the device is present
+                if 'connected' in result.stdout.lower() or 'refused' in result.stderr.lower():
+                    responding_channels.append(channel)
+            except subprocess.TimeoutExpired:
+                pass
+            except:
+                pass
+            finally:
+                # Clean up
+                subprocess.run(['rfcomm', 'release', '/dev/rfcomm99'], capture_output=True, timeout=2)
+
+        return {'responded': len(responding_channels) > 0, 'channels': responding_channels}
+
+    except Exception as e:
+        add_log(f"RFCOMM probe error for {bd_address}: {e}", "WARNING")
+        return {'responded': False, 'channels': []}
+
+
+def address_sweep(oui_prefix, interface='hci0', range_size=16, known_addresses=None):
+    """
+    Sweep a range of BD addresses based on OUI prefix.
+
+    Useful when you know a device's manufacturer but not the full address.
+    For example, if you see an Apple device AA:BB:CC:XX:XX:XX, you can
+    sweep nearby addresses to find other devices from the same batch.
+
+    This is computationally expensive but can find "hidden" devices.
+    """
+    global address_sweep_results
+
+    if known_addresses is None:
+        known_addresses = set()
+
+    found_devices = []
+    oui_prefix = oui_prefix.upper().replace(':', '')[:6]  # First 6 hex chars
+
+    try:
+        add_log(f"Starting address sweep for OUI {oui_prefix} (range: {range_size})", "INFO")
+
+        # If we have known addresses with this OUI, focus around them
+        if known_addresses:
+            for known_addr in known_addresses:
+                if known_addr.upper().replace(':', '')[:6] == oui_prefix:
+                    # Extract the NAP (last 3 bytes)
+                    nap = int(known_addr.replace(':', '')[6:], 16)
+
+                    # Sweep around this address
+                    for offset in range(-range_size//2, range_size//2 + 1):
+                        if offset == 0:
+                            continue
+
+                        new_nap = (nap + offset) & 0xFFFFFF  # Keep within 24 bits
+                        bd_addr = f"{oui_prefix[0:2]}:{oui_prefix[2:4]}:{oui_prefix[4:6]}:" \
+                                  f"{new_nap >> 16:02X}:{(new_nap >> 8) & 0xFF:02X}:{new_nap & 0xFF:02X}"
+
+                        if bd_addr.upper() not in known_addresses:
+                            # Quick presence check with l2ping
+                            presence = l2cap_ping_sweep(bd_addr, interface)
+                            if presence['responded']:
+                                add_log(f"Sweep found device: {bd_addr}", "INFO")
+                                found_devices.append({
+                                    'bd_address': bd_addr,
+                                    'device_type': 'classic',
+                                    'manufacturer': get_manufacturer(bd_addr),
+                                    'discovery_method': 'address_sweep'
+                                })
+        else:
+            # Random sweep within OUI (less effective but can work)
+            for i in range(range_size):
+                nap = (int(time.time() * 1000) + i * 7919) & 0xFFFFFF  # Pseudo-random
+                bd_addr = f"{oui_prefix[0:2]}:{oui_prefix[2:4]}:{oui_prefix[4:6]}:" \
+                          f"{nap >> 16:02X}:{(nap >> 8) & 0xFF:02X}:{nap & 0xFF:02X}"
+
+                presence = l2cap_ping_sweep(bd_addr, interface)
+                if presence['responded']:
+                    add_log(f"Sweep found device: {bd_addr}", "INFO")
+                    found_devices.append({
+                        'bd_address': bd_addr,
+                        'device_type': 'classic',
+                        'manufacturer': get_manufacturer(bd_addr),
+                        'discovery_method': 'address_sweep'
+                    })
+
+        address_sweep_results[oui_prefix] = found_devices
+        add_log(f"Address sweep complete. Found {len(found_devices)} devices", "INFO")
+        return found_devices
+
+    except Exception as e:
+        add_log(f"Address sweep error: {e}", "ERROR")
+        return found_devices
+
+
+def page_scan_optimization(interface='hci0'):
+    """
+    Optimize the local adapter's page scan parameters for maximum
+    responsiveness to incoming connections.
+
+    This helps when tracking paired devices that might try to
+    reconnect to their paired device.
+    """
+    try:
+        # Enable page scan and inquiry scan
+        subprocess.run(['hciconfig', interface, 'piscan'], capture_output=True, timeout=5)
+
+        # Set scan mode to interlaced
+        subprocess.run(
+            ['hcitool', '-i', interface, 'cmd', '0x03', '0x0043', '01'],  # Inquiry scan type
+            capture_output=True, timeout=5
+        )
+        subprocess.run(
+            ['hcitool', '-i', interface, 'cmd', '0x03', '0x0047', '01'],  # Page scan type
+            capture_output=True, timeout=5
+        )
+
+        # Set class of device to look like common pairable device
+        # This can help trigger reconnection attempts from paired devices
+        # Major class: Phone (0x02), Minor class: Smartphone (0x0C)
+        # Service class: Audio, Telephony (0x200420)
+        subprocess.run(
+            ['hciconfig', interface, 'class', '0x5A020C'],
+            capture_output=True, timeout=5
+        )
+
+        add_log(f"Page scan optimized on {interface}", "DEBUG")
+        return True
+
+    except Exception as e:
+        add_log(f"Page scan optimization error: {e}", "WARNING")
+        return False
+
+
+def truncated_page_scan(bd_address, interface='hci0'):
+    """
+    Use truncated page scan to detect if a device is present without
+    completing the full paging procedure.
+
+    This is faster and can detect devices that might reject connections.
+    Uses HCI commands directly for truncated page mode.
+    """
+    try:
+        # Enable truncated page state
+        # OGF 0x03, OCF 0x005B (Write Truncated Page Scan)
+        # This is BT 2.1+ feature
+        subprocess.run(
+            ['hcitool', '-i', interface, 'cmd', '0x03', '0x005B', '01'],
+            capture_output=True, timeout=5
+        )
+
+        # Attempt to page the device
+        bd_bytes = bd_address.replace(':', '').lower()
+        page_cmd = ['hcitool', '-i', interface, 'cmd', '0x01', '0x0005']  # Create Connection
+        for i in range(0, 12, 2):
+            page_cmd.append(bd_bytes[10-i:12-i])  # BD_ADDR in reverse
+        page_cmd.extend(['18', 'cc', '01', '00', '00', '00'])  # Packet type, mode, clock offset
+
+        result = subprocess.run(page_cmd, capture_output=True, text=True, timeout=5)
+
+        # Check for page response in btmon or hci events
+        time.sleep(0.5)
+
+        # Cancel the connection attempt
+        subprocess.run(
+            ['hcitool', '-i', interface, 'cmd', '0x01', '0x0008'] +
+            [bd_bytes[10-i:12-i] for i in range(0, 12, 2)],  # Create Connection Cancel
+            capture_output=True, timeout=5
+        )
+
+        # Disable truncated page
+        subprocess.run(
+            ['hcitool', '-i', interface, 'cmd', '0x03', '0x005B', '00'],
+            capture_output=True, timeout=5
+        )
+
+        return True  # Device responded to page if we got here without errors
+
+    except Exception as e:
+        add_log(f"Truncated page scan error for {bd_address}: {e}", "DEBUG")
+        return False
+
+
+def deep_scan_device(bd_address, interface='hci0'):
+    """
+    Perform comprehensive scan of a specific BD address using all available techniques.
+    Use this when you have a suspected device address but need to confirm presence
+    and gather information.
+    """
+    add_log(f"Deep scanning {bd_address} on {interface}", "INFO")
+
+    device_info = {
+        'bd_address': bd_address,
+        'confirmed': False,
+        'methods_responded': [],
+        'services': [],
+        'rssi': None,
+        'device_type': 'classic',
+        'manufacturer': get_manufacturer(bd_address)
+    }
+
+    # Method 1: L2CAP ping
+    l2cap_result = l2cap_ping_sweep(bd_address, interface)
+    if l2cap_result['responded']:
+        device_info['confirmed'] = True
+        device_info['methods_responded'].append('l2cap')
+
+    # Method 2: SDP probe
+    sdp_result = sdp_probe(bd_address, interface)
+    if sdp_result['responded']:
+        device_info['confirmed'] = True
+        device_info['methods_responded'].append('sdp')
+        device_info['services'] = sdp_result['services']
+
+    # Method 3: Name request
+    try:
+        result = subprocess.run(
+            ['hcitool', '-i', interface, 'name', bd_address],
+            capture_output=True, text=True, timeout=8
+        )
+        if result.stdout.strip():
+            device_info['confirmed'] = True
+            device_info['methods_responded'].append('name')
+            device_info['device_name'] = result.stdout.strip()
+    except:
+        pass
+
+    # Method 4: RSSI (requires connection)
+    try:
+        subprocess.run(['hcitool', '-i', interface, 'cc', bd_address],
+                      capture_output=True, timeout=5)
+        time.sleep(0.2)
+        result = subprocess.run(
+            ['hcitool', '-i', interface, 'rssi', bd_address],
+            capture_output=True, text=True, timeout=3
+        )
+        rssi_match = re.search(r'RSSI return value:\s*(-?\d+)', result.stdout)
+        if rssi_match:
+            device_info['confirmed'] = True
+            device_info['methods_responded'].append('rssi')
+            device_info['rssi'] = int(rssi_match.group(1))
+    except:
+        pass
+    finally:
+        # Disconnect
+        subprocess.run(['hcitool', '-i', interface, 'dc', bd_address],
+                      capture_output=True, timeout=2)
+
+    if device_info['confirmed']:
+        add_log(f"Deep scan confirmed {bd_address} via {device_info['methods_responded']}", "INFO")
+    else:
+        add_log(f"Deep scan: {bd_address} not responding", "DEBUG")
+
+    return device_info
+
+
+def advanced_classic_scan(interface='hci0', duration=30, aggressive=True):
+    """
+    Master function for advanced Classic Bluetooth scanning.
+    Combines all techniques to maximize device detection.
+
+    Parameters:
+    - interface: HCI interface to use
+    - duration: Total scan duration in seconds
+    - aggressive: Enable aggressive techniques (SDP probing, sweeps)
+
+    Returns list of found devices with detection method metadata.
+    """
+    global devices
+
+    all_found = []
+    seen_addresses = set()
+
+    try:
+        add_log(f"Starting advanced Classic scan on {interface} ({duration}s)", "INFO")
+
+        # Phase 1: Configure optimal HCI parameters
+        set_hci_scan_parameters(interface, inquiry_mode='extended', page_scan_type='interlaced')
+
+        # Enable page scan to catch reconnecting devices
+        page_scan_optimization(interface)
+
+        # Phase 2: Aggressive inquiry
+        inquiry_duration = min(15, duration // 2)
+        inquiry_results = aggressive_inquiry(interface, inquiry_duration)
+        for dev in inquiry_results:
+            if dev['bd_address'] not in seen_addresses:
+                seen_addresses.add(dev['bd_address'])
+                all_found.append(dev)
+
+        # Phase 3: Standard stimulation scan
+        stim_results = stimulate_bluetooth_classic(interface)
+        for dev in stim_results:
+            if dev['bd_address'] not in seen_addresses:
+                seen_addresses.add(dev['bd_address'])
+                dev['discovery_method'] = 'stimulation'
+                all_found.append(dev)
+
+        if aggressive:
+            # Phase 4: SDP probe known devices that might have hidden neighbors
+            for bd_addr in list(devices.keys())[:10]:  # Limit to 10 to avoid timeout
+                if devices[bd_addr].get('device_type') == 'classic':
+                    sdp_result = sdp_probe(bd_addr, interface)
+                    if sdp_result['responded'] and bd_addr not in seen_addresses:
+                        seen_addresses.add(bd_addr)
+                        all_found.append({
+                            'bd_address': bd_addr,
+                            'device_type': 'classic',
+                            'services': sdp_result['services'],
+                            'discovery_method': 'sdp_probe'
+                        })
+
+            # Phase 5: Address sweep for interesting OUIs (Apple, Samsung, etc.)
+            interesting_ouis = ['D0:03:4B', 'AC:BC:32', '00:0A:95', '00:1A:7D']  # Common target OUIs
+            for oui in interesting_ouis:
+                if any(d['bd_address'].upper().startswith(oui.replace(':', '').upper()[:6].replace(':', '')[:2] + ':' +
+                       oui.replace(':', '').upper()[2:4] + ':' + oui.replace(':', '').upper()[4:6])
+                       for d in all_found):
+                    sweep_results = address_sweep(oui, interface, range_size=8,
+                                                 known_addresses=seen_addresses)
+                    for dev in sweep_results:
+                        if dev['bd_address'] not in seen_addresses:
+                            seen_addresses.add(dev['bd_address'])
+                            all_found.append(dev)
+
+        add_log(f"Advanced scan complete. Found {len(all_found)} devices", "INFO")
+        return all_found
+
+    except Exception as e:
+        add_log(f"Advanced scan error: {e}", "ERROR")
+        return all_found
+
+
+def start_advanced_scan(interface='hci0', duration=30, aggressive=True):
+    """Start advanced scanning in a background thread."""
+    global advanced_scan_active, advanced_scan_thread
+
+    if advanced_scan_active:
+        add_log("Advanced scan already running", "WARNING")
+        return False
+
+    advanced_scan_active = True
+
+    def scan_worker():
+        global advanced_scan_active
+        try:
+            results = advanced_classic_scan(interface, duration, aggressive)
+            for dev in results:
+                process_found_device(dev)
+        finally:
+            advanced_scan_active = False
+
+    advanced_scan_thread = threading.Thread(target=scan_worker, daemon=True)
+    advanced_scan_thread.start()
+    add_log("Advanced scan started in background", "INFO")
+    return True
+
+
+def stop_advanced_scan():
+    """Stop the advanced scan."""
+    global advanced_scan_active
+    advanced_scan_active = False
+    add_log("Advanced scan stop requested", "INFO")
+
+
 def stimulate_ble_devices(interface='hci0'):
     """
     Stimulate BLE devices to respond using extended BLE scanning.
@@ -4656,6 +5416,17 @@ def start_scan():
 
     if not scanning_active:
         scanning_active = True
+
+        # Optimize HCI parameters on all available adapters for maximum device detection
+        for iface in ['hci0', 'hci1']:
+            try:
+                result = subprocess.run(['hciconfig', iface], capture_output=True, text=True, timeout=2)
+                if 'UP RUNNING' in result.stdout:
+                    set_hci_scan_parameters(iface, inquiry_mode='extended', page_scan_type='interlaced')
+                    add_log(f"Optimized {iface} for extended inquiry mode", "INFO")
+            except:
+                pass
+
         # Start btmon for RSSI monitoring
         start_btmon()
         # Start continuous geo calculation
@@ -4696,6 +5467,184 @@ def stimulate_scan():
         process_found_device(dev)
 
     return jsonify({'status': 'completed', 'count': len(devices_found)})
+
+
+@app.route('/api/scan/advanced', methods=['POST'])
+@login_required
+def advanced_scan():
+    """
+    Run advanced Classic Bluetooth scan using all available techniques.
+
+    POST body:
+    {
+        "interface": "hci0",     // HCI interface (default: hci0)
+        "duration": 30,          // Scan duration in seconds (default: 30)
+        "aggressive": true       // Enable aggressive techniques (default: true)
+    }
+    """
+    data = request.json or {}
+    interface = data.get('interface', 'hci0')
+    duration = data.get('duration', 30)
+    aggressive = data.get('aggressive', True)
+
+    success = start_advanced_scan(interface, duration, aggressive)
+    if success:
+        return jsonify({
+            'status': 'started',
+            'interface': interface,
+            'duration': duration,
+            'aggressive': aggressive,
+            'message': 'Advanced scan running in background'
+        })
+    else:
+        return jsonify({
+            'status': 'error',
+            'message': 'Advanced scan already running'
+        }), 409
+
+
+@app.route('/api/scan/advanced/stop', methods=['POST'])
+@login_required
+def stop_advanced():
+    """Stop the running advanced scan."""
+    stop_advanced_scan()
+    return jsonify({'status': 'stopped'})
+
+
+@app.route('/api/scan/advanced/status', methods=['GET'])
+@login_required
+def advanced_scan_status():
+    """Get status of advanced scan."""
+    return jsonify({
+        'active': advanced_scan_active,
+        'sdp_cache_size': len(sdp_probe_cache),
+        'sweep_results': len(address_sweep_results)
+    })
+
+
+@app.route('/api/device/<bd_address>/deep_scan', methods=['POST'])
+@login_required
+def api_deep_scan(bd_address):
+    """
+    Deep scan a specific BD address using all available techniques.
+    Use for targeted scanning of suspected devices.
+    """
+    data = request.json or {}
+    interface = data.get('interface', 'hci0')
+
+    result = deep_scan_device(bd_address, interface)
+
+    # If device confirmed, add to survey
+    if result['confirmed']:
+        device_data = {
+            'bd_address': bd_address,
+            'device_name': result.get('device_name'),
+            'device_type': 'classic',
+            'manufacturer': result['manufacturer'],
+            'rssi': result.get('rssi'),
+            'services': result.get('services', [])
+        }
+        process_found_device(device_data)
+
+    return jsonify(result)
+
+
+@app.route('/api/device/<bd_address>/sdp', methods=['GET'])
+@login_required
+def api_sdp_probe(bd_address):
+    """
+    Probe a device for SDP services.
+    Returns list of available services and protocols.
+    """
+    interface = request.args.get('interface', 'hci0')
+    result = sdp_probe(bd_address, interface)
+    return jsonify(result)
+
+
+@app.route('/api/device/<bd_address>/l2ping', methods=['POST'])
+@login_required
+def api_l2ping(bd_address):
+    """
+    L2CAP ping a device to check presence.
+    """
+    data = request.json or {}
+    interface = data.get('interface', 'hci0')
+
+    result = l2cap_ping_sweep(bd_address, interface)
+    return jsonify({
+        'bd_address': bd_address,
+        'responded': result['responded'],
+        'psms': result['psms']
+    })
+
+
+@app.route('/api/scan/sweep', methods=['POST'])
+@login_required
+def api_address_sweep():
+    """
+    Sweep a range of BD addresses based on OUI prefix.
+
+    POST body:
+    {
+        "oui": "D0:03:4B",       // OUI prefix (first 3 bytes)
+        "interface": "hci0",
+        "range_size": 16         // How many addresses to sweep
+    }
+    """
+    data = request.json or {}
+    oui = data.get('oui')
+    interface = data.get('interface', 'hci0')
+    range_size = data.get('range_size', 16)
+
+    if not oui:
+        return jsonify({'error': 'OUI prefix required'}), 400
+
+    # Get known addresses for smarter sweep
+    known = set(devices.keys())
+
+    results = address_sweep(oui, interface, range_size, known)
+
+    for dev in results:
+        process_found_device(dev)
+
+    return jsonify({
+        'status': 'completed',
+        'oui': oui,
+        'found': len(results),
+        'devices': results
+    })
+
+
+@app.route('/api/radio/<interface>/optimize', methods=['POST'])
+@login_required
+def api_optimize_radio(interface):
+    """
+    Optimize HCI parameters for maximum device detection.
+
+    POST body:
+    {
+        "inquiry_mode": "extended",   // standard, rssi, or extended
+        "page_scan_type": "interlaced"  // standard or interlaced
+    }
+    """
+    data = request.json or {}
+    inquiry_mode = data.get('inquiry_mode', 'extended')
+    page_scan_type = data.get('page_scan_type', 'interlaced')
+
+    success = set_hci_scan_parameters(interface, inquiry_mode, page_scan_type)
+
+    if success:
+        return jsonify({
+            'status': 'optimized',
+            'interface': interface,
+            'inquiry_mode': inquiry_mode,
+            'page_scan_type': page_scan_type
+        })
+    else:
+        return jsonify({
+            'status': 'error',
+            'message': 'Failed to optimize radio parameters'
+        }), 500
 
 
 @app.route('/api/devices')
