@@ -5078,6 +5078,391 @@ def reset_system_trail():
     return jsonify({'status': 'reset'})
 
 
+# ==================== ANALYSIS TOOLS API ====================
+
+@app.route('/api/tools/sdp/<bd_address>')
+@login_required
+def sdp_browse(bd_address):
+    """Run SDP service discovery on a Bluetooth device."""
+    bd_address = bd_address.upper()
+    add_log(f"SDP browse requested for {bd_address}", "INFO")
+
+    try:
+        # Use sdptool browse to get services
+        result = subprocess.run(
+            ['sdptool', 'browse', bd_address],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+
+        services = []
+        current_service = {}
+
+        for line in result.stdout.split('\n'):
+            line = line.strip()
+            if line.startswith('Service Name:'):
+                if current_service.get('name'):
+                    services.append(current_service)
+                current_service = {'name': line.split(':', 1)[1].strip()}
+            elif line.startswith('Protocol Descriptor List:'):
+                current_service['protocol'] = 'Multiple'
+            elif '"RFCOMM"' in line or 'RFCOMM' in line:
+                current_service['protocol'] = 'RFCOMM'
+            elif '"L2CAP"' in line or 'L2CAP' in line:
+                if current_service.get('protocol') != 'RFCOMM':
+                    current_service['protocol'] = 'L2CAP'
+            elif line.startswith('Channel:'):
+                current_service['channel'] = line.split(':')[1].strip()
+            elif line.startswith('Service RecHandle:'):
+                current_service['handle'] = line.split(':')[1].strip()
+            elif 'UUID' in line and ':' in line:
+                uuid_part = line.split(':')[-1].strip()
+                if len(uuid_part) > 4:
+                    current_service['uuid'] = uuid_part
+
+        if current_service.get('name'):
+            services.append(current_service)
+
+        if services:
+            add_log(f"SDP found {len(services)} services on {bd_address}", "INFO")
+            return jsonify({'status': 'success', 'services': services})
+        elif result.returncode != 0:
+            error_msg = result.stderr or 'Device not responding'
+            add_log(f"SDP browse failed for {bd_address}: {error_msg}", "WARNING")
+            return jsonify({'status': 'error', 'error': error_msg})
+        else:
+            return jsonify({'status': 'success', 'services': []})
+
+    except subprocess.TimeoutExpired:
+        add_log(f"SDP browse timeout for {bd_address}", "WARNING")
+        return jsonify({'status': 'error', 'error': 'Connection timeout'})
+    except Exception as e:
+        add_log(f"SDP browse error for {bd_address}: {e}", "ERROR")
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/tools/pbap/<bd_address>/<book_type>')
+@login_required
+def pbap_read(bd_address, book_type):
+    """
+    Attempt to read phone book from a Bluetooth device using PBAP.
+    Note: This requires the device to be paired and PBAP service accessible.
+    """
+    bd_address = bd_address.upper()
+    add_log(f"PBAP read requested: {book_type} from {bd_address}", "INFO")
+
+    # Valid phone book types
+    valid_books = ['pb', 'ich', 'och', 'mch', 'cch']
+    if book_type not in valid_books:
+        return jsonify({'status': 'error', 'error': f'Invalid book type. Use: {", ".join(valid_books)}'})
+
+    try:
+        # First check if device has PBAP support via SDP
+        sdp_result = subprocess.run(
+            ['sdptool', 'search', '--bdaddr', bd_address, 'PBAP'],
+            capture_output=True,
+            text=True,
+            timeout=15
+        )
+
+        # Check for PBAP service
+        if 'PBAP' not in sdp_result.stdout and 'PhoneBook' not in sdp_result.stdout:
+            # Try OBEX Push as fallback check
+            obex_result = subprocess.run(
+                ['sdptool', 'search', '--bdaddr', bd_address, 'OPUSH'],
+                capture_output=True,
+                text=True,
+                timeout=15
+            )
+
+            if 'OBEX' not in obex_result.stdout:
+                add_log(f"PBAP: No phone book service found on {bd_address}", "WARNING")
+                return jsonify({
+                    'status': 'error',
+                    'error': 'Device does not support Phone Book Access Profile (PBAP). Device may need to be paired first.'
+                })
+
+        # Try to use obexftp or similar to access phone book
+        # Note: This requires proper pairing and authorization
+        # Most phones require explicit user approval for phonebook access
+
+        # Use bluez-tools pbap client if available
+        try:
+            # Try with bt-obex
+            pbap_cmd = ['bt-obex', '-p', bd_address, '-d', f'/telecom/{book_type}.vcf']
+            pbap_result = subprocess.run(
+                pbap_cmd,
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+
+            if pbap_result.returncode == 0 and pbap_result.stdout:
+                # Parse vCard format
+                entries = parse_vcard_entries(pbap_result.stdout)
+                add_log(f"PBAP: Retrieved {len(entries)} entries from {bd_address}", "INFO")
+                return jsonify({'status': 'success', 'entries': entries})
+
+        except FileNotFoundError:
+            pass  # bt-obex not available
+
+        # Return informational error
+        return jsonify({
+            'status': 'error',
+            'error': 'PBAP access requires device pairing and user authorization. The target device must approve the connection.'
+        })
+
+    except subprocess.TimeoutExpired:
+        add_log(f"PBAP timeout for {bd_address}", "WARNING")
+        return jsonify({'status': 'error', 'error': 'Connection timeout'})
+    except Exception as e:
+        add_log(f"PBAP error for {bd_address}: {e}", "ERROR")
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+def parse_vcard_entries(vcard_data):
+    """Parse vCard format data into list of name/number entries."""
+    entries = []
+    current_entry = {}
+
+    for line in vcard_data.split('\n'):
+        line = line.strip()
+        if line.startswith('BEGIN:VCARD'):
+            current_entry = {}
+        elif line.startswith('END:VCARD'):
+            if current_entry.get('name') or current_entry.get('number'):
+                entries.append(current_entry)
+            current_entry = {}
+        elif line.startswith('FN:'):
+            current_entry['name'] = line[3:]
+        elif line.startswith('N:'):
+            if not current_entry.get('name'):
+                parts = line[2:].split(';')
+                current_entry['name'] = ' '.join(reversed([p for p in parts if p]))
+        elif line.startswith('TEL'):
+            # Handle TEL;TYPE=CELL: or TEL: formats
+            if ':' in line:
+                current_entry['number'] = line.split(':', 1)[1]
+
+    return entries
+
+
+@app.route('/api/tools/analyze/<bd_address>')
+@login_required
+def analyze_device(bd_address):
+    """Run comprehensive device analysis."""
+    bd_address = bd_address.upper()
+    do_oui = request.args.get('oui', 'true').lower() == 'true'
+    do_class = request.args.get('class', 'true').lower() == 'true'
+    do_services = request.args.get('services', 'false').lower() == 'true'
+
+    add_log(f"Device analysis requested for {bd_address}", "INFO")
+
+    result = {'status': 'success'}
+
+    # OUI Lookup
+    if do_oui:
+        oui_prefix = bd_address.replace(':', '')[:6].upper()
+        result['oui'] = lookup_oui(oui_prefix)
+
+    # Device class analysis
+    if do_class:
+        device = devices.get(bd_address, {})
+        device_class = device.get('device_class')
+        if device_class:
+            result['device_class'] = parse_device_class(device_class)
+        else:
+            result['device_class'] = {'major': 'Unknown', 'minor': 'Unknown', 'services': []}
+
+    # Service discovery (optional, slow)
+    if do_services:
+        try:
+            sdp_result = subprocess.run(
+                ['sdptool', 'browse', bd_address],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+
+            services = []
+            for line in sdp_result.stdout.split('\n'):
+                if line.strip().startswith('Service Name:'):
+                    services.append({'name': line.split(':', 1)[1].strip()})
+
+            result['services'] = services
+        except:
+            result['services'] = []
+
+    # Risk assessment
+    result['risk'] = assess_device_risk(bd_address, result)
+
+    add_log(f"Device analysis complete for {bd_address}", "INFO")
+    return jsonify(result)
+
+
+def lookup_oui(oui_prefix):
+    """Look up OUI (first 3 bytes of MAC) to find manufacturer."""
+    # Common OUI prefixes
+    oui_db = {
+        'A4C138': {'company': 'Apple Inc.', 'country': 'USA'},
+        '001451': {'company': 'Apple Inc.', 'country': 'USA'},
+        '0C74C2': {'company': 'Apple Inc.', 'country': 'USA'},
+        '8C8590': {'company': 'Apple Inc.', 'country': 'USA'},
+        'F0D1A9': {'company': 'Apple Inc.', 'country': 'USA'},
+        '88E9FE': {'company': 'Apple Inc.', 'country': 'USA'},
+        '98D6BB': {'company': 'Apple Inc.', 'country': 'USA'},
+        '7014A6': {'company': 'Apple Inc.', 'country': 'USA'},
+        'DC2B2A': {'company': 'Apple Inc.', 'country': 'USA'},
+        '001E52': {'company': 'Apple Inc.', 'country': 'USA'},
+        'AC3743': {'company': 'Samsung Electronics', 'country': 'South Korea'},
+        '78D6F0': {'company': 'Samsung Electronics', 'country': 'South Korea'},
+        '94350A': {'company': 'Samsung Electronics', 'country': 'South Korea'},
+        '308454': {'company': 'Samsung Electronics', 'country': 'South Korea'},
+        'BC765E': {'company': 'Samsung Electronics', 'country': 'South Korea'},
+        '00E0DC': {'company': 'Nextel Communications', 'country': 'USA'},
+        '001124': {'company': 'Google Inc.', 'country': 'USA'},
+        '94EB2C': {'company': 'Google Inc.', 'country': 'USA'},
+        'F4F5D8': {'company': 'Google Inc.', 'country': 'USA'},
+        '001D43': {'company': 'Shenzhen Huawei', 'country': 'China'},
+        '001E10': {'company': 'Shenzhen Huawei', 'country': 'China'},
+        'E0191D': {'company': 'Huawei Technologies', 'country': 'China'},
+        'F8E811': {'company': 'Motorola Mobility', 'country': 'USA'},
+        '9C2A83': {'company': 'Samsung Electronics', 'country': 'South Korea'},
+        'EC1F72': {'company': 'Samsung Electronics', 'country': 'South Korea'},
+        '00037A': {'company': 'Taiyo Yuden Co.', 'country': 'Japan'},
+        '0015AF': {'company': 'AzureWave Technologies', 'country': 'Taiwan'},
+        '38B8EB': {'company': 'Murata Manufacturing', 'country': 'Japan'},
+        '001DD8': {'company': 'Microsoft Corporation', 'country': 'USA'},
+        '001517': {'company': 'Intel Corporation', 'country': 'USA'},
+        '00A0C6': {'company': 'Qualcomm Inc.', 'country': 'USA'},
+        'DC0C5C': {'company': 'OnePlus Technology', 'country': 'China'},
+        'B0E235': {'company': 'Xiaomi Communications', 'country': 'China'},
+        '60A423': {'company': 'Xiaomi Communications', 'country': 'China'},
+    }
+
+    if oui_prefix in oui_db:
+        return {**oui_db[oui_prefix], 'prefix': oui_prefix}
+
+    # Check partial match
+    for prefix, info in oui_db.items():
+        if oui_prefix.startswith(prefix[:4]):
+            return {**info, 'prefix': oui_prefix, 'partial_match': True}
+
+    return {'company': 'Unknown', 'prefix': oui_prefix}
+
+
+def parse_device_class(device_class):
+    """Parse Bluetooth device class into human-readable format."""
+    try:
+        if isinstance(device_class, str):
+            device_class = int(device_class, 16) if device_class.startswith('0x') else int(device_class)
+    except:
+        return {'major': 'Unknown', 'minor': 'Unknown', 'services': []}
+
+    # Major device classes
+    major_classes = {
+        0: 'Miscellaneous',
+        1: 'Computer',
+        2: 'Phone',
+        3: 'LAN/Network',
+        4: 'Audio/Video',
+        5: 'Peripheral',
+        6: 'Imaging',
+        7: 'Wearable',
+        8: 'Toy',
+        9: 'Health',
+        31: 'Uncategorized'
+    }
+
+    # Minor classes for phones
+    phone_minor = {
+        0: 'Uncategorized',
+        1: 'Cellular',
+        2: 'Cordless',
+        3: 'Smartphone',
+        4: 'Wired Modem',
+        5: 'Common ISDN'
+    }
+
+    # Service classes
+    service_flags = {
+        13: 'Limited Discoverable Mode',
+        16: 'Positioning',
+        17: 'Networking',
+        18: 'Rendering',
+        19: 'Capturing',
+        20: 'Object Transfer',
+        21: 'Audio',
+        22: 'Telephony',
+        23: 'Information'
+    }
+
+    major = (device_class >> 8) & 0x1F
+    minor = (device_class >> 2) & 0x3F
+
+    major_name = major_classes.get(major, f'Unknown ({major})')
+    minor_name = str(minor)
+
+    if major == 2:
+        minor_name = phone_minor.get(minor, f'Unknown ({minor})')
+
+    services = []
+    for bit, name in service_flags.items():
+        if device_class & (1 << bit):
+            services.append(name)
+
+    return {
+        'major': major_name,
+        'minor': minor_name,
+        'services': services,
+        'raw': hex(device_class)
+    }
+
+
+def assess_device_risk(bd_address, analysis_data):
+    """Assess potential risk level of a device based on analysis."""
+    risk_level = 'low'
+    notes = []
+
+    device = devices.get(bd_address, {})
+
+    # Check device type
+    device_class = analysis_data.get('device_class', {})
+    major = device_class.get('major', '')
+
+    if major == 'Phone':
+        risk_level = 'medium'
+        notes.append('Mobile phone - may contain sensitive data')
+
+    if major == 'Computer':
+        risk_level = 'medium'
+        notes.append('Computer device - potential data access')
+
+    # Check for interesting services
+    services = analysis_data.get('services', [])
+    interesting_services = ['OBEX', 'FTP', 'PBAP', 'MAP', 'HFP', 'A2DP']
+    for svc in services:
+        svc_name = svc.get('name', '') if isinstance(svc, dict) else str(svc)
+        for interesting in interesting_services:
+            if interesting in svc_name.upper():
+                notes.append(f'Exposes {interesting} service')
+                if risk_level == 'low':
+                    risk_level = 'medium'
+
+    # Check if it's a target
+    if bd_address in targets:
+        risk_level = 'high'
+        notes.insert(0, 'DESIGNATED TARGET')
+
+    # Check signal strength (close device = higher risk)
+    rssi = device.get('rssi')
+    if rssi and rssi > -50:
+        notes.append(f'Very close proximity (RSSI: {rssi} dBm)')
+
+    return {'level': risk_level, 'notes': notes}
+
+
 def calculate_geolocation(observations):
     """
     ACTIVE GEO: Calculate emitter geolocation from active tracking data.
