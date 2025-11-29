@@ -564,30 +564,6 @@
                         </div>
                     </div>
 
-                    <!-- Network Statistics -->
-                    <div class="settings-group">
-                        <h3>Network Statistics</h3>
-                        <p class="settings-hint">Real-time network performance metrics.</p>
-                        <div class="settings-stats-grid">
-                            <div class="settings-stat-item">
-                                <span class="settings-stat-value" id="settingsStatNodes">0</span>
-                                <span class="settings-stat-label">NODES ONLINE</span>
-                            </div>
-                            <div class="settings-stat-item">
-                                <span class="settings-stat-value" id="settingsStatLatency">--</span>
-                                <span class="settings-stat-label">AVG LATENCY</span>
-                            </div>
-                            <div class="settings-stat-item">
-                                <span class="settings-stat-value" id="settingsStatSynced">0 KB</span>
-                                <span class="settings-stat-label">DATA SYNCED</span>
-                            </div>
-                        </div>
-                        <div class="settings-chart-container mt-10">
-                            <div class="settings-chart-title">PEER LATENCY (ms)</div>
-                            <canvas id="settingsLatencyChart" height="150"></canvas>
-                        </div>
-                    </div>
-
                     <!-- Speed Test -->
                     <div class="settings-group">
                         <h3>Network Speed Test</h3>
@@ -1299,8 +1275,9 @@
                         </div>
                         <div class="chart-wrapper">
                             <div class="chart-legend">
-                                <span class="legend-item legend-best"><span class="legend-line"></span>BEST</span>
-                                <span class="legend-item legend-avg"><span class="legend-line"></span>AVG</span>
+                                <span class="legend-item legend-total"><span class="legend-line"></span>TOTAL</span>
+                                <span class="legend-item legend-active"><span class="legend-line"></span>ACTIVE</span>
+                                <span class="legend-item legend-targets"><span class="legend-line"></span>TARGETS</span>
                             </div>
                             <canvas id="deviceTypeChart"></canvas>
                         </div>

@@ -6761,7 +6761,7 @@ def toggle_network_route(route_id):
 # ==================== iperf3 SPEED TEST ====================
 
 def run_speedtest(target_ip, target_name, duration=10):
-    """Run iperf3 speed test in background thread."""
+    """Run iperf3 speed test in background thread with real-time updates."""
     global speedtest_state, speedtest_process
 
     try:
@@ -6783,98 +6783,113 @@ def run_speedtest(target_ip, target_name, duration=10):
             'target_ip': target_ip,
             'target_name': target_name,
             'progress': 0,
-            'bandwidth': 0
+            'bandwidth': 0,
+            'results': []
         })
 
-        # Run iperf3 with JSON output, reporting every second
-        cmd = ['iperf3', '-c', target_ip, '-t', str(duration), '-J', '-i', '1']
+        # Run iperf3 with human-readable output for real-time parsing
+        # -f m = format in Mbits, -i 1 = report every second
+        cmd = ['iperf3', '-c', target_ip, '-t', str(duration), '-i', '1', '-f', 'm']
         speedtest_process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True
+            text=True,
+            bufsize=1  # Line buffered for real-time output
         )
 
-        # Read output progressively
-        output_data = ""
-        for line in speedtest_process.stdout:
-            output_data += line
+        interval_count = 0
+        total_bytes = 0
+        total_retransmits = 0
+
+        # Parse output line by line in real-time
+        for line in iter(speedtest_process.stdout.readline, ''):
+            if not speedtest_state['running']:
+                break
+
+            line = line.strip()
+            if not line:
+                continue
+
+            # Parse interval lines like: "[  5]   0.00-1.00   sec   112 MBytes   941 Mbits/sec    0   sender"
+            # or "[  5]   0.00-1.00   sec  95.1 MBytes   798 Mbits/sec"
+            if 'Mbits/sec' in line and 'sec' in line and '-' in line:
+                # Skip summary lines (they have longer time ranges)
+                parts = line.split()
+                try:
+                    # Find the Mbits/sec value
+                    for i, part in enumerate(parts):
+                        if part == 'Mbits/sec' and i > 0:
+                            mbps = float(parts[i-1])
+                            interval_count += 1
+                            progress = min(int((interval_count / duration) * 100), 99)
+
+                            speedtest_state['progress'] = progress
+                            speedtest_state['current_bandwidth'] = round(mbps, 2)
+                            speedtest_state['results'].append({
+                                'time': interval_count,
+                                'mbps': round(mbps, 2)
+                            })
+
+                            # Emit real-time update
+                            socketio.emit('speedtest_update', {
+                                'status': 'running',
+                                'target_ip': target_ip,
+                                'target_name': target_name,
+                                'progress': progress,
+                                'bandwidth': round(mbps, 2),
+                                'results': list(speedtest_state['results'])
+                            })
+                            break
+
+                    # Track bytes for final result
+                    for i, part in enumerate(parts):
+                        if part == 'MBytes' and i > 0:
+                            total_bytes += float(parts[i-1]) * 1024 * 1024
+                        if part in ['sender', 'receiver'] and i > 1:
+                            try:
+                                total_retransmits += int(parts[i-1])
+                            except ValueError:
+                                pass
+
+                except (ValueError, IndexError):
+                    continue
 
         speedtest_process.wait()
 
         if speedtest_process.returncode == 0:
-            # Parse JSON results
-            try:
-                result = json.loads(output_data)
+            # Calculate final results from collected data
+            avg_mbps = 0
+            if speedtest_state['results']:
+                avg_mbps = sum(r['mbps'] for r in speedtest_state['results']) / len(speedtest_state['results'])
 
-                # Extract interval data for progress display
-                intervals = result.get('intervals', [])
-                total_intervals = len(intervals)
+            final_result = {
+                'upload_mbps': round(avg_mbps, 2),
+                'download_mbps': round(avg_mbps, 2),  # Same as upload for single direction test
+                'bytes_sent': int(total_bytes),
+                'bytes_received': 0,
+                'retransmits': total_retransmits,
+                'duration': duration,
+                'target_ip': target_ip,
+                'target_name': target_name,
+                'timestamp': datetime.now().isoformat()
+            }
 
-                for idx, interval in enumerate(intervals):
-                    streams = interval.get('streams', [{}])
-                    if streams:
-                        stream = streams[0]
-                        bits_per_second = stream.get('bits_per_second', 0)
-                        mbps = bits_per_second / 1_000_000
-                        progress = int((idx + 1) / max(total_intervals, 1) * 100)
+            speedtest_state['final_result'] = final_result
+            speedtest_state['progress'] = 100
 
-                        speedtest_state['progress'] = progress
-                        speedtest_state['current_bandwidth'] = round(mbps, 2)
-                        speedtest_state['results'].append({
-                            'time': idx + 1,
-                            'mbps': round(mbps, 2)
-                        })
+            add_log(f"Speed test complete: {final_result['upload_mbps']} Mbps avg throughput", "INFO")
 
-                        # Emit progress update
-                        socketio.emit('speedtest_update', {
-                            'status': 'running',
-                            'target_ip': target_ip,
-                            'target_name': target_name,
-                            'progress': progress,
-                            'bandwidth': round(mbps, 2),
-                            'results': speedtest_state['results']
-                        })
+            # Emit completion
+            socketio.emit('speedtest_update', {
+                'status': 'complete',
+                'target_ip': target_ip,
+                'target_name': target_name,
+                'progress': 100,
+                'final_result': final_result,
+                'results': list(speedtest_state['results'])
+            })
 
-                # Get final results
-                end = result.get('end', {})
-                sum_sent = end.get('sum_sent', {})
-                sum_received = end.get('sum_received', {})
-
-                final_result = {
-                    'upload_mbps': round(sum_sent.get('bits_per_second', 0) / 1_000_000, 2),
-                    'download_mbps': round(sum_received.get('bits_per_second', 0) / 1_000_000, 2),
-                    'bytes_sent': sum_sent.get('bytes', 0),
-                    'bytes_received': sum_received.get('bytes', 0),
-                    'retransmits': sum_sent.get('retransmits', 0),
-                    'duration': sum_sent.get('seconds', duration),
-                    'target_ip': target_ip,
-                    'target_name': target_name,
-                    'timestamp': datetime.now().isoformat()
-                }
-
-                speedtest_state['final_result'] = final_result
-                speedtest_state['progress'] = 100
-
-                add_log(f"Speed test complete: {final_result['upload_mbps']} Mbps upload, {final_result['download_mbps']} Mbps download", "INFO")
-
-                # Emit completion
-                socketio.emit('speedtest_update', {
-                    'status': 'complete',
-                    'target_ip': target_ip,
-                    'target_name': target_name,
-                    'progress': 100,
-                    'final_result': final_result,
-                    'results': speedtest_state['results']
-                })
-
-            except json.JSONDecodeError as e:
-                speedtest_state['error'] = f"Failed to parse iperf3 output: {e}"
-                add_log(f"Speed test parse error: {e}", "ERROR")
-                socketio.emit('speedtest_update', {
-                    'status': 'error',
-                    'error': speedtest_state['error']
-                })
         else:
             stderr = speedtest_process.stderr.read()
             speedtest_state['error'] = f"iperf3 failed: {stderr}"
