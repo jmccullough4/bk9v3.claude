@@ -5841,7 +5841,7 @@ def get_config():
 def get_version():
     """Get application version from git."""
     version_info = {
-        'version': 'v3.2.0',
+        'version': 'v3.2.1',
         'commit': None,
         'branch': None,
         'session_id': SESSION_ID  # Used by frontend to detect restarts
@@ -5857,7 +5857,7 @@ def get_version():
         if result.returncode == 0:
             commit = result.stdout.strip()
             version_info['commit'] = commit
-            version_info['version'] = f'v3.2.0-{commit}'
+            version_info['version'] = f'v3.2.1-{commit}'
 
         # Get branch name
         result = subprocess.run(
