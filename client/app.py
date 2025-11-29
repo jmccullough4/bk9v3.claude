@@ -3874,7 +3874,7 @@ def start_target_survey(interface='hci0', continuous=False, interval=30):
     target_survey_sweep_count = 0
 
     def survey_worker():
-        global target_survey_active, target_survey_sweep_count
+        global target_survey_active, target_survey_sweep_count, target_survey_continuous
         try:
             while target_survey_active:
                 target_survey_sweep_count += 1
@@ -5841,7 +5841,7 @@ def get_config():
 def get_version():
     """Get application version from git."""
     version_info = {
-        'version': 'v3.2.1',
+        'version': 'v3.2.2',
         'commit': None,
         'branch': None,
         'session_id': SESSION_ID  # Used by frontend to detect restarts
@@ -5857,7 +5857,7 @@ def get_version():
         if result.returncode == 0:
             commit = result.stdout.strip()
             version_info['commit'] = commit
-            version_info['version'] = f'v3.2.1-{commit}'
+            version_info['version'] = f'v3.2.2-{commit}'
 
         # Get branch name
         result = subprocess.run(
