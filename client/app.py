@@ -2497,6 +2497,9 @@ hidden_scan_thread = None
 target_survey_active = False
 target_survey_thread = None
 target_survey_results = {}  # bd_address -> survey result
+target_survey_continuous = False  # Run continuously to monitor target presence
+target_survey_interval = 30  # Seconds between survey sweeps in continuous mode
+target_survey_sweep_count = 0  # Number of completed sweeps
 sdp_probe_cache = {}  # bd_address -> {services: [], timestamp: float}
 address_sweep_results = {}  # oui -> [found_addresses]
 
@@ -3850,33 +3853,93 @@ def target_survey(interface='hci0'):
         # Note: target_survey_active is set to False by start_target_survey() worker
 
 
-def start_target_survey(interface='hci0'):
-    """Start target survey in a background thread."""
-    global target_survey_active, target_survey_thread
+def start_target_survey(interface='hci0', continuous=False, interval=30):
+    """Start target survey in a background thread.
+
+    Args:
+        interface: Bluetooth interface to use (default: hci0)
+        continuous: If True, run continuously with interval between sweeps
+        interval: Seconds between sweeps in continuous mode (default: 30)
+    """
+    global target_survey_active, target_survey_thread, target_survey_continuous
+    global target_survey_interval, target_survey_sweep_count
 
     if target_survey_active:
         add_log("Target survey already running", "WARNING")
         return False
 
     target_survey_active = True
+    target_survey_continuous = continuous
+    target_survey_interval = max(10, interval)  # Minimum 10 seconds between sweeps
+    target_survey_sweep_count = 0
 
     def survey_worker():
-        global target_survey_active
+        global target_survey_active, target_survey_sweep_count
         try:
-            target_survey(interface)
+            while target_survey_active:
+                target_survey_sweep_count += 1
+                sweep_start = time.time()
+
+                # Emit sweep starting event
+                socketio.emit('target_survey_sweep_start', {
+                    'sweep_number': target_survey_sweep_count,
+                    'continuous': target_survey_continuous
+                })
+
+                # Run the survey
+                target_survey(interface)
+
+                sweep_duration = time.time() - sweep_start
+
+                # Emit sweep complete event with results summary
+                found_count = sum(1 for r in target_survey_results.values() if r.get('present'))
+                total_count = len(target_survey_results)
+
+                socketio.emit('target_survey_sweep_complete', {
+                    'sweep_number': target_survey_sweep_count,
+                    'found': found_count,
+                    'total': total_count,
+                    'duration': round(sweep_duration, 1),
+                    'continuous': target_survey_continuous,
+                    'next_sweep_in': target_survey_interval if target_survey_continuous and target_survey_active else None
+                })
+
+                # If not continuous mode, exit after one sweep
+                if not target_survey_continuous:
+                    break
+
+                # If still active and in continuous mode, wait before next sweep
+                if target_survey_active:
+                    add_log(f"Target survey sweep {target_survey_sweep_count} complete. Next sweep in {target_survey_interval}s...", "INFO")
+
+                    # Wait in small increments so we can respond to stop requests quickly
+                    wait_start = time.time()
+                    while target_survey_active and (time.time() - wait_start) < target_survey_interval:
+                        time.sleep(1)
+                        # Emit countdown update every 5 seconds
+                        remaining = target_survey_interval - int(time.time() - wait_start)
+                        if remaining > 0 and remaining % 5 == 0:
+                            socketio.emit('target_survey_countdown', {
+                                'seconds_remaining': remaining,
+                                'sweep_number': target_survey_sweep_count + 1
+                            })
         finally:
             target_survey_active = False
+            target_survey_continuous = False
 
     target_survey_thread = threading.Thread(target=survey_worker, daemon=True)
     target_survey_thread.start()
-    add_log("Target survey started in background", "INFO")
+
+    mode_str = f"continuous (interval: {target_survey_interval}s)" if continuous else "single sweep"
+    add_log(f"Target survey started in background ({mode_str})", "INFO")
     return True
 
 
 def stop_target_survey():
     """Stop the target survey."""
-    global target_survey_active
+    global target_survey_active, target_survey_continuous
     target_survey_active = False
+    target_survey_continuous = False
     add_log("Target survey stop requested", "INFO")
 
 
@@ -6318,11 +6381,15 @@ def target_survey_endpoint():
 
     POST body:
     {
-        "interface": "hci0"  // HCI interface (default: hci0)
+        "interface": "hci0",     // HCI interface (default: hci0)
+        "continuous": true,      // Run continuously (default: false)
+        "interval": 30           // Seconds between sweeps in continuous mode (default: 30, min: 10)
     }
     """
     data = request.json or {}
     interface = data.get('interface', 'hci0')
+    continuous = data.get('continuous', False)
+    interval = data.get('interval', 30)
 
     # Get target count first
     db_targets = get_targets_from_db()
@@ -6332,12 +6399,15 @@ def target_survey_endpoint():
             'message': 'No targets defined. Add targets first.'
         })
 
-    success = start_target_survey(interface)
+    success = start_target_survey(interface, continuous=continuous, interval=interval)
     if success:
+        mode_str = "continuous" if continuous else "single sweep"
         return jsonify({
             'status': 'started',
             'target_count': len(db_targets),
-            'message': f'Probing {len(db_targets)} target(s)...'
+            'continuous': continuous,
+            'interval': max(10, interval) if continuous else None,
+            'message': f'Probing {len(db_targets)} target(s) ({mode_str})...'
         })
     else:
         return jsonify({
@@ -6361,6 +6431,9 @@ def target_survey_status():
     found_count = sum(1 for r in target_survey_results.values() if r.get('present'))
     return jsonify({
         'active': target_survey_active,
+        'continuous': target_survey_continuous,
+        'interval': target_survey_interval,
+        'sweep_count': target_survey_sweep_count,
         'results_count': len(target_survey_results),
         'found_count': found_count,
         'results': list(target_survey_results.values()) if target_survey_results else []
