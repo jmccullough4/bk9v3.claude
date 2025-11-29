@@ -2489,8 +2489,65 @@ def stimulate_bluetooth_classic(interface='hci0'):
 # Global state for advanced scanning
 advanced_scan_active = False
 advanced_scan_thread = None
+hidden_scan_active = False
+hidden_scan_thread = None
 sdp_probe_cache = {}  # bd_address -> {services: [], timestamp: float}
 address_sweep_results = {}  # oui -> [found_addresses]
+
+# Known phone/watch manufacturer OUI prefixes for targeted probing
+# These devices are often non-discoverable but may respond to direct probes
+PHONE_WATCH_OUIS = [
+    # Apple (iPhone, Apple Watch)
+    '000393', '000A27', '000A95', '000D93', '0010FA', '001451', '0016CB', '0017F2',
+    '0019E3', '001B63', '001CB3', '001D4F', '001E52', '001EC2', '001F5B', '001FF3',
+    '002241', '002312', '002332', '002436', '0025BC', '0025DB', '002608', '0026B0',
+    '0026BB', '003065', '00309D', '003EE1', '0050E4', '006171', '006D52', '008865',
+    '00B362', '00C610', '00CDFE', '00F4B9', '00F76F', '041552', '045453', '04D3CF',
+    '04DB56', '04E536', '04F13E', '04F7E4', '086698', '0898E0', '08F4AB', '0C3021',
+    '0C4DE9', '0C74C2', '0C771A', '0CBC9F', '10417F', '109ADD', '10DDB1', '14109F',
+    '1499E2', '14BD61', '18AF61', '18AF8F', '18E7F4', '18EE69', '18F643', '1C1AC0',
+    '1C36BB', '1C5CF2', '1C9148', '1C9E46', '1CABA7', '20768F', '207D74', '209BCD',
+    '20A286', '20C9D0', '244B03', '24A074', '24A2E1', '24AB81', '24E314', '24F094',
+    '280B5C', '283737', '285AEB', '286ABA', '28A02B', '28CFDA', '28CFE9', '28E02C',
+    '28E14C', '28E7CF', '28F076', '2C1F23', '2C200B', '2C3361', '2C3F38', '2CB43A',
+    '2CBE08', '2CF0A2', '2CF0EE', '30636B', '3090AB', '30F7C5', '34363B', '34C059',
+    '34E2FD', '380F4A', '3871DE', '38484C', '38B54D', '38C986', '38CADA', '3C0754',
+    '3C15C2', '3C2EFF', '3CE072', '3CFEC5', '400971', '403004', '40331A', '403CFC',
+    '406C8F', '40A6D9', '40B395', '40D32D', '442A60', '4480EB', '44D884', '44FB42',
+    '483B38', '48437C', '4860BC', '48746E', '48A195', '48BF6B', '48D705', '48E9F1',
+    # Samsung (Galaxy phones, watches)
+    '0017C9', '0018AF', '001A8A', '001EE2', '002119', '0023D6', '0023D7', '0024E9',
+    '002567', '0026E2', '0E38E3', '10D38A', '14B484', '183A2D', '18E2C2', '2013E0',
+    '24924E', '2C0E3D', '2CA835', '302DE8', '340395', '38016C', '380A94', '3C5A37',
+    '3C62C6', '40F3AE', '4844F7', '5056BF', '549B12', '5CA39D', '6077E2', '649ABE',
+    '6C8336', '78471D', '78D6F0', '84119E', '8425DB', '8455A5', '88329B', '8C71F8',
+    '9463D1', '94D771', '983B16', '9C65B0', 'A00798', 'A80600', 'A8F274', 'B8D9CE',
+    'C0BDD1', 'C45006', 'D0176A', 'D4878A', 'D87B1A', 'E0CBEE', 'EC107B', 'F008F1',
+    'F025B7', 'F0728C', 'F49F54', 'F8042E', 'F8D0AC', 'FCA183', 'FCFCB4',
+    # Google (Pixel phones, watches)
+    '3C5AB4', '54609A', '58CB52', '94EB2C', 'A47733', 'F4F5D8', 'F4F5E8', 'F8A9D0',
+    # Garmin (fitness watches)
+    '0080E1', '0019FD', '009069', '00A0BF', '3CF862', '582F40', '78E103', 'A0B3CC',
+    # Fitbit
+    '3C9CC9', '7CB35B', 'C0EEAE', 'DCEF28', 'E85A8B', 'F8ED8B',
+    # Huawei/Honor (phones, watches)
+    '001A8C', '001E10', '002233', '002254', '002568', '04021F', '044F4C', '04BA36',
+    '04C06F', '04F9D9', '082E5F', '083EBD', '0C45C3', '0C96BF', '10051C', '102AB3',
+    # Xiaomi (phones, Mi Band)
+    '04CF8C', '0C1DAF', '18F0E4', '286C07', '28E31F', '2CE029', '34803B', '34CE00',
+    '4C49E3', '50EC50', '5C0A5B', '640980', '6436F3', '64B473', '78024C', '7802F8',
+    '7C1DD9', '7C49EB', '8472A4', '84A93E', '8C451A', '94E979', '98FAE3', '9C99A0',
+    # OnePlus
+    '000272', '30F6EF', '64A2F9', 'C0EEFB', 'D4B27A', 'E0EB10',
+    # Oppo/Realme
+    '0C5F8E', '18F46A', '1C77F6', '248742', '2C8DB1', '3CE576', '505FC7', '5C4A1F',
+]
+
+
+def is_phone_watch_oui(bd_address):
+    """Check if a BD address belongs to a known phone/watch manufacturer."""
+    oui = bd_address.upper().replace(':', '')[:6]
+    return oui in PHONE_WATCH_OUIS
 
 
 def set_hci_scan_parameters(interface='hci0', inquiry_mode='extended', page_scan_type='interlaced'):
@@ -3240,6 +3297,272 @@ def stop_advanced_scan():
     global advanced_scan_active
     advanced_scan_active = False
     add_log("Advanced scan stop requested", "INFO")
+
+
+def hidden_device_hunt(interface='hci0', duration=45):
+    """
+    Aggressive scan specifically designed to detect hidden phones and smartwatches.
+
+    Modern phones and watches are typically "non-discoverable" meaning they don't respond
+    to standard Bluetooth inquiry scans. This function uses multiple techniques:
+
+    1. Extended BLE scanning - Most modern phones/watches use BLE advertisements
+    2. Passive HCI monitoring - Captures any RF activity
+    3. Page scan spoofing - Advertise as common device to trigger reconnects
+    4. Known OUI probing - L2ping probe known phone/watch manufacturer addresses
+    5. Device class filtering - Focus on phone/wearable device classes
+
+    Returns list of detected devices with enhanced classification.
+    """
+    global hidden_scan_active
+
+    if hidden_scan_active:
+        add_log("Hidden device hunt already running", "WARNING")
+        return []
+
+    hidden_scan_active = True
+    devices_found = []
+    seen_addresses = set()
+
+    try:
+        add_log(f"Starting HIDDEN DEVICE HUNT on {interface} ({duration}s)", "INFO")
+        add_log("Targeting: Phones, Smartwatches, Fitness Trackers", "INFO")
+
+        # Phase 1: Configure adapter for maximum sensitivity
+        add_log("Phase 1: Configuring adapter for maximum sensitivity...", "INFO")
+        subprocess.run(['hciconfig', interface, 'up'], capture_output=True, timeout=5)
+        set_hci_scan_parameters(interface, inquiry_mode='extended', page_scan_type='interlaced')
+
+        # Enable page scan to catch paired devices trying to reconnect
+        page_scan_optimization(interface)
+
+        if not hidden_scan_active:
+            return devices_found
+
+        # Phase 2: Extended BLE passive scan (primary method for modern devices)
+        # Most phones/watches advertise via BLE even when Classic is hidden
+        add_log("Phase 2: Extended BLE passive scan (20s)...", "INFO")
+        try:
+            # Use btmgmt for lower-level BLE scanning
+            subprocess.run(['btmgmt', '-i', interface, 'le', 'on'], capture_output=True, timeout=5)
+
+            # Start aggressive BLE scan with duplicate filtering disabled
+            proc = subprocess.Popen(
+                ['stdbuf', '-oL', 'timeout', '20', 'bluetoothctl', 'scan', 'le'],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1
+            )
+
+            for line in iter(proc.stdout.readline, ''):
+                if not hidden_scan_active:
+                    proc.terminate()
+                    break
+                if not line:
+                    break
+                line = line.strip()
+
+                # Parse device discoveries
+                new_match = re.search(r'\[NEW\]\s+Device\s+([0-9A-Fa-f:]{17})\s*(.*)', line)
+                if new_match:
+                    bd_addr = new_match.group(1).upper()
+                    name = new_match.group(2).strip() or None
+
+                    if bd_addr not in seen_addresses:
+                        seen_addresses.add(bd_addr)
+                        manufacturer = get_manufacturer(bd_addr)
+                        is_phone_watch = is_phone_watch_oui(bd_addr)
+
+                        device_info = {
+                            'bd_address': bd_addr,
+                            'device_name': name,
+                            'device_type': 'ble',
+                            'manufacturer': manufacturer,
+                            'discovery_method': 'hidden_hunt_ble',
+                            'is_phone_watch': is_phone_watch
+                        }
+
+                        if is_phone_watch:
+                            add_log(f"[PHONE/WATCH] Found: {bd_addr} ({manufacturer})", "INFO")
+
+                        devices_found.append(device_info)
+
+            proc.wait(timeout=5)
+        except Exception as e:
+            add_log(f"BLE passive scan error: {e}", "DEBUG")
+
+        if not hidden_scan_active:
+            return devices_found
+
+        # Phase 3: Classic inquiry with aggressive parameters
+        add_log("Phase 3: Aggressive Classic inquiry...", "INFO")
+        try:
+            # Use multiple LAP codes
+            lap_codes = ['9e8b33', '9e8b00', '9e8b01']
+
+            for lap in lap_codes:
+                if not hidden_scan_active:
+                    break
+                try:
+                    # Extended inquiry
+                    subprocess.run(
+                        ['hcitool', '-i', interface, 'cmd', '0x01', '0x0001',
+                         lap[4:6], lap[2:4], lap[0:2], '0C', '00'],  # 12*1.28s = ~15s
+                        capture_output=True, text=True, timeout=3
+                    )
+                except:
+                    pass
+
+            # Standard inquiry with flush
+            result = subprocess.run(
+                ['hcitool', '-i', interface, 'inq', '--flush', '--length=10'],
+                capture_output=True, text=True, timeout=20
+            )
+
+            for line in result.stdout.splitlines():
+                match = re.search(r'([0-9A-Fa-f:]{17})', line)
+                if match:
+                    bd_addr = match.group(1).upper()
+                    if bd_addr not in seen_addresses:
+                        seen_addresses.add(bd_addr)
+                        manufacturer = get_manufacturer(bd_addr)
+                        is_phone_watch = is_phone_watch_oui(bd_addr)
+
+                        # Parse device class if available
+                        class_match = re.search(r'class:\s*0x([0-9a-fA-F]+)', line)
+                        device_class = class_match.group(1) if class_match else None
+
+                        device_info = {
+                            'bd_address': bd_addr,
+                            'device_name': None,
+                            'device_type': 'classic',
+                            'manufacturer': manufacturer,
+                            'device_class': device_class,
+                            'discovery_method': 'hidden_hunt_inquiry',
+                            'is_phone_watch': is_phone_watch
+                        }
+
+                        if is_phone_watch:
+                            add_log(f"[PHONE/WATCH] Found Classic: {bd_addr} ({manufacturer})", "INFO")
+
+                        devices_found.append(device_info)
+
+        except subprocess.TimeoutExpired:
+            pass
+        except Exception as e:
+            add_log(f"Classic inquiry error: {e}", "DEBUG")
+
+        if not hidden_scan_active:
+            return devices_found
+
+        # Phase 4: Probe known devices from previous scans
+        # L2ping devices with phone/watch OUIs that we've seen before
+        add_log("Phase 4: Probing known phone/watch addresses...", "INFO")
+        try:
+            probed = 0
+            max_probes = 20  # Limit to avoid excessive time
+
+            # Get addresses from current device list that are phone/watch OUIs
+            with devices_lock:
+                known_phone_addresses = [
+                    addr for addr, dev in devices.items()
+                    if is_phone_watch_oui(addr) and addr not in seen_addresses
+                ]
+
+            for bd_addr in known_phone_addresses[:max_probes]:
+                if not hidden_scan_active:
+                    break
+
+                try:
+                    result = subprocess.run(
+                        ['l2ping', '-i', interface, '-c', '1', '-t', '2', bd_addr],
+                        capture_output=True, text=True, timeout=4
+                    )
+
+                    if 'bytes from' in result.stdout or 'time=' in result.stdout:
+                        add_log(f"[PHONE/WATCH] Confirmed active: {bd_addr}", "INFO")
+                        seen_addresses.add(bd_addr)
+
+                        # Update last seen in existing device
+                        with devices_lock:
+                            if bd_addr in devices:
+                                devices[bd_addr]['last_seen'] = datetime.now(timezone.utc).isoformat()
+
+                        probed += 1
+                except:
+                    pass
+
+            add_log(f"Probed {probed} known phone/watch devices", "DEBUG")
+
+        except Exception as e:
+            add_log(f"Known device probe error: {e}", "DEBUG")
+
+        if not hidden_scan_active:
+            return devices_found
+
+        # Phase 5: Name resolution for discovered devices
+        add_log("Phase 5: Resolving device names...", "INFO")
+        for dev in devices_found:
+            if not hidden_scan_active:
+                break
+            if dev.get('device_name') is None:
+                try:
+                    result = subprocess.run(
+                        ['hcitool', '-i', interface, 'name', dev['bd_address']],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    name = result.stdout.strip()
+                    if name and len(name) > 0 and name != dev['bd_address']:
+                        dev['device_name'] = name
+                        if dev.get('is_phone_watch'):
+                            add_log(f"[PHONE/WATCH] Name resolved: {dev['bd_address']} = {name}", "INFO")
+                except:
+                    pass
+
+        # Summary
+        phone_watch_count = sum(1 for d in devices_found if d.get('is_phone_watch'))
+        add_log(f"Hidden device hunt complete: {len(devices_found)} devices ({phone_watch_count} phones/watches)", "INFO")
+
+        return devices_found
+
+    except Exception as e:
+        add_log(f"Hidden device hunt error: {e}", "ERROR")
+        return devices_found
+    finally:
+        hidden_scan_active = False
+
+
+def start_hidden_device_hunt(interface='hci0', duration=45):
+    """Start hidden device hunt in a background thread."""
+    global hidden_scan_active, hidden_scan_thread
+
+    if hidden_scan_active:
+        add_log("Hidden device hunt already running", "WARNING")
+        return False
+
+    hidden_scan_active = True
+
+    def hunt_worker():
+        global hidden_scan_active
+        try:
+            results = hidden_device_hunt(interface, duration)
+            for dev in results:
+                process_found_device(dev)
+        finally:
+            hidden_scan_active = False
+
+    hidden_scan_thread = threading.Thread(target=hunt_worker, daemon=True)
+    hidden_scan_thread.start()
+    add_log("Hidden device hunt started in background", "INFO")
+    return True
+
+
+def stop_hidden_device_hunt():
+    """Stop the hidden device hunt."""
+    global hidden_scan_active
+    hidden_scan_active = False
+    add_log("Hidden device hunt stop requested", "INFO")
 
 
 def stimulate_ble_devices(interface='hci0'):
@@ -5176,18 +5499,27 @@ def get_version():
 @app.route('/api/updates/check', methods=['GET'])
 @login_required
 def check_for_updates():
-    """Check if updates are available from GitHub."""
+    """Check if updates are available from GitHub for the current branch."""
     update_info = {
         'current_commit': None,
         'remote_commit': None,
         'update_available': False,
         'commits_behind': 0,
         'recent_changes': [],
+        'current_branch': None,
         'error': None
     }
 
     try:
         install_dir = '/apps/bk9v3.claude'
+
+        # Get current branch
+        result = subprocess.run(
+            ['git', 'rev-parse', '--abbrev-ref', 'HEAD'],
+            capture_output=True, text=True, timeout=5, cwd=install_dir
+        )
+        current_branch = result.stdout.strip() if result.returncode == 0 else 'main'
+        update_info['current_branch'] = current_branch
 
         # Get current commit
         result = subprocess.run(
@@ -5197,23 +5529,29 @@ def check_for_updates():
         if result.returncode == 0:
             update_info['current_commit'] = result.stdout.strip()
 
-        # Fetch from remote
+        # Fetch from remote (fetch all branches)
         subprocess.run(
-            ['git', 'fetch', 'origin'],
+            ['git', 'fetch', 'origin', '--prune'],
             capture_output=True, text=True, timeout=30, cwd=install_dir
         )
 
-        # Get remote commit
+        # Get remote commit for the current branch
+        remote_ref = f'origin/{current_branch}'
         result = subprocess.run(
-            ['git', 'rev-parse', '--short', 'origin/main'],
+            ['git', 'rev-parse', '--short', remote_ref],
             capture_output=True, text=True, timeout=5, cwd=install_dir
         )
         if result.returncode != 0:
-            # Try master branch
-            result = subprocess.run(
-                ['git', 'rev-parse', '--short', 'origin/master'],
-                capture_output=True, text=True, timeout=5, cwd=install_dir
-            )
+            # If current branch doesn't exist on remote, try main/master
+            for fallback in ['origin/main', 'origin/master']:
+                result = subprocess.run(
+                    ['git', 'rev-parse', '--short', fallback],
+                    capture_output=True, text=True, timeout=5, cwd=install_dir
+                )
+                if result.returncode == 0:
+                    remote_ref = fallback
+                    break
+
         if result.returncode == 0:
             update_info['remote_commit'] = result.stdout.strip()
 
@@ -5223,20 +5561,25 @@ def check_for_updates():
 
             # Count commits behind
             result = subprocess.run(
-                ['git', 'rev-list', '--count', f'HEAD..origin/main'],
+                ['git', 'rev-list', '--count', f'HEAD..{remote_ref}'],
                 capture_output=True, text=True, timeout=5, cwd=install_dir
             )
             if result.returncode == 0:
-                update_info['commits_behind'] = int(result.stdout.strip())
+                try:
+                    update_info['commits_behind'] = int(result.stdout.strip())
+                except ValueError:
+                    update_info['commits_behind'] = 0
 
             # Get recent changes on remote
-            if update_info['update_available']:
+            if update_info['update_available'] and update_info['commits_behind'] > 0:
                 result = subprocess.run(
-                    ['git', 'log', '--oneline', '-10', 'HEAD..origin/main'],
+                    ['git', 'log', '--oneline', '-10', f'HEAD..{remote_ref}'],
                     capture_output=True, text=True, timeout=5, cwd=install_dir
                 )
                 if result.returncode == 0 and result.stdout.strip():
                     update_info['recent_changes'] = result.stdout.strip().split('\n')
+
+        add_log(f"Update check: {current_branch} @ {update_info['current_commit']} -> {update_info['remote_commit']} ({update_info['commits_behind']} behind)", "DEBUG")
 
     except subprocess.TimeoutExpired:
         update_info['error'] = 'Timeout checking for updates'
@@ -5254,6 +5597,7 @@ def apply_updates():
         'success': False,
         'old_commit': None,
         'new_commit': None,
+        'current_branch': None,
         'changes': [],
         'error': None,
         'restart_required': True,
@@ -5262,6 +5606,14 @@ def apply_updates():
 
     try:
         install_dir = '/apps/bk9v3.claude'
+
+        # Get current branch
+        proc = subprocess.run(
+            ['git', 'rev-parse', '--abbrev-ref', 'HEAD'],
+            capture_output=True, text=True, timeout=5, cwd=install_dir
+        )
+        current_branch = proc.stdout.strip() if proc.returncode == 0 else 'main'
+        result['current_branch'] = current_branch
 
         # Get current commit
         proc = subprocess.run(
@@ -5273,13 +5625,20 @@ def apply_updates():
         # Stash any local changes
         subprocess.run(['git', 'stash'], capture_output=True, timeout=10, cwd=install_dir)
 
-        # Pull updates
+        # Pull updates from the current branch
+        add_log(f"Pulling updates for branch: {current_branch}", "INFO")
         proc = subprocess.run(
-            ['git', 'pull', 'origin', 'main'],
+            ['git', 'pull', 'origin', current_branch],
             capture_output=True, text=True, timeout=60, cwd=install_dir
         )
         if proc.returncode != 0:
-            # Try master
+            # Try main as fallback
+            proc = subprocess.run(
+                ['git', 'pull', 'origin', 'main'],
+                capture_output=True, text=True, timeout=60, cwd=install_dir
+            )
+        if proc.returncode != 0:
+            # Try master as last fallback
             proc = subprocess.run(
                 ['git', 'pull', 'origin', 'master'],
                 capture_output=True, text=True, timeout=60, cwd=install_dir
@@ -5441,12 +5800,31 @@ def start_scan():
 @app.route('/api/scan/stop', methods=['POST'])
 @login_required
 def stop_scan():
-    """Stop scanning."""
-    global scanning_active
-    scanning_active = False
+    """Stop all active scanning operations."""
+    global scanning_active, advanced_scan_active, hidden_scan_active
+
+    stopped = []
+
+    # Stop regular scanning
+    if scanning_active:
+        scanning_active = False
+        stopped.append('scan')
+
     # Stop btmon
     stop_btmon()
-    return jsonify({'status': 'stopped'})
+
+    # Stop advanced scan if running
+    if advanced_scan_active:
+        stop_advanced_scan()
+        stopped.append('advanced')
+
+    # Stop hidden device hunt if running
+    if hidden_scan_active:
+        stop_hidden_device_hunt()
+        stopped.append('hidden')
+
+    add_log(f"Scan stop requested. Stopped: {', '.join(stopped) if stopped else 'none active'}", "INFO")
+    return jsonify({'status': 'stopped', 'stopped': stopped})
 
 
 @app.route('/api/scan/stimulate', methods=['POST'])
@@ -5554,6 +5932,60 @@ def stop_advanced():
     """Stop the running advanced scan."""
     stop_advanced_scan()
     return jsonify({'status': 'stopped'})
+
+
+@app.route('/api/scan/hidden', methods=['POST'])
+@login_required
+def hidden_scan_endpoint():
+    """
+    Run hidden device hunt specifically targeting phones and smartwatches.
+
+    This scan uses multiple techniques to detect non-discoverable devices:
+    - Extended BLE scanning (most modern phones use BLE)
+    - Aggressive Classic inquiry with multiple LAP codes
+    - L2ping probing of known phone/watch manufacturer OUIs
+    - Page scan optimization to catch paired devices
+
+    POST body:
+    {
+        "interface": "hci0",  // HCI interface (default: hci0)
+        "duration": 45        // Scan duration in seconds (default: 45)
+    }
+    """
+    data = request.json or {}
+    interface = data.get('interface', 'hci0')
+    duration = data.get('duration', 45)
+
+    success = start_hidden_device_hunt(interface, duration)
+    if success:
+        return jsonify({
+            'status': 'started',
+            'interface': interface,
+            'duration': duration,
+            'message': 'Hidden device hunt running in background - targeting phones/watches'
+        })
+    else:
+        return jsonify({
+            'status': 'error',
+            'message': 'Hidden device hunt already running'
+        }), 409
+
+
+@app.route('/api/scan/hidden/stop', methods=['POST'])
+@login_required
+def stop_hidden():
+    """Stop the running hidden device hunt."""
+    stop_hidden_device_hunt()
+    return jsonify({'status': 'stopped'})
+
+
+@app.route('/api/scan/hidden/status', methods=['GET'])
+@login_required
+def hidden_scan_status():
+    """Get status of hidden device hunt."""
+    return jsonify({
+        'active': hidden_scan_active
+    })
 
 
 @app.route('/api/scan/advanced/status', methods=['GET'])

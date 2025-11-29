@@ -3435,6 +3435,76 @@ body.resizing-vertical * {
     letter-spacing: 1px;
 }
 
+.restart-phase-list {
+    margin: 20px 0;
+    text-align: left;
+    display: inline-block;
+}
+
+.restart-phase {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 0;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 13px;
+    opacity: 0.5;
+    transition: all 0.3s ease;
+}
+
+.restart-phase.active {
+    color: var(--accent-primary);
+    opacity: 1;
+}
+
+.restart-phase.completed {
+    color: var(--accent-success);
+    opacity: 0.8;
+}
+
+.restart-phase .phase-icon {
+    font-size: 10px;
+}
+
+.restart-phase.completed .phase-icon {
+    color: var(--accent-success);
+}
+
+.restart-countdown {
+    margin-top: 30px;
+    padding: 20px;
+    border: 2px solid var(--accent-primary);
+    border-radius: 8px;
+    display: inline-block;
+    background: rgba(0, 212, 255, 0.1);
+}
+
+.restart-countdown.hidden {
+    display: none;
+}
+
+.restart-countdown .countdown-number {
+    font-family: var(--font-mono);
+    font-size: 48px;
+    color: var(--accent-primary);
+    display: block;
+    text-shadow: 0 0 20px rgba(0, 212, 255, 0.5);
+    animation: countdown-pulse 1s ease-in-out infinite;
+}
+
+.restart-countdown .countdown-label {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text-secondary);
+    letter-spacing: 2px;
+}
+
+@keyframes countdown-pulse {
+    0%, 100% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.05); opacity: 0.8; }
+}
+
 /* ==================== DIRECTION FINDER ==================== */
 
 .direction-finder {

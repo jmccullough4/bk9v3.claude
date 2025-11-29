@@ -1285,6 +1285,7 @@ function clearAllDevices() {
 // Scan mode descriptions for UI feedback
 const SCAN_MODE_INFO = {
     'quick': 'Standard inquiry - discoverable devices only',
+    'hidden_hunt': 'Targeting hidden phones/watches - BLE+Classic+OUI probing',
     'stimulate_classic': 'Multi-LAP stimulation for Classic BT devices',
     'stimulate_ble': 'Extended LE scan for BLE devices',
     'aggressive_inquiry': 'Extended inquiry with 7 LAP codes, interlaced scanning',
@@ -1301,6 +1302,9 @@ function startScan() {
     switch(mode) {
         case 'quick':
             startQuickScan();
+            break;
+        case 'hidden_hunt':
+            startHiddenDeviceHunt();
             break;
         case 'stimulate_classic':
             startStimulationScan('classic');
@@ -1431,6 +1435,63 @@ function pollAdvancedScanStatus(opId) {
             } else {
                 removeOperation(opId);
                 addLogEntry('Advanced scan complete', 'INFO');
+                hideScanInfo();
+            }
+        })
+        .catch(() => {
+            removeOperation(opId);
+            hideScanInfo();
+        });
+}
+
+function startHiddenDeviceHunt() {
+    const opId = `hidden-${Date.now()}`;
+    addOperation(opId, 'HUNT', 'Hidden Device Hunt (Phones/Watches)', {
+        cancellable: true,
+        cancelFn: () => {
+            fetch('/api/scan/hidden/stop', { method: 'POST' });
+        }
+    });
+    addLogEntry('Starting HIDDEN DEVICE HUNT - targeting phones, smartwatches, fitness trackers...', 'INFO');
+    updateScanStatus(true);
+
+    // Also start background scanning for btmon RSSI capture
+    fetch('/api/scan/start', { method: 'POST' }).catch(() => {});
+
+    fetch('/api/scan/hidden', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ duration: 45 })
+    })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'started') {
+                addLogEntry('Hidden device hunt running - 5 phase detection in progress...', 'INFO');
+                // Poll for completion
+                pollHiddenScanStatus(opId);
+            } else {
+                removeOperation(opId);
+                addLogEntry(`Hidden device hunt: ${data.message || 'error'}`, 'WARNING');
+                hideScanInfo();
+            }
+        })
+        .catch(error => {
+            removeOperation(opId);
+            addLogEntry('Hidden device hunt failed: ' + error, 'ERROR');
+            hideScanInfo();
+        });
+}
+
+function pollHiddenScanStatus(opId) {
+    fetch('/api/scan/hidden/status')
+        .then(response => response.json())
+        .then(data => {
+            if (data.active) {
+                // Still running, poll again
+                setTimeout(() => pollHiddenScanStatus(opId), 2000);
+            } else {
+                removeOperation(opId);
+                addLogEntry('Hidden device hunt complete', 'INFO');
                 hideScanInfo();
             }
         })
@@ -4418,6 +4479,7 @@ function applyUpdates() {
                                 <span class="update-label">NEW COMMIT:</span>
                                 <span class="update-value commit new">${data.new_commit ? data.new_commit.substring(0, 8) : '--'}</span>
                             </div>
+                            ${data.current_branch ? `<div class="update-info-item"><span class="update-label">BRANCH:</span><span class="update-value">${data.current_branch}</span></div>` : ''}
                             ${changesHtml ? '<div class="applied-changes">' + changesHtml + '</div>' : ''}
                         </div>
                         <div class="restart-notice auto-restart">
@@ -4427,10 +4489,19 @@ function applyUpdates() {
                     `;
                     addLogEntry(`Update applied successfully: ${data.new_commit?.substring(0, 8)} - Auto-restarting...`, 'INFO');
 
-                    // Show the restart overlay and start polling
-                    showRestartOverlay();
-                    updateRestartStatus('Applying update and restarting...');
-                    pollForServerRestart();
+                    // Show the update-specific overlay and start polling
+                    showRestartOverlay('update');
+                    updateRestartPhase('apply');
+                    updateRestartProgress(30);
+                    updateRestartStatus('Update applied, restarting services...');
+
+                    // After a moment, switch to restart phase
+                    setTimeout(() => {
+                        updateRestartPhase('restart');
+                        updateRestartProgress(60);
+                        updateRestartStatus('Waiting for server to restart...');
+                        pollForServerRestart();
+                    }, 2000);
                 } else {
                     details.innerHTML = `
                         <div class="update-success">
@@ -4529,10 +4600,64 @@ function restartSystem() {
         });
 }
 
-function showRestartOverlay() {
+function showRestartOverlay(mode = 'restart') {
     const overlay = document.getElementById('restartOverlay');
+    const title = document.getElementById('restartTitle');
+    const subtext = document.getElementById('restartSubtext');
+    const phaseList = document.getElementById('restartPhaseList');
+    const countdown = document.getElementById('restartCountdown');
+
     if (overlay) {
         overlay.classList.remove('hidden');
+    }
+
+    // Configure based on mode
+    if (mode === 'update') {
+        if (title) title.textContent = 'APPLYING UPDATE';
+        if (subtext) subtext.textContent = 'BlueK9 is updating and will restart automatically...';
+        if (phaseList) {
+            phaseList.innerHTML = `
+                <div class="restart-phase active" id="phase-download">
+                    <span class="phase-icon">&#9679;</span>
+                    <span class="phase-text">Downloading updates...</span>
+                </div>
+                <div class="restart-phase" id="phase-apply">
+                    <span class="phase-icon">&#9675;</span>
+                    <span class="phase-text">Applying changes...</span>
+                </div>
+                <div class="restart-phase" id="phase-restart">
+                    <span class="phase-icon">&#9675;</span>
+                    <span class="phase-text">Restarting services...</span>
+                </div>
+                <div class="restart-phase" id="phase-ready">
+                    <span class="phase-icon">&#9675;</span>
+                    <span class="phase-text">System ready</span>
+                </div>
+            `;
+        }
+    } else {
+        if (title) title.textContent = 'SYSTEM RESTARTING';
+        if (subtext) subtext.textContent = 'Please wait while BlueK9 reinitializes...';
+        if (phaseList) {
+            phaseList.innerHTML = `
+                <div class="restart-phase active" id="phase-stop">
+                    <span class="phase-icon">&#9679;</span>
+                    <span class="phase-text">Stopping services...</span>
+                </div>
+                <div class="restart-phase" id="phase-restart">
+                    <span class="phase-icon">&#9675;</span>
+                    <span class="phase-text">Restarting...</span>
+                </div>
+                <div class="restart-phase" id="phase-ready">
+                    <span class="phase-icon">&#9675;</span>
+                    <span class="phase-text">System ready</span>
+                </div>
+            `;
+        }
+    }
+
+    if (countdown) {
+        countdown.classList.add('hidden');
     }
 }
 
@@ -4547,6 +4672,31 @@ function updateRestartStatus(status) {
     const statusEl = document.getElementById('restartStatus');
     if (statusEl) {
         statusEl.textContent = status;
+    }
+}
+
+function updateRestartPhase(phaseId) {
+    // Complete previous phases and activate current
+    const phases = document.querySelectorAll('.restart-phase');
+    let foundCurrent = false;
+
+    phases.forEach(phase => {
+        if (phase.id === `phase-${phaseId}`) {
+            phase.classList.add('active');
+            phase.querySelector('.phase-icon').innerHTML = '&#9679;';
+            foundCurrent = true;
+        } else if (!foundCurrent) {
+            phase.classList.remove('active');
+            phase.classList.add('completed');
+            phase.querySelector('.phase-icon').innerHTML = '&#10003;';
+        }
+    });
+}
+
+function updateRestartProgress(percent) {
+    const progressBar = document.getElementById('restartProgressBar');
+    if (progressBar) {
+        progressBar.style.width = `${percent}%`;
     }
 }
 
@@ -4586,18 +4736,36 @@ function pollForServerRestart() {
  */
 function startLoginCountdown(seconds) {
     let remaining = seconds;
+    const countdownEl = document.getElementById('restartCountdown');
+    const countdownNumber = countdownEl?.querySelector('.countdown-number');
+
+    // Show countdown element
+    if (countdownEl) {
+        countdownEl.classList.remove('hidden');
+    }
+
+    // Mark ready phase as complete
+    updateRestartPhase('ready');
+    updateRestartProgress(100);
 
     const countdownInterval = setInterval(() => {
-        updateRestartStatus(`Redirecting to login in ${remaining}...`);
         remaining--;
 
-        if (remaining < 0) {
+        if (countdownNumber) {
+            countdownNumber.textContent = remaining;
+        }
+        updateRestartStatus(`Redirecting to login in ${remaining}...`);
+
+        if (remaining <= 0) {
             clearInterval(countdownInterval);
             window.location.href = '/login';
         }
     }, 1000);
 
     // Initial display
+    if (countdownNumber) {
+        countdownNumber.textContent = remaining;
+    }
     updateRestartStatus(`Redirecting to login in ${remaining}...`);
 }
 

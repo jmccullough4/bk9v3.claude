@@ -58,7 +58,7 @@
         </div>
     </div>
 
-    <!-- Restart Overlay -->
+    <!-- Restart/Update Overlay -->
     <div id="restartOverlay" class="restart-overlay hidden">
         <div class="restart-content">
             <div class="restart-spinner">
@@ -66,12 +66,19 @@
                 <div class="spinner-ring"></div>
                 <div class="spinner-ring"></div>
             </div>
-            <div class="restart-text">SYSTEM RESTARTING</div>
-            <div class="restart-subtext">Please wait while BlueK9 reinitializes...</div>
+            <div class="restart-text" id="restartTitle">SYSTEM RESTARTING</div>
+            <div class="restart-subtext" id="restartSubtext">Please wait while BlueK9 reinitializes...</div>
+            <div class="restart-phase-list" id="restartPhaseList">
+                <!-- Phases populated by JS -->
+            </div>
             <div class="restart-progress">
-                <div class="restart-progress-bar"></div>
+                <div class="restart-progress-bar" id="restartProgressBar"></div>
             </div>
             <div class="restart-status" id="restartStatus">Stopping services...</div>
+            <div class="restart-countdown hidden" id="restartCountdown">
+                <span class="countdown-number">10</span>
+                <span class="countdown-label">SECONDS</span>
+            </div>
         </div>
     </div>
 
@@ -940,6 +947,7 @@
                             <label class="scan-mode-label">MODE:</label>
                             <select class="scan-mode-select" id="scanModeSelect">
                                 <option value="quick">QUICK SCAN</option>
+                                <option value="hidden_hunt">HIDDEN DEVICE HUNT (PHONES/WATCHES)</option>
                                 <option value="stimulate_classic">STIMULATE (CLASSIC)</option>
                                 <option value="stimulate_ble">STIMULATE (BLE)</option>
                                 <option value="aggressive_inquiry">AGGRESSIVE INQUIRY</option>
