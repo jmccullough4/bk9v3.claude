@@ -1282,16 +1282,178 @@ function clearAllDevices() {
 
 // ==================== SCAN CONTROLS ====================
 
+// Scan mode descriptions for UI feedback
+const SCAN_MODE_INFO = {
+    'quick': 'Standard inquiry - discoverable devices only',
+    'stimulate_classic': 'Multi-LAP stimulation for Classic BT devices',
+    'stimulate_ble': 'Extended LE scan for BLE devices',
+    'aggressive_inquiry': 'Extended inquiry with 7 LAP codes, interlaced scanning',
+    'advanced': 'All techniques: HCI optimization, aggressive inquiry, SDP probes, address sweeps'
+};
+
 function startScan() {
+    const modeSelect = document.getElementById('scanModeSelect');
+    const mode = modeSelect ? modeSelect.value : 'quick';
+
+    // Show scan info
+    showScanInfo(SCAN_MODE_INFO[mode] || 'Scanning...');
+
+    switch(mode) {
+        case 'quick':
+            startQuickScan();
+            break;
+        case 'stimulate_classic':
+            startStimulationScan('classic');
+            break;
+        case 'stimulate_ble':
+            startStimulationScan('ble');
+            break;
+        case 'aggressive_inquiry':
+            startAggressiveInquiry();
+            break;
+        case 'advanced':
+            startAdvancedScan();
+            break;
+        default:
+            startQuickScan();
+    }
+}
+
+function startQuickScan() {
     fetch('/api/scan/start', { method: 'POST' })
         .then(response => response.json())
         .then(data => {
             updateScanStatus(true);
-            addLogEntry('Scan started', 'INFO');
+            addLogEntry('Quick scan started', 'INFO');
         })
         .catch(error => {
             addLogEntry('Failed to start scan: ' + error, 'ERROR');
+            hideScanInfo();
         });
+}
+
+function startStimulationScan(type) {
+    const opId = `stim-${type}-${Date.now()}`;
+    const label = type === 'ble' ? 'BLE Stimulation' : 'Classic Stimulation';
+    addOperation(opId, 'STIM', label, { cancellable: false });
+    addLogEntry(`Starting ${type} stimulation scan...`, 'INFO');
+
+    // Also start normal scanning
+    fetch('/api/scan/start', { method: 'POST' }).catch(() => {});
+    updateScanStatus(true);
+
+    fetch('/api/scan/stimulate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: type })
+    })
+        .then(response => response.json())
+        .then(data => {
+            removeOperation(opId);
+            addLogEntry(`Stimulation complete: ${data.count} devices found`, 'INFO');
+            hideScanInfo();
+        })
+        .catch(error => {
+            removeOperation(opId);
+            addLogEntry('Stimulation failed: ' + error, 'ERROR');
+            hideScanInfo();
+        });
+}
+
+function startAggressiveInquiry() {
+    const opId = `aggressive-${Date.now()}`;
+    addOperation(opId, 'AGG', 'Aggressive Inquiry', { cancellable: true });
+    addLogEntry('Starting aggressive inquiry (multi-LAP, interlaced)...', 'INFO');
+
+    // Start background scanning too
+    fetch('/api/scan/start', { method: 'POST' }).catch(() => {});
+    updateScanStatus(true);
+
+    fetch('/api/scan/aggressive', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ duration: 20 })
+    })
+        .then(response => response.json())
+        .then(data => {
+            removeOperation(opId);
+            if (data.status === 'completed') {
+                addLogEntry(`Aggressive inquiry complete: ${data.devices_found || 0} devices`, 'INFO');
+            } else {
+                addLogEntry(`Aggressive inquiry: ${data.message || 'started'}`, 'INFO');
+            }
+            hideScanInfo();
+        })
+        .catch(error => {
+            removeOperation(opId);
+            addLogEntry('Aggressive inquiry failed: ' + error, 'ERROR');
+            hideScanInfo();
+        });
+}
+
+function startAdvancedScan() {
+    const opId = `advanced-${Date.now()}`;
+    addOperation(opId, 'ADV', 'Advanced Scan (All Techniques)', { cancellable: true });
+    addLogEntry('Starting advanced scan (all techniques)...', 'INFO');
+    updateScanStatus(true);
+
+    fetch('/api/scan/advanced', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ duration: 30, aggressive: true })
+    })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'started') {
+                addLogEntry('Advanced scan running in background...', 'INFO');
+                // Poll for completion
+                pollAdvancedScanStatus(opId);
+            } else {
+                removeOperation(opId);
+                addLogEntry(`Advanced scan: ${data.message || 'error'}`, 'WARNING');
+                hideScanInfo();
+            }
+        })
+        .catch(error => {
+            removeOperation(opId);
+            addLogEntry('Advanced scan failed: ' + error, 'ERROR');
+            hideScanInfo();
+        });
+}
+
+function pollAdvancedScanStatus(opId) {
+    fetch('/api/scan/advanced/status')
+        .then(response => response.json())
+        .then(data => {
+            if (data.active) {
+                // Still running, poll again
+                setTimeout(() => pollAdvancedScanStatus(opId), 2000);
+            } else {
+                removeOperation(opId);
+                addLogEntry('Advanced scan complete', 'INFO');
+                hideScanInfo();
+            }
+        })
+        .catch(() => {
+            removeOperation(opId);
+            hideScanInfo();
+        });
+}
+
+function showScanInfo(text) {
+    const infoRow = document.getElementById('scanInfoRow');
+    const infoText = document.getElementById('scanInfoText');
+    if (infoRow && infoText) {
+        infoText.textContent = text;
+        infoRow.style.display = 'block';
+    }
+}
+
+function hideScanInfo() {
+    const infoRow = document.getElementById('scanInfoRow');
+    if (infoRow) {
+        infoRow.style.display = 'none';
+    }
 }
 
 function stopScan() {
@@ -1303,27 +1465,6 @@ function stopScan() {
         })
         .catch(error => {
             addLogEntry('Failed to stop scan: ' + error, 'ERROR');
-        });
-}
-
-function stimulateScan(type) {
-    const opId = `stim-${type}-${Date.now()}`;
-    const label = type === 'ble' ? 'BLE Stimulation' : 'Classic Stimulation';
-    addOperation(opId, 'STIM', label, { cancellable: false });
-    addLogEntry(`Starting ${type} stimulation scan...`, 'INFO');
-    fetch('/api/scan/stimulate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type: type })
-    })
-        .then(response => response.json())
-        .then(data => {
-            removeOperation(opId);
-            addLogEntry(`Stimulation complete: ${data.count} devices found`, 'INFO');
-        })
-        .catch(error => {
-            removeOperation(opId);
-            addLogEntry('Stimulation failed: ' + error, 'ERROR');
         });
 }
 

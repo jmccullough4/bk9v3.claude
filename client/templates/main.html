@@ -936,6 +936,16 @@
                         <span class="section-toggle">&#9660;</span>
                     </div>
                     <div class="section-content">
+                        <div class="scan-mode-row">
+                            <label class="scan-mode-label">MODE:</label>
+                            <select class="scan-mode-select" id="scanModeSelect">
+                                <option value="quick">QUICK SCAN</option>
+                                <option value="stimulate_classic">STIMULATE (CLASSIC)</option>
+                                <option value="stimulate_ble">STIMULATE (BLE)</option>
+                                <option value="aggressive_inquiry">AGGRESSIVE INQUIRY</option>
+                                <option value="advanced" selected>ADVANCED (ALL)</option>
+                            </select>
+                        </div>
                         <div class="btn-group">
                             <button class="btn btn-success" id="btnStartScan" onclick="startScan()">
                                 <span>&#9654;</span> START
@@ -943,6 +953,9 @@
                             <button class="btn btn-danger" id="btnStopScan" onclick="stopScan()" disabled>
                                 <span>&#9632;</span> STOP
                             </button>
+                        </div>
+                        <div class="scan-info-row" id="scanInfoRow" style="display: none;">
+                            <span class="scan-info-text" id="scanInfoText"></span>
                         </div>
                     </div>
                 </div>
