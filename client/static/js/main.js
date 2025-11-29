@@ -6342,8 +6342,9 @@ function updateSettingsLatencyChart() {
 
     const colors = ['#00d4ff', '#00ff88', '#ff6b6b', '#ffaa00', '#aa88ff'];
     const datasets = bluek9Nodes.map((peer, idx) => {
+        const peerId = peer.system_id || peer.ip;  // Same key used in updateLatencyChart()
         const name = truncateHostname(peer.system_name || peer.hostname);
-        const history = peerLatencyHistory[name] || [];
+        const history = peerLatencyHistory[peerId] || [];
 
         return {
             label: name,
@@ -6754,6 +6755,9 @@ function initPeerLatencyChart() {
         peerLatencyChart.destroy();
     }
 
+    // Clear latency history when reinitializing chart
+    peerLatencyHistory = {};
+
     peerLatencyChart = new Chart(ctx, {
         type: 'line',
         data: {
@@ -6920,7 +6924,16 @@ function updateLatencyChart(bluek9Nodes) {
     if (!peerLatencyChart || !showNetworkStats) return;
 
     const maxDataPoints = 30;  // Keep last 30 data points
-    const timestamp = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+    // Get current peer IDs
+    const currentPeerIds = new Set(bluek9Nodes.map(p => p.system_id || p.ip));
+
+    // Remove stale peer entries from history
+    Object.keys(peerLatencyHistory).forEach(peerId => {
+        if (!currentPeerIds.has(peerId)) {
+            delete peerLatencyHistory[peerId];
+        }
+    });
 
     // Update history for each peer
     bluek9Nodes.forEach(peer => {
@@ -6961,12 +6974,10 @@ function updateLatencyChart(bluek9Nodes) {
         colorIdx++;
     });
 
-    // Update labels (time points)
-    const labels = [];
-    const maxLen = Math.max(...Object.values(peerLatencyHistory).map(h => h.length), 1);
-    for (let i = 0; i < maxLen; i++) {
-        labels.push('');
-    }
+    // Update labels (time points) - based only on current peer histories
+    const histories = Object.values(peerLatencyHistory);
+    const maxLen = histories.length > 0 ? Math.max(...histories.map(h => h.length)) : 1;
+    const labels = Array(maxLen).fill('');
 
     peerLatencyChart.data.labels = labels;
     peerLatencyChart.data.datasets = datasets;
