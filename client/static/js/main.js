@@ -323,6 +323,30 @@ function initWebSocket() {
         addLogEntry(`Target survey complete: ${data.found}/${data.total} targets detected`, 'INFO');
     });
 
+    // Continuous survey events
+    socket.on('target_survey_sweep_start', (data) => {
+        if (data.continuous) {
+            addLogEntry(`Starting sweep #${data.sweep_number}...`, 'DEBUG');
+        }
+    });
+
+    socket.on('target_survey_sweep_complete', (data) => {
+        if (data.continuous) {
+            const status = data.found > 0 ? 'WARNING' : 'INFO';
+            addLogEntry(`Sweep #${data.sweep_number} complete: ${data.found}/${data.total} targets detected (${data.duration}s)`, status);
+            if (data.next_sweep_in) {
+                addLogEntry(`Next sweep in ${data.next_sweep_in}s...`, 'DEBUG');
+            }
+        }
+    });
+
+    socket.on('target_survey_countdown', (data) => {
+        // Optional: Could update a countdown display, for now just log at key points
+        if (data.seconds_remaining === 10) {
+            addLogEntry(`Sweep #${data.sweep_number} starting in ${data.seconds_remaining}s...`, 'DEBUG');
+        }
+    });
+
     socket.on('device_info', (info) => {
         showDeviceInfo(info);
     });
@@ -1306,7 +1330,7 @@ function clearAllDevices() {
 // Scan mode descriptions for UI feedback
 const SCAN_MODE_INFO = {
     'quick': 'Standard inquiry - discoverable devices only',
-    'target_survey': 'Active probe of all targets - L2PING, SDP, Name, RSSI',
+    'target_survey': 'Continuous target monitoring - L2PING, SDP, Name, RSSI (runs until stopped)',
     'hidden_hunt': 'Targeting hidden phones/watches - BLE+Classic+OUI probing',
     'stimulate_classic': 'Multi-LAP stimulation for Classic BT devices',
     'stimulate_ble': 'Extended LE scan for BLE devices',
@@ -1363,25 +1387,29 @@ function startQuickScan() {
 
 function startTargetSurvey() {
     const opId = `survey-${Date.now()}`;
-    addOperation(opId, 'SURVEY', 'Target Survey (Probing All Targets)', {
+    addOperation(opId, 'SURVEY', 'Target Survey (Continuous Monitoring)', {
         cancellable: true,
         cancelFn: () => {
             fetch('/api/scan/target_survey/stop', { method: 'POST' });
         }
     });
-    addLogEntry('Starting TARGET SURVEY - actively probing all targets...', 'INFO');
+    addLogEntry('Starting CONTINUOUS TARGET SURVEY - monitoring all targets...', 'INFO');
     updateScanStatus(true);
 
+    // Always run in continuous mode with 30 second intervals
     fetch('/api/scan/target_survey', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({})
+        body: JSON.stringify({
+            continuous: true,
+            interval: 30
+        })
     })
         .then(response => response.json())
         .then(data => {
             if (data.status === 'started') {
-                addLogEntry(`Target survey running - probing ${data.target_count} target(s)...`, 'INFO');
-                // Poll for completion
+                addLogEntry(`Continuous target survey started - monitoring ${data.target_count} target(s) every ${data.interval}s`, 'INFO');
+                // Poll to keep operation status updated (and detect if survey stops)
                 pollTargetSurveyStatus(opId);
             } else if (data.status === 'no_targets') {
                 removeOperation(opId);
@@ -1406,14 +1434,20 @@ function pollTargetSurveyStatus(opId) {
         .then(response => response.json())
         .then(data => {
             if (data.active) {
-                // Still running, poll again
-                setTimeout(() => pollTargetSurveyStatus(opId), 2000);
+                // Still running - update operation label with sweep count if continuous
+                if (data.continuous && data.sweep_count > 0) {
+                    updateOperationLabel(opId, `Target Survey (Sweep #${data.sweep_count} - ${data.found_count}/${data.results_count} detected)`);
+                }
+                // Poll again
+                setTimeout(() => pollTargetSurveyStatus(opId), 3000);
             } else {
                 removeOperation(opId);
                 const foundCount = data.found_count || 0;
                 const totalCount = data.results_count || 0;
-                addLogEntry(`Target survey complete: ${foundCount}/${totalCount} targets detected`, 'INFO');
+                const sweepCount = data.sweep_count || 1;
+                addLogEntry(`Target survey stopped after ${sweepCount} sweep(s): ${foundCount}/${totalCount} targets detected`, 'INFO');
                 hideScanInfo();
+                updateScanStatus(false);
             }
         })
         .catch(error => {
@@ -1421,6 +1455,14 @@ function pollTargetSurveyStatus(opId) {
             addLogEntry('Target survey status check failed: ' + error, 'ERROR');
             hideScanInfo();
         });
+}
+
+// Helper to update an operation's label (for showing sweep progress)
+function updateOperationLabel(opId, newLabel) {
+    const opElement = document.querySelector(`[data-operation-id="${opId}"] .operation-label`);
+    if (opElement) {
+        opElement.textContent = newLabel;
+    }
 }
 
 function startStimulationScan(type) {
