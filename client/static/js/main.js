@@ -302,6 +302,27 @@ function initWebSocket() {
         showTargetAlert(data);
     });
 
+    socket.on('target_survey_started', (data) => {
+        addLogEntry(`Target survey started: probing ${data.target_count} target(s)`, 'INFO');
+    });
+
+    socket.on('target_survey_progress', (data) => {
+        const name = data.alias ? `${data.alias} (${data.bd_address})` : data.bd_address;
+        addLogEntry(`Probing target ${data.current}/${data.total}: ${name}`, 'DEBUG');
+    });
+
+    socket.on('target_survey_result', (data) => {
+        const name = data.alias ? `${data.alias} (${data.bd_address})` : data.bd_address;
+        if (data.present) {
+            const methods = data.methods_responded.join(', ');
+            addLogEntry(`TARGET DETECTED: ${name} via ${methods}`, 'WARNING');
+        }
+    });
+
+    socket.on('target_survey_complete', (data) => {
+        addLogEntry(`Target survey complete: ${data.found}/${data.total} targets detected`, 'INFO');
+    });
+
     socket.on('device_info', (info) => {
         showDeviceInfo(info);
     });
@@ -1285,6 +1306,7 @@ function clearAllDevices() {
 // Scan mode descriptions for UI feedback
 const SCAN_MODE_INFO = {
     'quick': 'Standard inquiry - discoverable devices only',
+    'target_survey': 'Active probe of all targets - L2PING, SDP, Name, RSSI',
     'hidden_hunt': 'Targeting hidden phones/watches - BLE+Classic+OUI probing',
     'stimulate_classic': 'Multi-LAP stimulation for Classic BT devices',
     'stimulate_ble': 'Extended LE scan for BLE devices',
@@ -1302,6 +1324,9 @@ function startScan() {
     switch(mode) {
         case 'quick':
             startQuickScan();
+            break;
+        case 'target_survey':
+            startTargetSurvey();
             break;
         case 'hidden_hunt':
             startHiddenDeviceHunt();
@@ -1332,6 +1357,68 @@ function startQuickScan() {
         })
         .catch(error => {
             addLogEntry('Failed to start scan: ' + error, 'ERROR');
+            hideScanInfo();
+        });
+}
+
+function startTargetSurvey() {
+    const opId = `survey-${Date.now()}`;
+    addOperation(opId, 'SURVEY', 'Target Survey (Probing All Targets)', {
+        cancellable: true,
+        cancelFn: () => {
+            fetch('/api/scan/target_survey/stop', { method: 'POST' });
+        }
+    });
+    addLogEntry('Starting TARGET SURVEY - actively probing all targets...', 'INFO');
+    updateScanStatus(true);
+
+    fetch('/api/scan/target_survey', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+    })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'started') {
+                addLogEntry(`Target survey running - probing ${data.target_count} target(s)...`, 'INFO');
+                // Poll for completion
+                pollTargetSurveyStatus(opId);
+            } else if (data.status === 'no_targets') {
+                removeOperation(opId);
+                addLogEntry('No targets defined. Add targets first.', 'WARNING');
+                hideScanInfo();
+                updateScanStatus(false);
+            } else {
+                removeOperation(opId);
+                addLogEntry(`Target survey: ${data.message || 'error'}`, 'WARNING');
+                hideScanInfo();
+            }
+        })
+        .catch(error => {
+            removeOperation(opId);
+            addLogEntry('Target survey failed: ' + error, 'ERROR');
+            hideScanInfo();
+        });
+}
+
+function pollTargetSurveyStatus(opId) {
+    fetch('/api/scan/target_survey/status')
+        .then(response => response.json())
+        .then(data => {
+            if (data.active) {
+                // Still running, poll again
+                setTimeout(() => pollTargetSurveyStatus(opId), 2000);
+            } else {
+                removeOperation(opId);
+                const foundCount = data.found_count || 0;
+                const totalCount = data.results_count || 0;
+                addLogEntry(`Target survey complete: ${foundCount}/${totalCount} targets detected`, 'INFO');
+                hideScanInfo();
+            }
+        })
+        .catch(error => {
+            removeOperation(opId);
+            addLogEntry('Target survey status check failed: ' + error, 'ERROR');
             hideScanInfo();
         });
 }
