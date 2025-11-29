@@ -48,6 +48,11 @@ log_error() {
 # BlueK9 installation directory for auto-update
 BLUEK9_INSTALL_DIR="/apps/bk9v3.claude"
 
+# Ensure proper environment for systemd/cron execution
+# Git requires HOME to find credentials and config
+export HOME="${HOME:-/root}"
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+
 # Auto-update from GitHub
 auto_update() {
     log_info "Checking for updates from GitHub..."
@@ -289,8 +294,65 @@ show_help() {
     echo "Options:"
     echo "  --docker      Start using Docker"
     echo "  --no-update   Skip update check"
+    echo "  --install     Install systemd service for auto-start"
+    echo "  --uninstall   Remove systemd service"
     echo "  --help        Show this help message"
     echo ""
+    echo "Systemd Service:"
+    echo "  To start BlueK9 automatically on boot:"
+    echo "    sudo $0 --install"
+    echo ""
+    echo "  To remove auto-start:"
+    echo "    sudo $0 --uninstall"
+    echo ""
+}
+
+# Install systemd service
+install_service() {
+    log_info "Installing BlueK9 systemd service..."
+
+    SERVICE_FILE="$SCRIPT_DIR/bluek9.service"
+    if [ ! -f "$SERVICE_FILE" ]; then
+        log_error "Service file not found: $SERVICE_FILE"
+        exit 1
+    fi
+
+    # Copy service file
+    cp "$SERVICE_FILE" /etc/systemd/system/bluek9.service
+
+    # Reload systemd
+    systemctl daemon-reload
+
+    # Enable service
+    systemctl enable bluek9.service
+
+    log_info "BlueK9 service installed and enabled"
+    echo ""
+    echo "Commands:"
+    echo "  Start now:     sudo systemctl start bluek9"
+    echo "  Stop:          sudo systemctl stop bluek9"
+    echo "  View logs:     sudo journalctl -u bluek9 -f"
+    echo "  Status:        sudo systemctl status bluek9"
+    echo ""
+}
+
+# Uninstall systemd service
+uninstall_service() {
+    log_info "Removing BlueK9 systemd service..."
+
+    # Stop if running
+    systemctl stop bluek9.service 2>/dev/null || true
+
+    # Disable service
+    systemctl disable bluek9.service 2>/dev/null || true
+
+    # Remove service file
+    rm -f /etc/systemd/system/bluek9.service
+
+    # Reload systemd
+    systemctl daemon-reload
+
+    log_info "BlueK9 service removed"
 }
 
 # Main
@@ -309,6 +371,16 @@ main() {
                 ;;
             --no-update)
                 SKIP_UPDATE=true
+                ;;
+            --install)
+                check_root
+                install_service
+                exit 0
+                ;;
+            --uninstall)
+                check_root
+                uninstall_service
+                exit 0
                 ;;
             --help|-h)
                 show_help
