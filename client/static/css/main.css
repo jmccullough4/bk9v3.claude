@@ -680,6 +680,60 @@ body {
     border-color: var(--accent-primary);
 }
 
+/* Scan Mode Selector */
+.scan-mode-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.scan-mode-label {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+}
+
+.scan-mode-select {
+    flex: 1;
+    padding: 8px 10px;
+    background: rgba(0, 20, 30, 0.8);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.scan-mode-select:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+}
+
+.scan-mode-select option {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    padding: 8px;
+}
+
+.scan-info-row {
+    margin-top: 8px;
+    padding: 6px 8px;
+    background: rgba(0, 255, 255, 0.05);
+    border: 1px solid rgba(0, 255, 255, 0.2);
+    border-radius: 4px;
+}
+
+.scan-info-text {
+    font-size: 10px;
+    color: var(--accent-primary);
+    font-family: var(--font-mono);
+    opacity: 0.9;
+}
+
 /* Toggle Row with inline reset */
 .toggle-row {
     display: flex;

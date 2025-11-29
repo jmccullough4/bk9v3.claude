@@ -5469,6 +5469,51 @@ def stimulate_scan():
     return jsonify({'status': 'completed', 'count': len(devices_found)})
 
 
+@app.route('/api/scan/aggressive', methods=['POST'])
+@login_required
+def aggressive_scan_endpoint():
+    """
+    Run aggressive inquiry scan using multiple LAP codes and interlaced scanning.
+    Faster than full advanced scan but more thorough than quick scan.
+
+    POST body:
+    {
+        "interface": "hci0",  // HCI interface (default: hci0)
+        "duration": 20        // Scan duration in seconds (default: 20)
+    }
+    """
+    data = request.json or {}
+    interface = data.get('interface', 'hci0')
+    duration = data.get('duration', 20)
+
+    try:
+        add_log(f"Starting aggressive inquiry via API ({duration}s)", "INFO")
+
+        # Configure optimal HCI parameters
+        set_hci_scan_parameters(interface, inquiry_mode='extended', page_scan_type='interlaced')
+
+        # Run aggressive inquiry
+        devices_found = aggressive_inquiry(interface, duration)
+
+        # Process found devices
+        for dev in devices_found:
+            process_found_device(dev)
+
+        add_log(f"Aggressive inquiry complete: {len(devices_found)} devices", "INFO")
+        return jsonify({
+            'status': 'completed',
+            'devices_found': len(devices_found),
+            'interface': interface,
+            'duration': duration
+        })
+    except Exception as e:
+        add_log(f"Aggressive inquiry error: {e}", "ERROR")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+
 @app.route('/api/scan/advanced', methods=['POST'])
 @login_required
 def advanced_scan():
