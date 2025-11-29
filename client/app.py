@@ -3572,12 +3572,14 @@ def target_survey(interface='hci0'):
     """
     Actively probe all targets to determine if they are in the area.
 
-    Uses multiple probe techniques against each target BD address:
-    - L2CAP ping (l2ping)
+    Uses aggressive probe techniques against each target BD address:
+    - Multiple HCI name requests with extended page timeout
+    - HCI info inquiry (Read Remote Extended Features)
+    - L2CAP ping
     - SDP probe for services
-    - Name request (hcitool name)
-    - RSSI measurement (requires brief connection)
+    - RSSI measurement
 
+    These methods work on non-discoverable devices that are still connectable.
     Returns dict of BD addresses with their survey results.
     """
     global target_survey_active, target_survey_results
@@ -3603,7 +3605,20 @@ def target_survey(interface='hci0'):
             'targets': [t['bd_address'] for t in db_targets]
         })
 
-        # Optimize HCI parameters for best probe response
+        # Configure HCI for aggressive probing
+        # Set extended page timeout (0x8000 = ~20 seconds max)
+        try:
+            # Write Page Timeout - OGF 0x03, OCF 0x0018
+            # Value 0x6000 = 15.36 seconds (slot = 0.625ms, so 0x6000 * 0.625 = 15360ms)
+            subprocess.run(
+                ['hcitool', '-i', interface, 'cmd', '0x03', '0x0018', '00', '60'],
+                capture_output=True, timeout=3
+            )
+            add_log(f"Set extended page timeout on {interface}", "DEBUG")
+        except Exception as e:
+            add_log(f"Could not set page timeout: {e}", "DEBUG")
+
+        # Set interlaced page scan for faster responses
         set_hci_scan_parameters(interface, inquiry_mode='extended', page_scan_type='interlaced')
 
         for i, target in enumerate(db_targets):
@@ -3630,92 +3645,157 @@ def target_survey(interface='hci0'):
                 'methods_responded': [],
                 'rssi': None,
                 'device_name': None,
+                'device_info': None,
                 'services': [],
                 'probe_time': time.time()
             }
 
-            # Method 1: L2CAP ping (most reliable for Classic BT)
-            try:
-                l2ping_result = subprocess.run(
-                    ['l2ping', '-i', interface, '-c', '2', '-t', '3', bd_address],
-                    capture_output=True, text=True, timeout=8
-                )
-                if 'bytes from' in l2ping_result.stdout.lower():
-                    result['present'] = True
-                    result['methods_responded'].append('l2ping')
-                    # Try to extract RTT
-                    rtt_match = re.search(r'time=(\d+\.?\d*)ms', l2ping_result.stdout)
-                    if rtt_match:
-                        result['rtt_ms'] = float(rtt_match.group(1))
-                    add_log(f"  L2PING: {bd_address} responded", "DEBUG")
-            except subprocess.TimeoutExpired:
-                add_log(f"  L2PING: {bd_address} timeout", "DEBUG")
-            except Exception as e:
-                add_log(f"  L2PING error: {e}", "DEBUG")
-
-            if not target_survey_active:
-                break
-
-            # Method 2: Name request
-            try:
-                name_result = subprocess.run(
-                    ['hcitool', '-i', interface, 'name', bd_address],
-                    capture_output=True, text=True, timeout=10
-                )
-                name = name_result.stdout.strip()
-                if name:
-                    result['present'] = True
-                    result['methods_responded'].append('name')
-                    result['device_name'] = name
-                    add_log(f"  NAME: {bd_address} = '{name}'", "DEBUG")
-            except subprocess.TimeoutExpired:
-                add_log(f"  NAME: {bd_address} timeout", "DEBUG")
-            except Exception as e:
-                add_log(f"  NAME error: {e}", "DEBUG")
-
-            if not target_survey_active:
-                break
-
-            # Method 3: SDP probe (check services)
-            try:
-                sdp_result = sdp_probe(bd_address, interface)
-                if sdp_result['responded']:
-                    result['present'] = True
-                    result['methods_responded'].append('sdp')
-                    result['services'] = sdp_result.get('services', [])
-                    add_log(f"  SDP: {bd_address} has {len(result['services'])} services", "DEBUG")
-            except Exception as e:
-                add_log(f"  SDP error: {e}", "DEBUG")
-
-            if not target_survey_active:
-                break
-
-            # Method 4: RSSI measurement (requires connection)
-            try:
-                # Create connection
-                subprocess.run(['hcitool', '-i', interface, 'cc', bd_address],
-                              capture_output=True, timeout=5)
-                time.sleep(0.3)
-                # Get RSSI
-                rssi_result = subprocess.run(
-                    ['hcitool', '-i', interface, 'rssi', bd_address],
-                    capture_output=True, text=True, timeout=3
-                )
-                rssi_match = re.search(r'RSSI return value:\s*(-?\d+)', rssi_result.stdout)
-                if rssi_match:
-                    result['present'] = True
-                    result['methods_responded'].append('rssi')
-                    result['rssi'] = int(rssi_match.group(1))
-                    add_log(f"  RSSI: {bd_address} = {result['rssi']} dBm", "DEBUG")
-            except Exception as e:
-                add_log(f"  RSSI error: {e}", "DEBUG")
-            finally:
-                # Disconnect
+            # Method 1: Multiple HCI name requests (most effective for non-discoverable)
+            # Try up to 3 times with increasing timeouts
+            for attempt in range(3):
+                if result['device_name'] or not target_survey_active:
+                    break
                 try:
-                    subprocess.run(['hcitool', '-i', interface, 'dc', bd_address],
-                                  capture_output=True, timeout=2)
-                except:
-                    pass
+                    timeout_sec = 8 + (attempt * 4)  # 8s, 12s, 16s
+                    add_log(f"  NAME attempt {attempt+1}/3 (timeout {timeout_sec}s)...", "DEBUG")
+                    name_result = subprocess.run(
+                        ['hcitool', '-i', interface, 'name', bd_address],
+                        capture_output=True, text=True, timeout=timeout_sec
+                    )
+                    name = name_result.stdout.strip()
+                    if name and not name.startswith('n/a') and 'error' not in name.lower():
+                        result['present'] = True
+                        result['methods_responded'].append('name')
+                        result['device_name'] = name
+                        add_log(f"  NAME: {bd_address} = '{name}'", "INFO")
+                        break
+                except subprocess.TimeoutExpired:
+                    add_log(f"  NAME attempt {attempt+1}: timeout", "DEBUG")
+                except Exception as e:
+                    add_log(f"  NAME attempt {attempt+1} error: {e}", "DEBUG")
+
+            if not target_survey_active:
+                break
+
+            # Method 2: HCI info inquiry (Read Remote Extended Features)
+            # This often works even when name request fails
+            if not result['present']:
+                try:
+                    add_log(f"  Trying HCI info inquiry...", "DEBUG")
+                    info_result = subprocess.run(
+                        ['hcitool', '-i', interface, 'info', bd_address],
+                        capture_output=True, text=True, timeout=15
+                    )
+                    output = info_result.stdout
+                    if 'BD Address' in output and 'Device Name' in output:
+                        result['present'] = True
+                        result['methods_responded'].append('info')
+                        # Extract device name from info output
+                        name_match = re.search(r'Device Name:\s*(.+)', output)
+                        if name_match and not result['device_name']:
+                            result['device_name'] = name_match.group(1).strip()
+                        # Extract features
+                        result['device_info'] = output
+                        add_log(f"  INFO: {bd_address} responded", "INFO")
+                    elif info_result.returncode == 0 and output.strip():
+                        # Got some response even if partial
+                        result['present'] = True
+                        result['methods_responded'].append('info_partial')
+                        add_log(f"  INFO: {bd_address} partial response", "DEBUG")
+                except subprocess.TimeoutExpired:
+                    add_log(f"  INFO: {bd_address} timeout", "DEBUG")
+                except Exception as e:
+                    add_log(f"  INFO error: {e}", "DEBUG")
+
+            if not target_survey_active:
+                break
+
+            # Method 3: L2CAP ping (works on connectable devices)
+            if not result['present']:
+                try:
+                    add_log(f"  Trying L2PING...", "DEBUG")
+                    l2ping_result = subprocess.run(
+                        ['l2ping', '-i', interface, '-c', '3', '-t', '5', bd_address],
+                        capture_output=True, text=True, timeout=20
+                    )
+                    if 'bytes from' in l2ping_result.stdout.lower():
+                        result['present'] = True
+                        result['methods_responded'].append('l2ping')
+                        # Extract RTT
+                        rtt_match = re.search(r'time=(\d+\.?\d*)ms', l2ping_result.stdout)
+                        if rtt_match:
+                            result['rtt_ms'] = float(rtt_match.group(1))
+                        add_log(f"  L2PING: {bd_address} responded", "INFO")
+                except subprocess.TimeoutExpired:
+                    add_log(f"  L2PING: {bd_address} timeout", "DEBUG")
+                except Exception as e:
+                    add_log(f"  L2PING error: {e}", "DEBUG")
+
+            if not target_survey_active:
+                break
+
+            # Method 4: SDP probe (check services)
+            if not result['present']:
+                try:
+                    add_log(f"  Trying SDP probe...", "DEBUG")
+                    sdp_result = sdp_probe(bd_address, interface)
+                    if sdp_result['responded']:
+                        result['present'] = True
+                        result['methods_responded'].append('sdp')
+                        result['services'] = sdp_result.get('services', [])
+                        add_log(f"  SDP: {bd_address} has {len(result['services'])} services", "INFO")
+                except Exception as e:
+                    add_log(f"  SDP error: {e}", "DEBUG")
+
+            if not target_survey_active:
+                break
+
+            # Method 5: Try direct connection and RSSI if still not found
+            # This is last resort - attempts to create an ACL connection
+            if not result['present']:
+                try:
+                    add_log(f"  Trying direct connection...", "DEBUG")
+                    # Create connection with role switch allowed
+                    cc_result = subprocess.run(
+                        ['hcitool', '-i', interface, 'cc', '--role=m', bd_address],
+                        capture_output=True, text=True, timeout=10
+                    )
+                    time.sleep(0.5)
+
+                    # Check if connection was made
+                    con_result = subprocess.run(
+                        ['hcitool', '-i', interface, 'con'],
+                        capture_output=True, text=True, timeout=3
+                    )
+                    if bd_address.lower() in con_result.stdout.lower():
+                        result['present'] = True
+                        result['methods_responded'].append('connection')
+                        add_log(f"  CONNECTION: {bd_address} connected", "INFO")
+
+                        # Try to get RSSI while connected
+                        try:
+                            rssi_result = subprocess.run(
+                                ['hcitool', '-i', interface, 'rssi', bd_address],
+                                capture_output=True, text=True, timeout=3
+                            )
+                            rssi_match = re.search(r'RSSI return value:\s*(-?\d+)', rssi_result.stdout)
+                            if rssi_match:
+                                result['rssi'] = int(rssi_match.group(1))
+                                result['methods_responded'].append('rssi')
+                                add_log(f"  RSSI: {result['rssi']} dBm", "DEBUG")
+                        except:
+                            pass
+                except subprocess.TimeoutExpired:
+                    add_log(f"  CONNECTION: {bd_address} timeout", "DEBUG")
+                except Exception as e:
+                    add_log(f"  CONNECTION error: {e}", "DEBUG")
+                finally:
+                    # Always disconnect
+                    try:
+                        subprocess.run(['hcitool', '-i', interface, 'dc', bd_address],
+                                      capture_output=True, timeout=2)
+                    except:
+                        pass
 
             # Store result
             target_survey_results[bd_address] = result
@@ -3736,7 +3816,11 @@ def target_survey(interface='hci0'):
                 }
                 process_found_device(device_data)
             else:
-                add_log(f"Target not detected: {display_name}", "DEBUG")
+                add_log(f"Target not detected: {display_name} (tried all methods)", "DEBUG")
+
+            # Small delay between targets to let radio settle
+            if i < len(db_targets) - 1:
+                time.sleep(0.5)
 
         # Summary
         found_count = sum(1 for r in target_survey_results.values() if r['present'])
@@ -3755,6 +3839,14 @@ def target_survey(interface='hci0'):
         return target_survey_results
     finally:
         target_survey_active = False
+        # Reset page timeout to default
+        try:
+            subprocess.run(
+                ['hcitool', '-i', interface, 'cmd', '0x03', '0x0018', '00', '20'],
+                capture_output=True, timeout=3
+            )
+        except:
+            pass
 
 
 def start_target_survey(interface='hci0'):
