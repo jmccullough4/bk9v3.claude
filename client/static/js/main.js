@@ -323,10 +323,25 @@ function initWebSocket() {
         }
     });
 
-    // Handle system restart/update - auto-reset UI
+    // Handle system restart/update - redirect to login
     socket.on('system_restart', () => {
-        addLogEntry('System restart detected - resetting UI state', 'WARNING');
-        resetUIState();
+        addLogEntry('System restart detected - redirecting to login', 'WARNING');
+        // Show notification and redirect after short delay
+        const notification = document.createElement('div');
+        notification.className = 'system-restart-overlay';
+        notification.innerHTML = `
+            <div class="restart-message">
+                <div class="restart-icon">&#8635;</div>
+                <div class="restart-title">SYSTEM RESTARTING</div>
+                <div class="restart-subtitle">Redirecting to login...</div>
+            </div>
+        `;
+        document.body.appendChild(notification);
+
+        // Redirect to login after 2 seconds
+        setTimeout(() => {
+            window.location.href = '/login';
+        }, 2000);
     });
 
     // Handle server-side data clear - reset relevant UI
@@ -1354,7 +1369,11 @@ function setMapStyle(style) {
     // Persist map style to localStorage
     localStorage.setItem('bluek9_map_style', style);
 
-    // Update button states
+    // Update dropdown selection
+    const layerSelect = document.getElementById('mapLayerSelect');
+    if (layerSelect) layerSelect.value = style;
+
+    // Update button states (legacy support)
     document.querySelectorAll('.btn-map').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.style === style);
     });
@@ -5781,6 +5800,36 @@ function handleWarhammerUpdate(data) {
     }
 }
 
+// Peer filter state
+let peerFilter = 'all';  // 'all' or 'bluek9'
+
+/**
+ * Set peer filter and update list
+ */
+function setPeerFilter(filter) {
+    peerFilter = filter;
+
+    // Update button active states
+    document.getElementById('filterAllPeers').classList.toggle('active', filter === 'all');
+    document.getElementById('filterBk9Peers').classList.toggle('active', filter === 'bluek9');
+
+    // Refresh the list
+    updatePeerList();
+}
+
+/**
+ * Truncate hostname - remove common suffixes like .netbird.selfhosted
+ */
+function truncateHostname(hostname) {
+    if (!hostname) return hostname;
+    // Remove common NetBird and VPN suffixes
+    return hostname
+        .replace(/\.netbird\.selfhosted$/i, '')
+        .replace(/\.netbird\.cloud$/i, '')
+        .replace(/\.netbird$/i, '')
+        .replace(/\.local$/i, '');
+}
+
 /**
  * Update the peer list in the UI
  */
@@ -5788,20 +5837,30 @@ function updatePeerList() {
     const container = document.getElementById('peerListContainer');
     if (!container) return;
 
-    if (networkPeers.length === 0) {
-        container.innerHTML = '<div class="peer-item"><span class="peer-name" style="color: var(--text-muted);">No peers connected</span></div>';
+    // Filter peers based on current filter
+    let filteredPeers = networkPeers;
+    if (peerFilter === 'bluek9') {
+        filteredPeers = networkPeers.filter(p => p.is_bluek9);
+    }
+
+    if (filteredPeers.length === 0) {
+        const msg = peerFilter === 'bluek9' ? 'No BlueK9 peers connected' : 'No peers connected';
+        container.innerHTML = `<div class="peer-item"><span class="peer-name" style="color: var(--text-muted);">${msg}</span></div>`;
         return;
     }
 
     // Sort: BlueK9 peers first, then by connection status, then by name
-    const sortedPeers = [...networkPeers].sort((a, b) => {
+    const sortedPeers = [...filteredPeers].sort((a, b) => {
         if (a.is_bluek9 !== b.is_bluek9) return b.is_bluek9 ? 1 : -1;
         if (a.connected !== b.connected) return b.connected ? 1 : -1;
-        return (a.hostname || a.name).localeCompare(b.hostname || b.name);
+        return (a.hostname || a.name || '').localeCompare(b.hostname || b.name || '');
     });
 
     container.innerHTML = sortedPeers.map(peer => {
-        const displayName = peer.is_bluek9 ? (peer.system_name || peer.system_id || peer.hostname) : (peer.hostname || peer.name);
+        // Get display name and truncate hostname suffixes
+        let displayName = peer.is_bluek9 ? (peer.system_name || peer.system_id || peer.hostname) : (peer.hostname || peer.name);
+        displayName = truncateHostname(displayName);
+
         const peerType = peer.is_bluek9 ? 'bluek9' : 'network';
         const peerBadge = peer.is_bluek9 ? '<span class="peer-bluek9-badge">BK9</span>' : '';
         const latencyInfo = peer.latency ? `<span class="peer-latency">${peer.latency}</span>` : '';
@@ -6018,17 +6077,32 @@ function toggleShowConnections() {
 function updatePeerMarkers() {
     if (!map || !showPeerLocations) return;
 
+    // Track which markers we've seen in this update
+    const seenMarkers = new Set();
+
     Object.values(peerLocations).forEach(loc => {
         if (!loc.lat || !loc.lon) return;
 
         const markerId = `peer-${loc.system_id}`;
+        seenMarkers.add(markerId);
 
-        // Remove existing marker
+        // Check if marker already exists at this location
         if (peerMarkers[markerId]) {
-            peerMarkers[markerId].remove();
+            const existingMarker = peerMarkers[markerId];
+            const existingLngLat = existingMarker.getLngLat();
+
+            // Only update if position has changed significantly (avoid unnecessary updates)
+            if (Math.abs(existingLngLat.lng - loc.lon) < 0.00001 &&
+                Math.abs(existingLngLat.lat - loc.lat) < 0.00001) {
+                return; // Position unchanged, skip update
+            }
+
+            // Update existing marker position instead of recreating
+            existingMarker.setLngLat([loc.lon, loc.lat]);
+            return;
         }
 
-        // Create marker element
+        // Create new marker element only if marker doesn't exist
         const el = document.createElement('div');
         el.className = 'peer-marker';
 
@@ -6051,6 +6125,14 @@ function updatePeerMarkers() {
             .addTo(map);
 
         peerMarkers[markerId] = marker;
+    });
+
+    // Remove markers for peers that are no longer in peerLocations
+    Object.keys(peerMarkers).forEach(markerId => {
+        if (!seenMarkers.has(markerId)) {
+            peerMarkers[markerId].remove();
+            delete peerMarkers[markerId];
+        }
     });
 
     if (showPeerConnections) {
@@ -6405,7 +6487,7 @@ function updateNetStatsPeersList(bluek9Nodes) {
         const latency = peer.latency && peer.latency !== '0s' ? peer.latency : '--';
         const connType = peer.connection_type || 'Unknown';
         const status = peer.connected ? 'online' : 'offline';
-        const name = peer.system_name || peer.name || peer.hostname;
+        const name = truncateHostname(peer.system_name || peer.name || peer.hostname);
 
         return `
             <div class="net-stats-peer-item">
