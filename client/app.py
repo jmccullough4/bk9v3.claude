@@ -6421,7 +6421,22 @@ def check_for_updates():
                     capture_output=True, text=True, timeout=5, cwd=INSTALL_DIR
                 )
                 if result.returncode == 0 and result.stdout.strip():
-                    update_info['recent_changes'] = result.stdout.strip().split('\n')
+                    # Parse git log output into structured objects
+                    changes = []
+                    for line in result.stdout.strip().split('\n'):
+                        if line:
+                            parts = line.split(' ', 1)
+                            if len(parts) >= 2:
+                                changes.append({
+                                    'hash': parts[0],
+                                    'message': parts[1]
+                                })
+                            elif len(parts) == 1:
+                                changes.append({
+                                    'hash': parts[0],
+                                    'message': ''
+                                })
+                    update_info['recent_changes'] = changes
 
         add_log(f"Update check: {current_branch} @ {update_info['current_commit']} -> {update_info['remote_commit']} ({update_info['commits_behind']} behind)", "DEBUG")
 

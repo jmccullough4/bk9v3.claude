@@ -155,11 +155,29 @@ function initApp() {
     setInterval(fetchSystemStats, 5000);
     fetchSystemStats();
 
+    // Load system ID for footer display
+    loadSystemIdForFooter();
+
     // Map click handler
     map.on('click', (e) => {
         // Clicked on empty map area
         document.getElementById('selectedDevice').textContent = 'NONE';
     });
+}
+
+/**
+ * Load system ID for the footer display on startup
+ */
+function loadSystemIdForFooter() {
+    fetch('/api/settings')
+        .then(r => r.json())
+        .then(data => {
+            const footerIdEl = document.getElementById('systemIdFooter');
+            if (footerIdEl && data.system_id) {
+                footerIdEl.textContent = data.system_id;
+            }
+        })
+        .catch(e => console.log('Could not load system ID for footer'));
 }
 
 /**
@@ -4734,6 +4752,20 @@ function showRestartOverlay(mode = 'restart') {
     const phaseList = document.getElementById('restartPhaseList');
     const countdown = document.getElementById('restartCountdown');
 
+    // Reset poll counter for new restart attempt
+    restartPollAttempts = 0;
+
+    // Capture current session ID to detect when server actually restarts
+    fetch('/api/version', { cache: 'no-store' })
+        .then(r => r.json())
+        .then(data => {
+            preRestartSessionId = data.session_id;
+            console.log('Captured pre-restart session ID:', preRestartSessionId);
+        })
+        .catch(() => {
+            preRestartSessionId = null;
+        });
+
     if (overlay) {
         overlay.classList.remove('hidden');
     }
@@ -4828,6 +4860,7 @@ function updateRestartProgress(percent) {
 }
 
 let restartPollAttempts = 0;
+let preRestartSessionId = null;
 const MAX_RESTART_POLL_ATTEMPTS = 60; // 60 seconds max
 
 function pollForServerRestart() {
@@ -4846,14 +4879,24 @@ function pollForServerRestart() {
     })
         .then(r => {
             if (r.ok) {
-                updateRestartStatus('Server online! Redirecting to login...');
-                startLoginCountdown(10);
-            } else {
+                return r.json();
+            }
+            throw new Error('Server not ready');
+        })
+        .then(data => {
+            // Check if this is a NEW session (server actually restarted)
+            if (preRestartSessionId && data.session_id === preRestartSessionId) {
+                // Same session - server hasn't restarted yet
+                updateRestartStatus(`Waiting for restart... (${restartPollAttempts}s)`);
                 setTimeout(pollForServerRestart, 1000);
+            } else {
+                // Different session or no pre-restart ID - server has restarted
+                updateRestartStatus('Server online! Redirecting to login...');
+                startLoginCountdown(5);
             }
         })
         .catch(e => {
-            // Server not ready yet
+            // Server not ready yet - this is expected during restart
             setTimeout(pollForServerRestart, 1000);
         });
 }
