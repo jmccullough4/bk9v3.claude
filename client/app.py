@@ -8335,6 +8335,7 @@ def analyze_piconet_relationships():
         })
 
     # Analyze relationships between devices
+    # Be conservative - only show relationships with strong evidence
     analyzed_pairs = set()
 
     for i, dev1 in enumerate(device_list):
@@ -8357,67 +8358,13 @@ def analyze_piconet_relationships():
             confidence = 0
             reasons = []
 
-            # 1. Temporal co-occurrence analysis
-            try:
-                fs1 = dev1.get('first_seen', '')
-                fs2 = dev2.get('first_seen', '')
-                ls1 = dev1.get('last_seen', '')
-                ls2 = dev2.get('last_seen', '')
-
-                if fs1 and fs2 and ls1 and ls2:
-                    # Parse timestamps
-                    from datetime import datetime
-
-                    def parse_ts(ts):
-                        for fmt in ['%Y-%m-%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S', '%Y-%m-%dT%H:%M:%S.%f']:
-                            try:
-                                return datetime.strptime(ts.split('+')[0].split('Z')[0], fmt)
-                            except:
-                                continue
-                        return None
-
-                    t1_start = parse_ts(fs1)
-                    t2_start = parse_ts(fs2)
-                    t1_end = parse_ts(ls1)
-                    t2_end = parse_ts(ls2)
-
-                    if all([t1_start, t2_start, t1_end, t2_end]):
-                        # Check if first seen within 30 seconds of each other
-                        start_diff = abs((t1_start - t2_start).total_seconds())
-                        if start_diff < 30:
-                            confidence += 25
-                            reasons.append(f"appeared together (within {int(start_diff)}s)")
-                        elif start_diff < 120:
-                            confidence += 10
-                            reasons.append("appeared near same time")
-            except Exception:
-                pass
-
-            # 2. RSSI correlation - similar signal strengths suggest proximity
-            rssi1 = dev1.get('rssi')
-            rssi2 = dev2.get('rssi')
-            if rssi1 and rssi2:
-                rssi_diff = abs(rssi1 - rssi2)
-                if rssi_diff < 5:
-                    confidence += 20
-                    reasons.append(f"similar RSSI ({rssi_diff}dB diff)")
-                elif rssi_diff < 15:
-                    confidence += 10
-                    reasons.append("close RSSI values")
-
-            # 3. OUI/Manufacturer correlation
-            mfr1 = dev1.get('manufacturer', '').lower()
-            mfr2 = dev2.get('manufacturer', '').lower()
-            if mfr1 and mfr2 and mfr1 != 'unknown' and mfr2 != 'unknown':
-                if mfr1 == mfr2:
-                    confidence += 15
-                    reasons.append(f"same manufacturer ({mfr1})")
-
-            # 4. Device class pairing patterns
             type1 = dev1.get('device_type', 'unknown')
             type2 = dev2.get('device_type', 'unknown')
+            mfr1 = dev1.get('manufacturer', '').lower()
+            mfr2 = dev2.get('manufacturer', '').lower()
 
-            # Common Bluetooth pairings
+            # 1. Device class pairing patterns - STRONG indicator
+            # Only count if we have actual device types (not unknown)
             pairing_patterns = [
                 ({'phone', 'smartphone'}, {'headphones', 'headset', 'audio', 'speaker'}),
                 ({'phone', 'smartphone'}, {'watch', 'wearable', 'fitness'}),
@@ -8426,38 +8373,50 @@ def analyze_piconet_relationships():
                 ({'computer', 'laptop'}, {'headphones', 'headset', 'audio'}),
             ]
 
+            is_pairing_match = False
             for pattern1, pattern2 in pairing_patterns:
                 if (type1 in pattern1 and type2 in pattern2) or \
                    (type2 in pattern1 and type1 in pattern2):
-                    confidence += 30
-                    reasons.append(f"common pairing ({type1} ↔ {type2})")
+                    is_pairing_match = True
+                    confidence += 50
+                    reasons.append(f"likely pairing ({type1} ↔ {type2})")
                     break
 
-            # 5. Ubertooth LAP correlation
+            # 2. Same manufacturer + complementary types - moderate indicator
+            # Only meaningful if types suggest pairing AND same manufacturer
+            if is_pairing_match and mfr1 and mfr2 and mfr1 != 'unknown' and mfr2 != 'unknown':
+                if mfr1 == mfr2:
+                    confidence += 25
+                    reasons.append(f"same manufacturer ({mfr1})")
+
+            # 3. Ubertooth LAP correlation - STRONG indicator (actual piconet traffic)
             if ubertooth_data:
                 lap1 = bd1.replace(':', '')[-6:].upper()
                 lap2 = bd2.replace(':', '')[-6:].upper()
 
                 for lap, piconet_info in ubertooth_data.items():
                     if lap.upper() == lap1 or lap.upper() == lap2:
-                        # Found one device in captured piconet traffic
-                        confidence += 35
-                        reasons.append(f"piconet traffic detected (LAP: {lap})")
+                        confidence += 60
+                        reasons.append(f"piconet traffic (LAP: {lap})")
                         break
 
-            # 6. Address proximity (sequential MACs often from same device/set)
+            # 4. Address proximity - STRONG indicator for dual-mode devices
+            # Sequential MACs (within 2) strongly suggest same physical device
             try:
                 addr1_int = int(bd1.replace(':', ''), 16)
                 addr2_int = int(bd2.replace(':', ''), 16)
                 addr_diff = abs(addr1_int - addr2_int)
-                if addr_diff <= 16:
-                    confidence += 20
+                if addr_diff <= 2:
+                    confidence += 70
+                    reasons.append(f"same device (addr diff: {addr_diff})")
+                elif addr_diff <= 8:
+                    confidence += 40
                     reasons.append(f"sequential addresses (diff: {addr_diff})")
             except:
                 pass
 
-            # Only include relationships with meaningful confidence
-            if confidence >= 25:
+            # Only include relationships with HIGH confidence (multiple strong indicators)
+            if confidence >= 50:
                 # Determine relationship type
                 rel_type = 'associated'
                 if any('piconet' in r for r in reasons):
