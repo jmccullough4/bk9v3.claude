@@ -4078,6 +4078,20 @@ def target_survey(interface='hci0'):
                 'detection_phase': 'classic'
             }
 
+            # Helper to update device packet count and RSSI on any response
+            def update_device_on_response(bd_addr, rssi=None, name=None, packets=1):
+                """Update device table when we get any response from a device."""
+                with devices_lock:
+                    if bd_addr in devices:
+                        devices[bd_addr]['packet_count'] = devices[bd_addr].get('packet_count', 0) + packets
+                        devices[bd_addr]['last_seen'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                        if rssi is not None:
+                            devices[bd_addr]['rssi'] = rssi
+                        if name and not devices[bd_addr].get('device_name'):
+                            devices[bd_addr]['device_name'] = name
+                        # Emit update to UI
+                        socketio.emit('device_update', devices[bd_addr])
+
             # Method 1: Multiple HCI name requests (most effective for non-discoverable)
             # Try up to 3 times with increasing timeouts
             for attempt in range(3):
@@ -4096,6 +4110,8 @@ def target_survey(interface='hci0'):
                         result['methods_responded'].append('name')
                         result['device_name'] = name
                         add_log(f"  NAME: {bd_address} = '{name}'", "INFO")
+                        # Update device table on response
+                        update_device_on_response(bd_address, name=name)
                         break
                 except subprocess.TimeoutExpired:
                     add_log(f"  NAME attempt {attempt+1}: timeout", "DEBUG")
@@ -4120,16 +4136,22 @@ def target_survey(interface='hci0'):
                         result['methods_responded'].append('info')
                         # Extract device name from info output
                         name_match = re.search(r'Device Name:\s*(.+)', output)
+                        extracted_name = None
                         if name_match and not result['device_name']:
-                            result['device_name'] = name_match.group(1).strip()
+                            extracted_name = name_match.group(1).strip()
+                            result['device_name'] = extracted_name
                         # Extract features
                         result['device_info'] = output
                         add_log(f"  INFO: {bd_address} responded", "INFO")
+                        # Update device table on response
+                        update_device_on_response(bd_address, name=extracted_name)
                     elif info_result.returncode == 0 and output.strip():
                         # Got some response even if partial
                         result['present'] = True
                         result['methods_responded'].append('info_partial')
                         add_log(f"  INFO: {bd_address} partial response", "DEBUG")
+                        # Update device table on response
+                        update_device_on_response(bd_address)
                 except subprocess.TimeoutExpired:
                     add_log(f"  INFO: {bd_address} timeout", "DEBUG")
                 except Exception as e:
@@ -4149,11 +4171,15 @@ def target_survey(interface='hci0'):
                     if 'bytes from' in l2ping_result.stdout.lower():
                         result['present'] = True
                         result['methods_responded'].append('l2ping')
+                        # Count actual ping responses (each "X bytes from" is a response)
+                        ping_count = l2ping_result.stdout.lower().count('bytes from')
                         # Extract RTT
                         rtt_match = re.search(r'time=(\d+\.?\d*)ms', l2ping_result.stdout)
                         if rtt_match:
                             result['rtt_ms'] = float(rtt_match.group(1))
-                        add_log(f"  L2PING: {bd_address} responded", "INFO")
+                        add_log(f"  L2PING: {bd_address} responded ({ping_count} replies)", "INFO")
+                        # Update device table - count each ping reply as a packet
+                        update_device_on_response(bd_address, packets=ping_count)
                 except subprocess.TimeoutExpired:
                     add_log(f"  L2PING: {bd_address} timeout", "DEBUG")
                 except Exception as e:
@@ -4172,6 +4198,8 @@ def target_survey(interface='hci0'):
                         result['methods_responded'].append('sdp')
                         result['services'] = sdp_result.get('services', [])
                         add_log(f"  SDP: {bd_address} has {len(result['services'])} services", "INFO")
+                        # Update device table on response
+                        update_device_on_response(bd_address)
                 except Exception as e:
                     add_log(f"  SDP error: {e}", "DEBUG")
 
@@ -4201,6 +4229,7 @@ def target_survey(interface='hci0'):
                         add_log(f"  CONNECTION: {bd_address} connected", "INFO")
 
                         # Try to get RSSI while connected
+                        conn_rssi = None
                         try:
                             rssi_result = subprocess.run(
                                 ['hcitool', '-i', interface, 'rssi', bd_address],
@@ -4208,11 +4237,15 @@ def target_survey(interface='hci0'):
                             )
                             rssi_match = re.search(r'RSSI return value:\s*(-?\d+)', rssi_result.stdout)
                             if rssi_match:
-                                result['rssi'] = int(rssi_match.group(1))
+                                conn_rssi = int(rssi_match.group(1))
+                                result['rssi'] = conn_rssi
                                 result['methods_responded'].append('rssi')
                                 add_log(f"  RSSI: {result['rssi']} dBm", "DEBUG")
                         except:
                             pass
+
+                        # Update device table with connection and RSSI
+                        update_device_on_response(bd_address, rssi=conn_rssi)
                 except subprocess.TimeoutExpired:
                     add_log(f"  CONNECTION: {bd_address} timeout", "DEBUG")
                 except Exception as e:
@@ -6276,7 +6309,7 @@ def get_config():
 def get_version():
     """Get application version from git."""
     version_info = {
-        'version': 'v3.2.4',
+        'version': 'v3.2.5',
         'commit': None,
         'branch': None,
         'session_id': SESSION_ID  # Used by frontend to detect restarts
@@ -6292,7 +6325,7 @@ def get_version():
         if result.returncode == 0:
             commit = result.stdout.strip()
             version_info['commit'] = commit
-            version_info['version'] = f'v3.2.4-{commit}'
+            version_info['version'] = f'v3.2.5-{commit}'
 
         # Get branch name
         result = subprocess.run(
