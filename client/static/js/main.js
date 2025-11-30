@@ -4536,12 +4536,25 @@ function checkForUpdates() {
                 // Show recent changes if available
                 if (data.recent_changes && data.recent_changes.length > 0) {
                     changesSection.classList.remove('hidden');
-                    changesList.innerHTML = data.recent_changes.map(change =>
-                        `<div class="change-item">
-                            <span class="change-hash">${change.hash}</span>
-                            <span class="change-msg">${change.message}</span>
-                        </div>`
-                    ).join('');
+                    changesList.innerHTML = data.recent_changes.map(change => {
+                        // Handle both object format {hash, message} and string format "hash message"
+                        let hash, message;
+                        if (typeof change === 'object' && change !== null) {
+                            hash = change.hash || '';
+                            message = change.message || '';
+                        } else if (typeof change === 'string') {
+                            const parts = change.split(' ', 1);
+                            hash = parts[0] || '';
+                            message = change.substring(hash.length + 1) || '';
+                        } else {
+                            hash = '';
+                            message = String(change);
+                        }
+                        return `<div class="change-item">
+                            <span class="change-hash">${hash}</span>
+                            <span class="change-msg">${message}</span>
+                        </div>`;
+                    }).join('');
                 }
 
                 // Show apply button
