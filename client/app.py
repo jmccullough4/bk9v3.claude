@@ -3574,16 +3574,110 @@ def stop_hidden_device_hunt():
     add_log("Hidden device hunt stop requested", "INFO")
 
 
+def ble_scan_for_targets(target_addresses, interface='hci0', duration=15):
+    """
+    Scan for BLE advertisements and check if any match target addresses.
+
+    Modern phones/devices often advertise via BLE even when Classic Bluetooth
+    is non-discoverable. This function runs a BLE scan and returns any
+    target addresses found along with their RSSI and name if available.
+
+    Args:
+        target_addresses: Set of target BD addresses (uppercase) to look for
+        interface: Bluetooth interface to use
+        duration: Scan duration in seconds
+
+    Returns:
+        dict: {bd_address: {'rssi': int, 'name': str, 'found': True}}
+    """
+    found_targets = {}
+    seen_addresses = {}  # Track all seen addresses with their info
+
+    try:
+        add_log(f"BLE scan for {len(target_addresses)} target(s) ({duration}s)...", "INFO")
+
+        # Ensure LE is enabled
+        subprocess.run(['btmgmt', '-i', interface, 'le', 'on'],
+                      capture_output=True, timeout=5)
+
+        # Use bluetoothctl for BLE scanning - it provides RSSI
+        proc = subprocess.Popen(
+            ['stdbuf', '-oL', 'timeout', str(duration), 'bluetoothctl', 'scan', 'le'],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1
+        )
+
+        for line in iter(proc.stdout.readline, ''):
+            if not target_survey_active:
+                proc.terminate()
+                break
+            if not line:
+                break
+            line = line.strip()
+
+            # Parse [NEW] Device XX:XX:XX:XX:XX:XX Name
+            new_match = re.search(r'\[NEW\]\s+Device\s+([0-9A-Fa-f:]{17})\s*(.*)', line)
+            if new_match:
+                bd_addr = new_match.group(1).upper()
+                name = new_match.group(2).strip() or None
+                seen_addresses[bd_addr] = {'name': name, 'rssi': None}
+
+                # Check if this is a target
+                if bd_addr in target_addresses:
+                    add_log(f"  BLE: Target {bd_addr} found! Name: {name}", "INFO")
+                    found_targets[bd_addr] = {
+                        'found': True,
+                        'name': name,
+                        'rssi': None,
+                        'method': 'ble_advertisement'
+                    }
+
+            # Parse RSSI updates: [CHG] Device XX:XX:XX:XX:XX:XX RSSI: -XX
+            rssi_match = re.search(r'\[CHG\]\s+Device\s+([0-9A-Fa-f:]{17})\s+RSSI:\s*(-?\d+)', line)
+            if rssi_match:
+                bd_addr = rssi_match.group(1).upper()
+                rssi = int(rssi_match.group(2))
+
+                if bd_addr in seen_addresses:
+                    seen_addresses[bd_addr]['rssi'] = rssi
+
+                if bd_addr in target_addresses:
+                    if bd_addr not in found_targets:
+                        found_targets[bd_addr] = {
+                            'found': True,
+                            'name': seen_addresses.get(bd_addr, {}).get('name'),
+                            'rssi': rssi,
+                            'method': 'ble_advertisement'
+                        }
+                    else:
+                        found_targets[bd_addr]['rssi'] = rssi
+                    add_log(f"  BLE: Target {bd_addr} RSSI: {rssi} dBm", "DEBUG")
+
+        proc.wait(timeout=5)
+
+    except Exception as e:
+        add_log(f"BLE target scan error: {e}", "WARNING")
+
+    add_log(f"BLE scan complete: {len(found_targets)}/{len(target_addresses)} targets found, "
+            f"{len(seen_addresses)} total BLE devices seen", "INFO")
+
+    return found_targets
+
+
 def target_survey(interface='hci0'):
     """
     Actively probe all targets to determine if they are in the area.
 
-    Uses aggressive probe techniques against each target BD address:
-    - Multiple HCI name requests with extended page timeout
-    - HCI info inquiry (Read Remote Extended Features)
-    - L2CAP ping
-    - SDP probe for services
-    - RSSI measurement
+    Uses multiple detection techniques:
+    Phase 0: BLE advertisement scan - catches modern devices advertising via BLE
+    Phase 1: Classic Bluetooth paging - for connectable Classic devices
+      - Multiple HCI name requests with extended page timeout
+      - HCI info inquiry (Read Remote Extended Features)
+      - L2CAP ping
+      - SDP probe for services
+      - RSSI measurement
 
     These methods work on non-discoverable devices that are still connectable.
     Returns dict of BD addresses with their survey results.
@@ -3609,6 +3703,65 @@ def target_survey(interface='hci0'):
             'targets': [t['bd_address'] for t in db_targets]
         })
 
+        # Build target address set for quick lookup
+        target_address_set = {t['bd_address'].upper() for t in db_targets}
+        target_alias_map = {t['bd_address'].upper(): t.get('alias', '') for t in db_targets}
+
+        # =====================================================================
+        # PHASE 0: BLE Advertisement Scan
+        # Modern phones/devices often advertise via BLE even when Classic is hidden
+        # This is the most effective method for detecting modern smartphones
+        # =====================================================================
+        add_log("Phase 0: BLE advertisement scan for targets...", "INFO")
+        socketio.emit('target_survey_phase', {'phase': 0, 'description': 'BLE Advertisement Scan'})
+
+        ble_found = {}
+        if target_survey_active:
+            ble_found = ble_scan_for_targets(target_address_set, interface, duration=15)
+
+            # Process BLE-found targets immediately
+            for bd_addr, ble_info in ble_found.items():
+                alias = target_alias_map.get(bd_addr, '')
+                display_name = f"{alias} ({bd_addr})" if alias else bd_addr
+
+                result = {
+                    'bd_address': bd_addr,
+                    'alias': alias,
+                    'present': True,
+                    'methods_responded': ['ble_advertisement'],
+                    'rssi': ble_info.get('rssi'),
+                    'device_name': ble_info.get('name'),
+                    'device_info': None,
+                    'services': [],
+                    'probe_time': time.time(),
+                    'detection_phase': 'ble'
+                }
+                target_survey_results[bd_addr] = result
+                socketio.emit('target_survey_result', result)
+
+                add_log(f"TARGET FOUND (BLE): {display_name}", "WARNING")
+
+                # Process as found device
+                device_data = {
+                    'bd_address': bd_addr,
+                    'device_name': ble_info.get('name'),
+                    'device_type': 'ble',
+                    'manufacturer': get_manufacturer(bd_addr),
+                    'rssi': ble_info.get('rssi'),
+                    'discovery_method': 'target_survey_ble'
+                }
+                process_found_device(device_data)
+
+        if not target_survey_active:
+            return target_survey_results
+
+        # =====================================================================
+        # PHASE 1: Classic Bluetooth Paging
+        # For targets not found via BLE, try Classic probing techniques
+        # =====================================================================
+        add_log("Phase 1: Classic Bluetooth paging for remaining targets...", "INFO")
+        socketio.emit('target_survey_phase', {'phase': 1, 'description': 'Classic Bluetooth Paging'})
+
         # Configure HCI for aggressive probing
         # Set extended page timeout (0x8000 = ~20 seconds max)
         try:
@@ -3625,7 +3778,11 @@ def target_survey(interface='hci0'):
         # Set interlaced page scan for faster responses
         set_hci_scan_parameters(interface, inquiry_mode='extended', page_scan_type='interlaced')
 
-        for i, target in enumerate(db_targets):
+        # Filter to targets not already found via BLE
+        remaining_targets = [t for t in db_targets if t['bd_address'].upper() not in ble_found]
+        add_log(f"Classic probing {len(remaining_targets)} target(s) not found via BLE", "INFO")
+
+        for i, target in enumerate(remaining_targets):
             if not target_survey_active:
                 add_log("Target survey cancelled", "INFO")
                 break
@@ -3634,12 +3791,13 @@ def target_survey(interface='hci0'):
             alias = target.get('alias', '')
             display_name = f"{alias} ({bd_address})" if alias else bd_address
 
-            add_log(f"Probing target {i+1}/{len(db_targets)}: {display_name}", "INFO")
+            add_log(f"Probing target {i+1}/{len(remaining_targets)}: {display_name}", "INFO")
             socketio.emit('target_survey_progress', {
                 'current': i + 1,
-                'total': len(db_targets),
+                'total': len(remaining_targets),
                 'bd_address': bd_address,
-                'alias': alias
+                'alias': alias,
+                'phase': 'classic'
             })
 
             result = {
@@ -3651,7 +3809,8 @@ def target_survey(interface='hci0'):
                 'device_name': None,
                 'device_info': None,
                 'services': [],
-                'probe_time': time.time()
+                'probe_time': time.time(),
+                'detection_phase': 'classic'
             }
 
             # Method 1: Multiple HCI name requests (most effective for non-discoverable)
@@ -3823,16 +3982,24 @@ def target_survey(interface='hci0'):
                 add_log(f"Target not detected: {display_name} (tried all methods)", "DEBUG")
 
             # Small delay between targets to let radio settle
-            if i < len(db_targets) - 1:
+            if i < len(remaining_targets) - 1:
                 time.sleep(0.5)
 
-        # Summary
+        # Summary with phase breakdown
         found_count = sum(1 for r in target_survey_results.values() if r['present'])
-        add_log(f"Target survey complete: {found_count}/{len(db_targets)} targets detected", "INFO")
+        ble_count = sum(1 for r in target_survey_results.values()
+                       if r['present'] and r.get('detection_phase') == 'ble')
+        classic_count = sum(1 for r in target_survey_results.values()
+                          if r['present'] and r.get('detection_phase') == 'classic')
+
+        add_log(f"Target survey complete: {found_count}/{len(db_targets)} targets detected "
+                f"(BLE: {ble_count}, Classic: {classic_count})", "INFO")
 
         socketio.emit('target_survey_complete', {
             'total': len(db_targets),
             'found': found_count,
+            'found_ble': ble_count,
+            'found_classic': classic_count,
             'results': list(target_survey_results.values())
         })
 
@@ -5841,7 +6008,7 @@ def get_config():
 def get_version():
     """Get application version from git."""
     version_info = {
-        'version': 'v3.2.2',
+        'version': 'v3.2.3',
         'commit': None,
         'branch': None,
         'session_id': SESSION_ID  # Used by frontend to detect restarts
@@ -5857,7 +6024,7 @@ def get_version():
         if result.returncode == 0:
             commit = result.stdout.strip()
             version_info['commit'] = commit
-            version_info['version'] = f'v3.2.2-{commit}'
+            version_info['version'] = f'v3.2.3-{commit}'
 
         # Get branch name
         result = subprocess.run(
