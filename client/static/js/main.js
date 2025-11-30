@@ -371,6 +371,17 @@ function initWebSocket() {
     // Handle system restart/update - redirect to login
     socket.on('system_restart', () => {
         addLogEntry('System restart detected - redirecting to login', 'WARNING');
+
+        // Check if restart overlay is already showing (user initiated restart)
+        const existingOverlay = document.getElementById('restartOverlay');
+        if (existingOverlay && !existingOverlay.classList.contains('hidden')) {
+            // Restart overlay already visible, just redirect after delay
+            setTimeout(() => {
+                window.location.href = '/login';
+            }, 2000);
+            return;
+        }
+
         // Show notification and redirect after short delay
         const notification = document.createElement('div');
         notification.className = 'system-restart-overlay';
@@ -6091,7 +6102,8 @@ function refreshTargetList() {
                 const option = document.createElement('option');
                 option.value = target.bd_address;
                 const device = devices[target.bd_address];
-                const name = device?.device_name || target.notes || 'Unknown';
+                // Use device name, then target alias, then 'Unknown'
+                const name = device?.device_name || target.alias || 'Unknown';
                 option.textContent = `${target.bd_address} (${name})`;
                 select.appendChild(option);
             });
