@@ -8015,8 +8015,22 @@ def manage_targets():
                     devices[bd_address]['is_target'] = True
                     socketio.emit('device_update', devices[bd_address])
 
+                # Return success status with updated target list
+                c.execute('SELECT * FROM targets')
+                targets_list = [dict(row) for row in c.fetchall()]
+                conn.close()
+                return jsonify({
+                    'status': 'added',
+                    'bd_address': bd_address,
+                    'targets': targets_list
+                })
+
             except Exception as e:
-                return jsonify({'error': str(e)}), 400
+                conn.close()
+                return jsonify({'status': 'error', 'error': str(e)}), 400
+        else:
+            conn.close()
+            return jsonify({'status': 'error', 'error': 'BD address required'}), 400
 
     c.execute('SELECT * FROM targets')
     targets_list = [dict(row) for row in c.fetchall()]
@@ -8189,6 +8203,242 @@ def clear_ubertooth_data():
     ubertooth_data = {}
     add_log("Ubertooth data cleared", "INFO")
     return jsonify({'status': 'cleared'})
+
+
+# ==================== PICONET ANALYSIS ====================
+
+def analyze_piconet_relationships():
+    """
+    Analyze detected devices to infer possible piconet relationships.
+    Uses multiple heuristics:
+    1. Temporal co-occurrence - devices appearing/disappearing together
+    2. RSSI correlation - similar signal patterns suggest proximity
+    3. Device class roles - master/slave capable flags
+    4. Manufacturer pairing - common pairings (phone+watch, phone+headphones)
+    5. Ubertooth LAP matching - correlate captured LAPs to device addresses
+    """
+    relationships = []
+    nodes = []
+
+    # Get current device list
+    device_list = list(devices.values())
+    if len(device_list) < 2:
+        return {'nodes': nodes, 'edges': relationships}
+
+    # Build node list
+    for dev in device_list:
+        bd_addr = dev.get('bd_address', '')
+        if not bd_addr:
+            continue
+
+        # Determine node type based on device class/type
+        device_type = dev.get('device_type', 'unknown')
+        is_master_capable = False
+        is_slave_capable = False
+
+        # Check LMP features for master/slave capability
+        lmp_features = dev.get('lmp_features', [])
+        if isinstance(lmp_features, list):
+            for feature in lmp_features:
+                if 'AFH capable master' in str(feature):
+                    is_master_capable = True
+                if 'AFH capable slave' in str(feature):
+                    is_slave_capable = True
+
+        # Infer role from device type
+        role = 'unknown'
+        if device_type in ['phone', 'smartphone', 'computer', 'laptop']:
+            role = 'master'
+            is_master_capable = True
+        elif device_type in ['headphones', 'headset', 'audio', 'speaker', 'wearable', 'watch', 'fitness']:
+            role = 'slave'
+            is_slave_capable = True
+        elif is_master_capable and not is_slave_capable:
+            role = 'master'
+        elif is_slave_capable and not is_master_capable:
+            role = 'slave'
+        elif is_master_capable and is_slave_capable:
+            role = 'dual'
+
+        nodes.append({
+            'id': bd_addr,
+            'name': dev.get('device_name', 'Unknown') or 'Unknown',
+            'type': device_type,
+            'role': role,
+            'manufacturer': dev.get('manufacturer', 'Unknown'),
+            'rssi': dev.get('rssi'),
+            'is_target': dev.get('is_target', False),
+            'first_seen': dev.get('first_seen'),
+            'last_seen': dev.get('last_seen')
+        })
+
+    # Analyze relationships between devices
+    analyzed_pairs = set()
+
+    for i, dev1 in enumerate(device_list):
+        bd1 = dev1.get('bd_address', '')
+        if not bd1:
+            continue
+
+        for j, dev2 in enumerate(device_list):
+            if i >= j:
+                continue
+            bd2 = dev2.get('bd_address', '')
+            if not bd2:
+                continue
+
+            pair_key = tuple(sorted([bd1, bd2]))
+            if pair_key in analyzed_pairs:
+                continue
+            analyzed_pairs.add(pair_key)
+
+            confidence = 0
+            reasons = []
+
+            # 1. Temporal co-occurrence analysis
+            try:
+                fs1 = dev1.get('first_seen', '')
+                fs2 = dev2.get('first_seen', '')
+                ls1 = dev1.get('last_seen', '')
+                ls2 = dev2.get('last_seen', '')
+
+                if fs1 and fs2 and ls1 and ls2:
+                    # Parse timestamps
+                    from datetime import datetime
+
+                    def parse_ts(ts):
+                        for fmt in ['%Y-%m-%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S', '%Y-%m-%dT%H:%M:%S.%f']:
+                            try:
+                                return datetime.strptime(ts.split('+')[0].split('Z')[0], fmt)
+                            except:
+                                continue
+                        return None
+
+                    t1_start = parse_ts(fs1)
+                    t2_start = parse_ts(fs2)
+                    t1_end = parse_ts(ls1)
+                    t2_end = parse_ts(ls2)
+
+                    if all([t1_start, t2_start, t1_end, t2_end]):
+                        # Check if first seen within 30 seconds of each other
+                        start_diff = abs((t1_start - t2_start).total_seconds())
+                        if start_diff < 30:
+                            confidence += 25
+                            reasons.append(f"appeared together (within {int(start_diff)}s)")
+                        elif start_diff < 120:
+                            confidence += 10
+                            reasons.append("appeared near same time")
+            except Exception:
+                pass
+
+            # 2. RSSI correlation - similar signal strengths suggest proximity
+            rssi1 = dev1.get('rssi')
+            rssi2 = dev2.get('rssi')
+            if rssi1 and rssi2:
+                rssi_diff = abs(rssi1 - rssi2)
+                if rssi_diff < 5:
+                    confidence += 20
+                    reasons.append(f"similar RSSI ({rssi_diff}dB diff)")
+                elif rssi_diff < 15:
+                    confidence += 10
+                    reasons.append("close RSSI values")
+
+            # 3. OUI/Manufacturer correlation
+            mfr1 = dev1.get('manufacturer', '').lower()
+            mfr2 = dev2.get('manufacturer', '').lower()
+            if mfr1 and mfr2 and mfr1 != 'unknown' and mfr2 != 'unknown':
+                if mfr1 == mfr2:
+                    confidence += 15
+                    reasons.append(f"same manufacturer ({mfr1})")
+
+            # 4. Device class pairing patterns
+            type1 = dev1.get('device_type', 'unknown')
+            type2 = dev2.get('device_type', 'unknown')
+
+            # Common Bluetooth pairings
+            pairing_patterns = [
+                ({'phone', 'smartphone'}, {'headphones', 'headset', 'audio', 'speaker'}),
+                ({'phone', 'smartphone'}, {'watch', 'wearable', 'fitness'}),
+                ({'phone', 'smartphone'}, {'car', 'automotive', 'hands-free'}),
+                ({'computer', 'laptop'}, {'keyboard', 'mouse', 'peripheral'}),
+                ({'computer', 'laptop'}, {'headphones', 'headset', 'audio'}),
+            ]
+
+            for pattern1, pattern2 in pairing_patterns:
+                if (type1 in pattern1 and type2 in pattern2) or \
+                   (type2 in pattern1 and type1 in pattern2):
+                    confidence += 30
+                    reasons.append(f"common pairing ({type1} ↔ {type2})")
+                    break
+
+            # 5. Ubertooth LAP correlation
+            if ubertooth_data:
+                lap1 = bd1.replace(':', '')[-6:].upper()
+                lap2 = bd2.replace(':', '')[-6:].upper()
+
+                for lap, piconet_info in ubertooth_data.items():
+                    if lap.upper() == lap1 or lap.upper() == lap2:
+                        # Found one device in captured piconet traffic
+                        confidence += 35
+                        reasons.append(f"piconet traffic detected (LAP: {lap})")
+                        break
+
+            # 6. Address proximity (sequential MACs often from same device/set)
+            try:
+                addr1_int = int(bd1.replace(':', ''), 16)
+                addr2_int = int(bd2.replace(':', ''), 16)
+                addr_diff = abs(addr1_int - addr2_int)
+                if addr_diff <= 16:
+                    confidence += 20
+                    reasons.append(f"sequential addresses (diff: {addr_diff})")
+            except:
+                pass
+
+            # Only include relationships with meaningful confidence
+            if confidence >= 25:
+                # Determine relationship type
+                rel_type = 'associated'
+                if any('piconet' in r for r in reasons):
+                    rel_type = 'piconet'
+                elif any('pairing' in r for r in reasons):
+                    rel_type = 'paired'
+                elif any('sequential' in r for r in reasons):
+                    rel_type = 'same_device'
+
+                relationships.append({
+                    'source': bd1,
+                    'target': bd2,
+                    'confidence': min(confidence, 100),
+                    'type': rel_type,
+                    'reasons': reasons
+                })
+
+    return {
+        'nodes': nodes,
+        'edges': relationships,
+        'ubertooth_active': ubertooth_running,
+        'piconets_captured': len(ubertooth_data)
+    }
+
+
+@app.route('/api/piconets')
+@login_required
+def get_piconet_analysis():
+    """Get analyzed piconet/device relationship data for visualization."""
+    try:
+        analysis = analyze_piconet_relationships()
+        return jsonify({
+            'status': 'success',
+            'data': analysis,
+            'device_count': len(devices),
+            'timestamp': datetime.now().isoformat()
+        })
+    except Exception as e:
+        add_log(f"Piconet analysis error: {e}", "ERROR")
+        return jsonify({
+            'status': 'error',
+            'error': str(e)
+        }), 500
 
 
 # ==================== WARHAMMER NETWORK (MESH NETWORK) ====================

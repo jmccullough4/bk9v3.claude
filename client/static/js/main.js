@@ -2754,6 +2754,10 @@ function addTarget() {
     })
         .then(response => response.json())
         .then(data => {
+            if (data.status === 'error') {
+                addLogEntry('Failed to add target: ' + (data.error || 'Unknown error'), 'ERROR');
+                return;
+            }
             loadTargets();
             document.getElementById('targetBdAddress').value = '';
             document.getElementById('targetAlias').value = '';
@@ -2772,6 +2776,10 @@ function quickAddTarget(bdAddress) {
     })
         .then(response => response.json())
         .then(data => {
+            if (data.status === 'error') {
+                addLogEntry('Failed to add target: ' + (data.error || 'Unknown error'), 'ERROR');
+                return;
+            }
             loadTargets();
             // Update device in local cache
             if (devices[bdAddress]) {
@@ -2786,11 +2794,13 @@ function quickAddTarget(bdAddress) {
 }
 
 function deleteTarget(bdAddress) {
-    fetch(`/api/targets/${bdAddress}`, { method: 'DELETE' })
+    fetch(`/api/targets/${encodeURIComponent(bdAddress)}`, { method: 'DELETE' })
         .then(response => response.json())
         .then(data => {
             delete targets[bdAddress];
-            updateTargetList();
+            refreshModalTargetList();
+            updateQuickTargetList();
+            updateDeviceTable();
             // Update device in local cache
             if (devices[bdAddress]) {
                 devices[bdAddress].is_target = false;
@@ -2801,6 +2811,11 @@ function deleteTarget(bdAddress) {
         .catch(error => {
             addLogEntry('Failed to remove target: ' + error, 'ERROR');
         });
+}
+
+// Alias for deleteTarget - used by context menu and target list buttons
+function removeTarget(bdAddress) {
+    deleteTarget(bdAddress);
 }
 
 // ==================== SMS MANAGEMENT ====================
@@ -7779,6 +7794,256 @@ handleGeoPing = function(data) {
     updateToolsTrackingDisplay(data);
 };
 
+// ==================== PICONET ANALYSIS MODAL ====================
+
+let piconetSimulation = null;
+
+/**
+ * Open the Piconet Analysis modal
+ */
+function openPiconetModal() {
+    document.getElementById('piconetModal').classList.remove('hidden');
+    refreshPiconetGraph();
+}
+
+/**
+ * Close the Piconet Analysis modal
+ */
+function closePiconetModal() {
+    document.getElementById('piconetModal').classList.add('hidden');
+    if (piconetSimulation) {
+        piconetSimulation.stop();
+    }
+}
+
+/**
+ * Refresh and render the piconet graph
+ */
+function refreshPiconetGraph() {
+    fetch('/api/piconets')
+        .then(response => response.json())
+        .then(result => {
+            if (result.status === 'success') {
+                renderPiconetGraph(result.data);
+            } else {
+                addLogEntry('Failed to load piconet data: ' + (result.error || 'Unknown error'), 'ERROR');
+            }
+        })
+        .catch(error => {
+            addLogEntry('Piconet analysis error: ' + error, 'ERROR');
+        });
+}
+
+/**
+ * Render the force-directed piconet graph using D3.js
+ */
+function renderPiconetGraph(data) {
+    const container = document.getElementById('piconetGraphContainer');
+    const svg = d3.select('#piconetGraph');
+
+    // Clear existing graph
+    svg.selectAll('*').remove();
+
+    // Update stats
+    document.getElementById('piconetNodeCount').textContent = data.nodes.length;
+    document.getElementById('piconetEdgeCount').textContent = data.edges.length;
+
+    if (data.nodes.length === 0) {
+        svg.append('text')
+            .attr('x', container.clientWidth / 2)
+            .attr('y', container.clientHeight / 2)
+            .attr('text-anchor', 'middle')
+            .attr('fill', '#484f58')
+            .style('font-family', 'Share Tech Mono, monospace')
+            .style('font-size', '12px')
+            .text('No devices detected. Start scanning to see relationships.');
+        return;
+    }
+
+    const width = container.clientWidth;
+    const height = container.clientHeight;
+
+    svg.attr('viewBox', [0, 0, width, height]);
+
+    // Color scale based on role
+    const roleColors = {
+        'master': '#00d4ff',
+        'slave': '#30d158',
+        'dual': '#ffb000',
+        'unknown': '#8b949e'
+    };
+
+    // Create links
+    const links = data.edges.map(d => ({
+        source: d.source,
+        target: d.target,
+        type: d.type,
+        confidence: d.confidence,
+        reasons: d.reasons
+    }));
+
+    // Create nodes
+    const nodes = data.nodes.map(d => ({
+        id: d.id,
+        name: d.name,
+        type: d.type,
+        role: d.role,
+        manufacturer: d.manufacturer,
+        rssi: d.rssi,
+        is_target: d.is_target
+    }));
+
+    // Create simulation
+    if (piconetSimulation) {
+        piconetSimulation.stop();
+    }
+
+    piconetSimulation = d3.forceSimulation(nodes)
+        .force('link', d3.forceLink(links).id(d => d.id).distance(100))
+        .force('charge', d3.forceManyBody().strength(-300))
+        .force('center', d3.forceCenter(width / 2, height / 2))
+        .force('collision', d3.forceCollide().radius(40));
+
+    // Draw links
+    const link = svg.append('g')
+        .selectAll('line')
+        .data(links)
+        .join('line')
+        .attr('class', d => `piconet-link ${d.type}`)
+        .attr('stroke-width', d => Math.max(1, d.confidence / 30));
+
+    // Draw nodes
+    const node = svg.append('g')
+        .selectAll('g')
+        .data(nodes)
+        .join('g')
+        .attr('class', d => `piconet-node ${d.is_target ? 'target' : ''}`)
+        .call(d3.drag()
+            .on('start', dragstarted)
+            .on('drag', dragged)
+            .on('end', dragended));
+
+    // Node circles
+    node.append('circle')
+        .attr('r', d => d.is_target ? 14 : 10)
+        .attr('fill', d => d.is_target ? '#ff3b30' : roleColors[d.role] || roleColors.unknown);
+
+    // Node labels (shortened BD address)
+    node.append('text')
+        .attr('dy', 20)
+        .attr('text-anchor', 'middle')
+        .text(d => {
+            if (d.name && d.name !== 'Unknown') {
+                return d.name.substring(0, 12) + (d.name.length > 12 ? '...' : '');
+            }
+            return d.id.substring(0, 8);
+        });
+
+    // Tooltip
+    const tooltip = document.getElementById('piconetTooltip');
+
+    node.on('mouseover', function(event, d) {
+        const relatedEdges = links.filter(l =>
+            l.source.id === d.id || l.target.id === d.id
+        );
+
+        let tooltipHtml = `
+            <div class="tooltip-title">${d.name || 'Unknown'}</div>
+            <div class="tooltip-row"><span class="tooltip-label">Address:</span><span>${d.id}</span></div>
+            <div class="tooltip-row"><span class="tooltip-label">Type:</span><span>${d.type}</span></div>
+            <div class="tooltip-row"><span class="tooltip-label">Role:</span><span>${d.role}</span></div>
+            <div class="tooltip-row"><span class="tooltip-label">Manufacturer:</span><span>${d.manufacturer || 'Unknown'}</span></div>
+            ${d.rssi ? `<div class="tooltip-row"><span class="tooltip-label">RSSI:</span><span>${d.rssi} dBm</span></div>` : ''}
+            ${d.is_target ? '<div style="color: #ff3b30; margin-top: 4px;">TARGET</div>' : ''}
+        `;
+
+        if (relatedEdges.length > 0) {
+            tooltipHtml += '<div style="margin-top: 8px; border-top: 1px solid #333; padding-top: 4px;">';
+            tooltipHtml += '<span class="tooltip-label">Relationships:</span>';
+            relatedEdges.forEach(edge => {
+                const other = edge.source.id === d.id ? edge.target : edge.source;
+                tooltipHtml += `<div style="margin-top: 2px;">→ ${other.name || other.id.substring(0, 8)} (${edge.confidence}%)</div>`;
+            });
+            tooltipHtml += '</div>';
+        }
+
+        tooltip.innerHTML = tooltipHtml;
+        tooltip.classList.remove('hidden');
+        tooltip.style.left = (event.pageX + 10) + 'px';
+        tooltip.style.top = (event.pageY - 10) + 'px';
+    })
+    .on('mousemove', function(event) {
+        tooltip.style.left = (event.pageX + 10) + 'px';
+        tooltip.style.top = (event.pageY - 10) + 'px';
+    })
+    .on('mouseout', function() {
+        tooltip.classList.add('hidden');
+    })
+    .on('click', function(event, d) {
+        // Open device info on click
+        showDeviceInfo(d.id);
+    });
+
+    // Link tooltip
+    link.on('mouseover', function(event, d) {
+        let tooltipHtml = `
+            <div class="tooltip-title">Relationship</div>
+            <div class="tooltip-row"><span class="tooltip-label">Type:</span><span>${d.type}</span></div>
+            <div class="tooltip-row"><span class="tooltip-label">Confidence:</span><span>${d.confidence}%</span></div>
+            <div style="margin-top: 4px;"><span class="tooltip-label">Reasons:</span></div>
+        `;
+        d.reasons.forEach(reason => {
+            tooltipHtml += `<div style="margin-left: 8px;">• ${reason}</div>`;
+        });
+
+        tooltip.innerHTML = tooltipHtml;
+        tooltip.classList.remove('hidden');
+        tooltip.style.left = (event.pageX + 10) + 'px';
+        tooltip.style.top = (event.pageY - 10) + 'px';
+    })
+    .on('mouseout', function() {
+        tooltip.classList.add('hidden');
+    });
+
+    // Update positions on tick
+    piconetSimulation.on('tick', () => {
+        link
+            .attr('x1', d => d.source.x)
+            .attr('y1', d => d.source.y)
+            .attr('x2', d => d.target.x)
+            .attr('y2', d => d.target.y);
+
+        node.attr('transform', d => `translate(${d.x},${d.y})`);
+    });
+
+    // Drag functions
+    function dragstarted(event, d) {
+        if (!event.active) piconetSimulation.alphaTarget(0.3).restart();
+        d.fx = d.x;
+        d.fy = d.y;
+    }
+
+    function dragged(event, d) {
+        d.fx = event.x;
+        d.fy = event.y;
+    }
+
+    function dragended(event, d) {
+        if (!event.active) piconetSimulation.alphaTarget(0);
+        d.fx = null;
+        d.fy = null;
+    }
+
+    // Add zoom behavior
+    const zoom = d3.zoom()
+        .scaleExtent([0.3, 3])
+        .on('zoom', (event) => {
+            svg.selectAll('g').attr('transform', event.transform);
+        });
+
+    svg.call(zoom);
+}
+
 // ==================== TARGETS MODAL ====================
 
 /**
@@ -7958,10 +8223,10 @@ function clearAllTargets() {
     let cleared = 0;
 
     targetKeys.forEach(bdAddress => {
-        fetch(`/api/targets/${bdAddress}`, { method: 'DELETE' })
+        fetch(`/api/targets/${encodeURIComponent(bdAddress)}`, { method: 'DELETE' })
             .then(r => r.json())
             .then(data => {
-                if (data.status === 'removed') {
+                if (data.status === 'deleted') {
                     delete targets[bdAddress];
                     cleared++;
                     if (cleared === targetKeys.length) {

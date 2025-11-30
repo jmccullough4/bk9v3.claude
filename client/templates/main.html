@@ -10,6 +10,7 @@
     <link href="https://api.mapbox.com/mapbox-gl-js/v3.0.1/mapbox-gl.css" rel="stylesheet">
     <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
 </head>
 <body>
@@ -347,6 +348,38 @@
                         </label>
                     </div>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Piconet Analysis Modal -->
+    <div id="piconetModal" class="modal hidden">
+        <div class="modal-content modal-large">
+            <div class="modal-header">
+                <span>&#128279; PICONET ANALYSIS</span>
+                <button class="modal-close" onclick="closePiconetModal()">&times;</button>
+            </div>
+            <div class="modal-body piconet-body">
+                <div class="piconet-controls">
+                    <button class="btn btn-sm" onclick="refreshPiconetGraph()">&#8635; Refresh</button>
+                    <span class="piconet-stats">
+                        <span id="piconetNodeCount">0</span> devices |
+                        <span id="piconetEdgeCount">0</span> relationships
+                    </span>
+                </div>
+                <div class="piconet-legend">
+                    <span class="legend-item"><span class="legend-dot master"></span>Master</span>
+                    <span class="legend-item"><span class="legend-dot slave"></span>Slave</span>
+                    <span class="legend-item"><span class="legend-dot dual"></span>Dual</span>
+                    <span class="legend-item"><span class="legend-dot target"></span>Target</span>
+                    <span class="legend-line piconet-line"></span><span>Piconet</span>
+                    <span class="legend-line paired-line"></span><span>Paired</span>
+                    <span class="legend-line associated-line"></span><span>Associated</span>
+                </div>
+                <div id="piconetGraphContainer" class="piconet-graph-container">
+                    <svg id="piconetGraph"></svg>
+                </div>
+                <div id="piconetTooltip" class="piconet-tooltip hidden"></div>
             </div>
         </div>
     </div>
@@ -908,6 +941,7 @@
                 </div>
                 <button class="targets-btn" onclick="openTargetsModal()" title="Targets">&#127919;</button>
                 <button class="tools-btn" onclick="openToolsModal()" title="Tools">&#128295;</button>
+                <button class="piconet-btn" onclick="openPiconetModal()" title="Piconet Analysis">&#128279;</button>
                 <button class="settings-btn" onclick="openSettingsModal()" title="Settings">&#9881;</button>
                 <span class="operator-info">OP: {{ username }}</span>
                 <a href="{{ url_for('logout') }}" class="logout-btn">LOGOUT</a>
