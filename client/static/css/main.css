@@ -4918,6 +4918,22 @@ body.resizing-vertical * {
     color: var(--bg-primary);
 }
 
+.piconet-btn {
+    background: rgba(0, 20, 40, 0.8);
+    border: 1px solid #9966ff;
+    color: #9966ff;
+    padding: 6px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 16px;
+    transition: all 0.2s ease;
+}
+
+.piconet-btn:hover {
+    background: #9966ff;
+    color: var(--bg-primary);
+}
+
 .tools-body {
     padding: 0 !important;
 }
@@ -5451,4 +5467,193 @@ body.resizing-vertical * {
 
 .quick-target-more:hover {
     background: rgba(0, 212, 255, 0.1);
+}
+
+/* ==================== PICONET ANALYSIS ==================== */
+
+.piconet-body {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    height: 500px;
+}
+
+.piconet-controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.piconet-stats {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+
+.piconet-legend {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 8px 12px;
+    background: rgba(0, 10, 20, 0.4);
+    border-radius: 4px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-secondary);
+    flex-wrap: wrap;
+}
+
+.piconet-legend .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.piconet-legend .legend-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+}
+
+.piconet-legend .legend-dot.master {
+    background: var(--accent-primary);
+}
+
+.piconet-legend .legend-dot.slave {
+    background: var(--accent-success);
+}
+
+.piconet-legend .legend-dot.dual {
+    background: var(--accent-warning);
+}
+
+.piconet-legend .legend-dot.target {
+    background: var(--accent-danger);
+    box-shadow: 0 0 8px var(--accent-danger);
+}
+
+.piconet-legend .legend-line {
+    width: 20px;
+    height: 2px;
+    display: inline-block;
+    margin-left: 12px;
+    margin-right: 4px;
+}
+
+.piconet-legend .piconet-line {
+    background: var(--accent-primary);
+}
+
+.piconet-legend .paired-line {
+    background: var(--accent-success);
+}
+
+.piconet-legend .associated-line {
+    background: var(--text-muted);
+    border-style: dashed;
+}
+
+.piconet-graph-container {
+    flex: 1;
+    background: rgba(0, 5, 10, 0.6);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    overflow: hidden;
+    position: relative;
+}
+
+#piconetGraph {
+    width: 100%;
+    height: 100%;
+}
+
+.piconet-tooltip {
+    position: absolute;
+    background: var(--bg-panel);
+    border: 1px solid var(--border-highlight);
+    border-radius: 4px;
+    padding: 8px 12px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-primary);
+    pointer-events: none;
+    z-index: 1000;
+    max-width: 300px;
+    box-shadow: var(--shadow-glow);
+}
+
+.piconet-tooltip.hidden {
+    display: none;
+}
+
+.piconet-tooltip .tooltip-title {
+    font-weight: 600;
+    color: var(--accent-primary);
+    margin-bottom: 4px;
+}
+
+.piconet-tooltip .tooltip-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.piconet-tooltip .tooltip-label {
+    color: var(--text-muted);
+}
+
+/* Piconet node styling */
+.piconet-node {
+    cursor: pointer;
+}
+
+.piconet-node circle {
+    stroke: var(--bg-primary);
+    stroke-width: 2px;
+    transition: all 0.2s ease;
+}
+
+.piconet-node:hover circle {
+    stroke: var(--accent-primary);
+    stroke-width: 3px;
+}
+
+.piconet-node.target circle {
+    stroke: var(--accent-danger);
+    stroke-width: 3px;
+    filter: drop-shadow(0 0 6px var(--accent-danger));
+}
+
+.piconet-node text {
+    font-family: var(--font-mono);
+    font-size: 8px;
+    fill: var(--text-secondary);
+    pointer-events: none;
+}
+
+.piconet-link {
+    fill: none;
+    stroke-opacity: 0.6;
+}
+
+.piconet-link.piconet {
+    stroke: var(--accent-primary);
+    stroke-width: 2px;
+}
+
+.piconet-link.paired {
+    stroke: var(--accent-success);
+    stroke-width: 2px;
+}
+
+.piconet-link.associated {
+    stroke: var(--text-muted);
+    stroke-width: 1px;
+    stroke-dasharray: 4,4;
+}
+
+.piconet-link.same_device {
+    stroke: var(--accent-warning);
+    stroke-width: 3px;
 }
