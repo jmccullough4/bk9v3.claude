@@ -6345,7 +6345,7 @@ def get_version():
 @app.route('/api/updates/check', methods=['GET'])
 @login_required
 def check_for_updates():
-    """Check if updates are available from GitHub for the current branch."""
+    """Check if updates are available from GitHub main branch."""
     update_info = {
         'current_commit': None,
         'remote_commit': None,
@@ -6353,72 +6353,98 @@ def check_for_updates():
         'commits_behind': 0,
         'recent_changes': [],
         'current_branch': None,
-        'error': None
+        'target_branch': None,
+        'error': None,
+        'fetch_error': None
     }
 
     try:
+        # Set up environment for git commands (important when running as service)
+        git_env = os.environ.copy()
+        git_env['GIT_DIR'] = os.path.join(INSTALL_DIR, '.git')
+        git_env['GIT_WORK_TREE'] = INSTALL_DIR
+        # Ensure HOME is set for git config
+        if 'HOME' not in git_env:
+            git_env['HOME'] = '/root'
+
+        # Mark directory as safe (needed when service user differs from repo owner)
+        subprocess.run(
+            ['git', 'config', '--global', '--add', 'safe.directory', INSTALL_DIR],
+            capture_output=True, text=True, timeout=5, env=git_env
+        )
+
         # Get current branch
         result = subprocess.run(
             ['git', 'rev-parse', '--abbrev-ref', 'HEAD'],
-            capture_output=True, text=True, timeout=5, cwd=INSTALL_DIR
+            capture_output=True, text=True, timeout=5, cwd=INSTALL_DIR, env=git_env
         )
         current_branch = result.stdout.strip() if result.returncode == 0 else 'main'
         update_info['current_branch'] = current_branch
 
-        # Get current commit
+        # Get current commit (full hash for accurate comparison)
         result = subprocess.run(
-            ['git', 'rev-parse', '--short', 'HEAD'],
-            capture_output=True, text=True, timeout=5, cwd=INSTALL_DIR
+            ['git', 'rev-parse', 'HEAD'],
+            capture_output=True, text=True, timeout=5, cwd=INSTALL_DIR, env=git_env
         )
-        if result.returncode == 0:
-            update_info['current_commit'] = result.stdout.strip()
+        current_full_commit = result.stdout.strip() if result.returncode == 0 else None
+        update_info['current_commit'] = current_full_commit[:8] if current_full_commit else None
 
-        # Fetch from remote (fetch all branches)
-        subprocess.run(
+        # Fetch from remote - capture any errors
+        fetch_result = subprocess.run(
             ['git', 'fetch', 'origin', '--prune'],
-            capture_output=True, text=True, timeout=30, cwd=INSTALL_DIR
+            capture_output=True, text=True, timeout=30, cwd=INSTALL_DIR, env=git_env
         )
+        if fetch_result.returncode != 0:
+            update_info['fetch_error'] = fetch_result.stderr.strip() or 'Fetch failed'
+            add_log(f"Git fetch error: {update_info['fetch_error']}", "WARNING")
 
-        # Get remote commit for the current branch
-        remote_ref = f'origin/{current_branch}'
-        result = subprocess.run(
-            ['git', 'rev-parse', '--short', remote_ref],
-            capture_output=True, text=True, timeout=5, cwd=INSTALL_DIR
-        )
-        if result.returncode != 0:
-            # If current branch doesn't exist on remote, try main/master
-            for fallback in ['origin/main', 'origin/master']:
-                result = subprocess.run(
-                    ['git', 'rev-parse', '--short', fallback],
-                    capture_output=True, text=True, timeout=5, cwd=INSTALL_DIR
-                )
-                if result.returncode == 0:
-                    remote_ref = fallback
-                    break
+        # Always check against main branch for updates (this is where releases come from)
+        # Try main first, then master as fallback
+        remote_ref = None
+        remote_full_commit = None
+        for branch in ['origin/main', 'origin/master']:
+            result = subprocess.run(
+                ['git', 'rev-parse', branch],
+                capture_output=True, text=True, timeout=5, cwd=INSTALL_DIR, env=git_env
+            )
+            if result.returncode == 0:
+                remote_ref = branch
+                remote_full_commit = result.stdout.strip()
+                update_info['remote_commit'] = remote_full_commit[:8]
+                update_info['target_branch'] = branch.replace('origin/', '')
+                break
 
-        if result.returncode == 0:
-            update_info['remote_commit'] = result.stdout.strip()
+        if not remote_ref:
+            update_info['error'] = 'Could not find main or master branch on remote'
+            return jsonify(update_info)
 
-        # Check if different
-        if update_info['current_commit'] and update_info['remote_commit']:
-            update_info['update_available'] = update_info['current_commit'] != update_info['remote_commit']
+        # Check if main branch has commits we don't have
+        if current_full_commit and remote_full_commit:
+            # Use merge-base to find common ancestor and determine if we're behind
+            result = subprocess.run(
+                ['git', 'merge-base', 'HEAD', remote_ref],
+                capture_output=True, text=True, timeout=5, cwd=INSTALL_DIR, env=git_env
+            )
+            merge_base = result.stdout.strip() if result.returncode == 0 else None
 
-            # Count commits behind
+            # Count commits on remote that aren't in our history
             result = subprocess.run(
                 ['git', 'rev-list', '--count', f'HEAD..{remote_ref}'],
-                capture_output=True, text=True, timeout=5, cwd=INSTALL_DIR
+                capture_output=True, text=True, timeout=5, cwd=INSTALL_DIR, env=git_env
             )
             if result.returncode == 0:
                 try:
-                    update_info['commits_behind'] = int(result.stdout.strip())
+                    commits_behind = int(result.stdout.strip())
+                    update_info['commits_behind'] = commits_behind
+                    update_info['update_available'] = commits_behind > 0
                 except ValueError:
                     update_info['commits_behind'] = 0
 
-            # Get recent changes on remote
-            if update_info['update_available'] and update_info['commits_behind'] > 0:
+            # Get recent changes on main branch that we don't have
+            if update_info['commits_behind'] > 0:
                 result = subprocess.run(
                     ['git', 'log', '--oneline', '-10', f'HEAD..{remote_ref}'],
-                    capture_output=True, text=True, timeout=5, cwd=INSTALL_DIR
+                    capture_output=True, text=True, timeout=5, cwd=INSTALL_DIR, env=git_env
                 )
                 if result.returncode == 0 and result.stdout.strip():
                     # Parse git log output into structured objects
@@ -6438,7 +6464,7 @@ def check_for_updates():
                                 })
                     update_info['recent_changes'] = changes
 
-        add_log(f"Update check: {current_branch} @ {update_info['current_commit']} -> {update_info['remote_commit']} ({update_info['commits_behind']} behind)", "DEBUG")
+        add_log(f"Update check: {current_branch} @ {update_info['current_commit']} vs {update_info['target_branch']} @ {update_info['remote_commit']} ({update_info['commits_behind']} behind)", "DEBUG")
 
     except subprocess.TimeoutExpired:
         update_info['error'] = 'Timeout checking for updates'
@@ -6464,10 +6490,23 @@ def apply_updates():
     }
 
     try:
+        # Set up environment for git commands (important when running as service)
+        git_env = os.environ.copy()
+        git_env['GIT_DIR'] = os.path.join(INSTALL_DIR, '.git')
+        git_env['GIT_WORK_TREE'] = INSTALL_DIR
+        if 'HOME' not in git_env:
+            git_env['HOME'] = '/root'
+
+        # Mark directory as safe
+        subprocess.run(
+            ['git', 'config', '--global', '--add', 'safe.directory', INSTALL_DIR],
+            capture_output=True, text=True, timeout=5, env=git_env
+        )
+
         # Get current branch
         proc = subprocess.run(
             ['git', 'rev-parse', '--abbrev-ref', 'HEAD'],
-            capture_output=True, text=True, timeout=5, cwd=INSTALL_DIR
+            capture_output=True, text=True, timeout=5, cwd=INSTALL_DIR, env=git_env
         )
         current_branch = proc.stdout.strip() if proc.returncode == 0 else 'main'
         result['current_branch'] = current_branch
@@ -6475,30 +6514,38 @@ def apply_updates():
         # Get current commit
         proc = subprocess.run(
             ['git', 'rev-parse', '--short', 'HEAD'],
-            capture_output=True, text=True, timeout=5, cwd=INSTALL_DIR
+            capture_output=True, text=True, timeout=5, cwd=INSTALL_DIR, env=git_env
         )
         result['old_commit'] = proc.stdout.strip() if proc.returncode == 0 else None
 
         # Stash any local changes
-        subprocess.run(['git', 'stash'], capture_output=True, timeout=10, cwd=INSTALL_DIR)
+        subprocess.run(['git', 'stash'], capture_output=True, timeout=10, cwd=INSTALL_DIR, env=git_env)
 
-        # Pull updates from the current branch
-        add_log(f"Pulling updates for branch: {current_branch}", "INFO")
+        # Fetch latest from origin first
+        subprocess.run(
+            ['git', 'fetch', 'origin'],
+            capture_output=True, text=True, timeout=30, cwd=INSTALL_DIR, env=git_env
+        )
+
+        # Pull updates - try main branch first (where releases come from)
+        add_log(f"Pulling updates from main branch", "INFO")
         proc = subprocess.run(
-            ['git', 'pull', 'origin', current_branch],
-            capture_output=True, text=True, timeout=60, cwd=INSTALL_DIR
+            ['git', 'pull', 'origin', 'main'],
+            capture_output=True, text=True, timeout=60, cwd=INSTALL_DIR, env=git_env
         )
         if proc.returncode != 0:
-            # Try main as fallback
-            proc = subprocess.run(
-                ['git', 'pull', 'origin', 'main'],
-                capture_output=True, text=True, timeout=60, cwd=INSTALL_DIR
-            )
-        if proc.returncode != 0:
-            # Try master as last fallback
+            # Try master as fallback
+            add_log(f"Trying master branch...", "INFO")
             proc = subprocess.run(
                 ['git', 'pull', 'origin', 'master'],
-                capture_output=True, text=True, timeout=60, cwd=INSTALL_DIR
+                capture_output=True, text=True, timeout=60, cwd=INSTALL_DIR, env=git_env
+            )
+        if proc.returncode != 0:
+            # Try current branch as last fallback
+            add_log(f"Trying current branch: {current_branch}", "INFO")
+            proc = subprocess.run(
+                ['git', 'pull', 'origin', current_branch],
+                capture_output=True, text=True, timeout=60, cwd=INSTALL_DIR, env=git_env
             )
 
         if proc.returncode == 0:
@@ -6507,7 +6554,7 @@ def apply_updates():
             # Get new commit
             proc = subprocess.run(
                 ['git', 'rev-parse', '--short', 'HEAD'],
-                capture_output=True, text=True, timeout=5, cwd=INSTALL_DIR
+                capture_output=True, text=True, timeout=5, cwd=INSTALL_DIR, env=git_env
             )
             result['new_commit'] = proc.stdout.strip() if proc.returncode == 0 else None
 
@@ -6515,7 +6562,7 @@ def apply_updates():
             if result['old_commit'] and result['new_commit']:
                 proc = subprocess.run(
                     ['git', 'log', '--oneline', f"{result['old_commit']}..{result['new_commit']}"],
-                    capture_output=True, text=True, timeout=5, cwd=INSTALL_DIR
+                    capture_output=True, text=True, timeout=5, cwd=INSTALL_DIR, env=git_env
                 )
                 if proc.returncode == 0:
                     result['changes'] = proc.stdout.strip().split('\n') if proc.stdout.strip() else []
