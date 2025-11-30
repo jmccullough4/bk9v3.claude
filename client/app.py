@@ -3574,6 +3574,171 @@ def stop_hidden_device_hunt():
     add_log("Hidden device hunt stop requested", "INFO")
 
 
+def correlate_ble_to_classic(ble_devices, targets, rssi_threshold=-70):
+    """
+    Attempt to correlate BLE discoveries with Classic BD addresses.
+
+    Many dual-mode devices (phones, watches) use different addresses for
+    Classic and BLE. This function uses multiple heuristics to identify
+    potential matches:
+
+    1. OUI Match: Same manufacturer prefix (first 3 bytes)
+    2. Address Proximity: BLE address within ±16 of Classic address
+    3. Name Match: BLE advertised name matches target alias
+    4. Strong Signal + Same Manufacturer: High confidence if RSSI > threshold
+
+    Args:
+        ble_devices: dict of {ble_address: {'name': str, 'rssi': int, ...}}
+        targets: list of target dicts with 'bd_address' and optional 'alias'
+        rssi_threshold: RSSI threshold for "strong signal" (-70 dBm default)
+
+    Returns:
+        dict: {classic_target_addr: {
+            'ble_address': str,
+            'confidence': 'high'|'medium'|'low',
+            'correlation_methods': list,
+            'ble_name': str,
+            'ble_rssi': int
+        }}
+    """
+    correlations = {}
+
+    # Build lookup structures
+    target_by_oui = {}  # OUI -> list of targets
+    target_by_name = {}  # lowercase name -> target
+    target_addrs = {}  # addr -> target
+
+    for target in targets:
+        addr = target['bd_address'].upper()
+        oui = addr.replace(':', '')[:6]
+        alias = target.get('alias', '').strip().lower()
+
+        target_addrs[addr] = target
+
+        if oui not in target_by_oui:
+            target_by_oui[oui] = []
+        target_by_oui[oui].append(target)
+
+        if alias:
+            target_by_name[alias] = target
+
+    # Analyze each BLE device
+    for ble_addr, ble_info in ble_devices.items():
+        ble_addr_upper = ble_addr.upper()
+        ble_oui = ble_addr_upper.replace(':', '')[:6]
+        ble_name = (ble_info.get('name') or '').strip()
+        ble_name_lower = ble_name.lower()
+        ble_rssi = ble_info.get('rssi')
+
+        # Skip if this BLE address is already an exact target match
+        if ble_addr_upper in target_addrs:
+            continue
+
+        correlation_methods = []
+        matched_target = None
+        confidence = 'low'
+
+        # Method 1: OUI Match (same manufacturer)
+        if ble_oui in target_by_oui:
+            oui_targets = target_by_oui[ble_oui]
+            if len(oui_targets) == 1:
+                # Single target with this OUI - good correlation
+                matched_target = oui_targets[0]
+                correlation_methods.append('oui_match')
+                confidence = 'medium'
+            else:
+                # Multiple targets with same OUI - need more signals
+                matched_target = oui_targets[0]  # Take first, may refine below
+                correlation_methods.append('oui_match_ambiguous')
+
+        # Method 2: Address Proximity (some devices use addr+1, addr+2, etc.)
+        ble_addr_int = int(ble_addr_upper.replace(':', ''), 16)
+        for target_addr, target in target_addrs.items():
+            target_addr_int = int(target_addr.replace(':', ''), 16)
+            addr_diff = abs(ble_addr_int - target_addr_int)
+
+            # Check if within 16 addresses (covers common offsets like +1, +2)
+            if addr_diff > 0 and addr_diff <= 16:
+                matched_target = target
+                correlation_methods.append(f'address_proximity_diff_{addr_diff}')
+                confidence = 'high'  # Address proximity is strong signal
+                break
+
+        # Method 3: Name Match (BLE name contains target alias or vice versa)
+        if ble_name_lower:
+            for alias, target in target_by_name.items():
+                if alias and (alias in ble_name_lower or ble_name_lower in alias):
+                    matched_target = target
+                    correlation_methods.append('name_match')
+                    confidence = 'high'  # Name match is very strong
+                    break
+
+            # Also check if BLE name matches common phone naming patterns
+            # e.g., "John's iPhone" or "Galaxy S21"
+            if not matched_target and ble_name:
+                for target in targets:
+                    alias = target.get('alias', '')
+                    # Check if target alias words appear in BLE name
+                    if alias:
+                        alias_words = [w.lower() for w in alias.split() if len(w) > 2]
+                        name_words = [w.lower() for w in ble_name.split() if len(w) > 2]
+                        common_words = set(alias_words) & set(name_words)
+                        if common_words:
+                            matched_target = target
+                            correlation_methods.append(f'partial_name_match:{",".join(common_words)}')
+                            confidence = 'medium'
+                            break
+
+        # Method 4: Strong Signal + Same Manufacturer = high probability
+        if matched_target and ble_rssi and ble_rssi > rssi_threshold:
+            if 'oui_match' in correlation_methods or 'oui_match_ambiguous' in correlation_methods:
+                correlation_methods.append('strong_signal')
+                if confidence != 'high':
+                    confidence = 'medium'
+
+        # Store correlation if we found a match
+        if matched_target and correlation_methods:
+            target_addr = matched_target['bd_address'].upper()
+
+            # Only store if this is a better correlation than existing
+            existing = correlations.get(target_addr)
+            if not existing or _correlation_score(confidence, correlation_methods) > \
+                    _correlation_score(existing['confidence'], existing['correlation_methods']):
+                correlations[target_addr] = {
+                    'ble_address': ble_addr_upper,
+                    'confidence': confidence,
+                    'correlation_methods': correlation_methods,
+                    'ble_name': ble_name if ble_name else None,
+                    'ble_rssi': ble_rssi
+                }
+
+    return correlations
+
+
+def _correlation_score(confidence, methods):
+    """Score a correlation for comparison. Higher is better."""
+    score = 0
+    if confidence == 'high':
+        score += 100
+    elif confidence == 'medium':
+        score += 50
+    else:
+        score += 10
+
+    # Bonus for multiple correlation methods
+    score += len(methods) * 10
+
+    # Bonus for specific strong methods
+    if 'name_match' in methods:
+        score += 50
+    if any('address_proximity' in m for m in methods):
+        score += 40
+    if 'strong_signal' in methods:
+        score += 20
+
+    return score
+
+
 def ble_scan_for_targets(target_addresses, interface='hci0', duration=15):
     """
     Scan for BLE advertisements and check if any match target addresses.
@@ -3582,13 +3747,19 @@ def ble_scan_for_targets(target_addresses, interface='hci0', duration=15):
     is non-discoverable. This function runs a BLE scan and returns any
     target addresses found along with their RSSI and name if available.
 
+    Also returns all seen BLE devices for correlation analysis (many dual-mode
+    devices use different addresses for Classic and BLE).
+
     Args:
         target_addresses: Set of target BD addresses (uppercase) to look for
         interface: Bluetooth interface to use
         duration: Scan duration in seconds
 
     Returns:
-        dict: {bd_address: {'rssi': int, 'name': str, 'found': True}}
+        tuple: (
+            found_targets: {bd_address: {'rssi': int, 'name': str, 'found': True}},
+            all_ble_devices: {bd_address: {'rssi': int, 'name': str}}
+        )
     """
     found_targets = {}
     seen_addresses = {}  # Track all seen addresses with their info
@@ -3663,7 +3834,7 @@ def ble_scan_for_targets(target_addresses, interface='hci0', duration=15):
     add_log(f"BLE scan complete: {len(found_targets)}/{len(target_addresses)} targets found, "
             f"{len(seen_addresses)} total BLE devices seen", "INFO")
 
-    return found_targets
+    return found_targets, seen_addresses
 
 
 def target_survey(interface='hci0'):
@@ -3716,10 +3887,13 @@ def target_survey(interface='hci0'):
         socketio.emit('target_survey_phase', {'phase': 0, 'description': 'BLE Advertisement Scan'})
 
         ble_found = {}
-        if target_survey_active:
-            ble_found = ble_scan_for_targets(target_address_set, interface, duration=15)
+        all_ble_devices = {}
+        ble_correlations = {}
 
-            # Process BLE-found targets immediately
+        if target_survey_active:
+            ble_found, all_ble_devices = ble_scan_for_targets(target_address_set, interface, duration=15)
+
+            # Process exact BLE matches (target address found directly)
             for bd_addr, ble_info in ble_found.items():
                 alias = target_alias_map.get(bd_addr, '')
                 display_name = f"{alias} ({bd_addr})" if alias else bd_addr
@@ -3734,12 +3908,13 @@ def target_survey(interface='hci0'):
                     'device_info': None,
                     'services': [],
                     'probe_time': time.time(),
-                    'detection_phase': 'ble'
+                    'detection_phase': 'ble',
+                    'match_type': 'exact'
                 }
                 target_survey_results[bd_addr] = result
                 socketio.emit('target_survey_result', result)
 
-                add_log(f"TARGET FOUND (BLE): {display_name}", "WARNING")
+                add_log(f"TARGET FOUND (BLE exact): {display_name}", "WARNING")
 
                 # Process as found device
                 device_data = {
@@ -3751,6 +3926,90 @@ def target_survey(interface='hci0'):
                     'discovery_method': 'target_survey_ble'
                 }
                 process_found_device(device_data)
+
+            # =====================================================================
+            # PHASE 0.5: BLE-to-Classic Correlation
+            # Many devices use different addresses for BLE and Classic
+            # Try to correlate BLE discoveries with Classic target addresses
+            # =====================================================================
+            if all_ble_devices and target_survey_active:
+                add_log("Phase 0.5: Correlating BLE devices with Classic targets...", "INFO")
+                socketio.emit('target_survey_phase', {'phase': 0.5, 'description': 'BLE-Classic Correlation'})
+
+                # Run correlation on targets not yet found
+                unfound_targets = [t for t in db_targets if t['bd_address'].upper() not in ble_found]
+                if unfound_targets:
+                    ble_correlations = correlate_ble_to_classic(all_ble_devices, unfound_targets)
+
+                    for classic_addr, corr_info in ble_correlations.items():
+                        alias = target_alias_map.get(classic_addr, '')
+                        display_name = f"{alias} ({classic_addr})" if alias else classic_addr
+                        confidence = corr_info['confidence']
+                        methods = corr_info['correlation_methods']
+                        ble_addr = corr_info['ble_address']
+
+                        # Log the correlation
+                        add_log(f"CORRELATION [{confidence.upper()}]: {display_name} <-> BLE {ble_addr}", "WARNING")
+                        add_log(f"  Methods: {', '.join(methods)}", "INFO")
+                        if corr_info.get('ble_name'):
+                            add_log(f"  BLE Name: {corr_info['ble_name']}", "INFO")
+                        if corr_info.get('ble_rssi'):
+                            add_log(f"  BLE RSSI: {corr_info['ble_rssi']} dBm", "INFO")
+
+                        # For high/medium confidence, treat as found
+                        if confidence in ('high', 'medium'):
+                            result = {
+                                'bd_address': classic_addr,
+                                'alias': alias,
+                                'present': True,
+                                'methods_responded': [f'ble_correlation_{confidence}'],
+                                'rssi': corr_info.get('ble_rssi'),
+                                'device_name': corr_info.get('ble_name'),
+                                'device_info': None,
+                                'services': [],
+                                'probe_time': time.time(),
+                                'detection_phase': 'ble_correlation',
+                                'match_type': 'correlated',
+                                'correlation': {
+                                    'ble_address': ble_addr,
+                                    'confidence': confidence,
+                                    'methods': methods
+                                }
+                            }
+                            target_survey_results[classic_addr] = result
+                            socketio.emit('target_survey_result', result)
+
+                            add_log(f"TARGET FOUND (BLE correlated, {confidence}): {display_name}", "WARNING")
+
+                            # Process as found device
+                            device_data = {
+                                'bd_address': classic_addr,
+                                'device_name': corr_info.get('ble_name'),
+                                'device_type': 'dual_mode',
+                                'manufacturer': get_manufacturer(classic_addr),
+                                'rssi': corr_info.get('ble_rssi'),
+                                'discovery_method': f'target_survey_ble_correlation_{confidence}',
+                                'ble_address': ble_addr
+                            }
+                            process_found_device(device_data)
+                        else:
+                            # Low confidence - emit as potential match but don't count as found
+                            socketio.emit('target_survey_potential_match', {
+                                'classic_address': classic_addr,
+                                'alias': alias,
+                                'ble_address': ble_addr,
+                                'confidence': confidence,
+                                'methods': methods,
+                                'ble_name': corr_info.get('ble_name'),
+                                'ble_rssi': corr_info.get('ble_rssi')
+                            })
+
+                    if ble_correlations:
+                        high_conf = sum(1 for c in ble_correlations.values() if c['confidence'] == 'high')
+                        med_conf = sum(1 for c in ble_correlations.values() if c['confidence'] == 'medium')
+                        low_conf = sum(1 for c in ble_correlations.values() if c['confidence'] == 'low')
+                        add_log(f"Correlation complete: {len(ble_correlations)} potential matches "
+                                f"(high: {high_conf}, medium: {med_conf}, low: {low_conf})", "INFO")
 
         if not target_survey_active:
             return target_survey_results
@@ -3778,9 +4037,15 @@ def target_survey(interface='hci0'):
         # Set interlaced page scan for faster responses
         set_hci_scan_parameters(interface, inquiry_mode='extended', page_scan_type='interlaced')
 
-        # Filter to targets not already found via BLE
-        remaining_targets = [t for t in db_targets if t['bd_address'].upper() not in ble_found]
-        add_log(f"Classic probing {len(remaining_targets)} target(s) not found via BLE", "INFO")
+        # Filter to targets not already found via BLE or correlation
+        # Include targets from ble_found (exact match) and high/medium confidence correlations
+        already_found = set(ble_found.keys())
+        for addr, corr in ble_correlations.items():
+            if corr['confidence'] in ('high', 'medium'):
+                already_found.add(addr)
+
+        remaining_targets = [t for t in db_targets if t['bd_address'].upper() not in already_found]
+        add_log(f"Classic probing {len(remaining_targets)} target(s) not found via BLE/correlation", "INFO")
 
         for i, target in enumerate(remaining_targets):
             if not target_survey_active:
@@ -3987,18 +4252,21 @@ def target_survey(interface='hci0'):
 
         # Summary with phase breakdown
         found_count = sum(1 for r in target_survey_results.values() if r['present'])
-        ble_count = sum(1 for r in target_survey_results.values()
-                       if r['present'] and r.get('detection_phase') == 'ble')
+        ble_exact_count = sum(1 for r in target_survey_results.values()
+                             if r['present'] and r.get('detection_phase') == 'ble')
+        ble_corr_count = sum(1 for r in target_survey_results.values()
+                            if r['present'] and r.get('detection_phase') == 'ble_correlation')
         classic_count = sum(1 for r in target_survey_results.values()
                           if r['present'] and r.get('detection_phase') == 'classic')
 
         add_log(f"Target survey complete: {found_count}/{len(db_targets)} targets detected "
-                f"(BLE: {ble_count}, Classic: {classic_count})", "INFO")
+                f"(BLE exact: {ble_exact_count}, BLE correlated: {ble_corr_count}, Classic: {classic_count})", "INFO")
 
         socketio.emit('target_survey_complete', {
             'total': len(db_targets),
             'found': found_count,
-            'found_ble': ble_count,
+            'found_ble_exact': ble_exact_count,
+            'found_ble_correlated': ble_corr_count,
             'found_classic': classic_count,
             'results': list(target_survey_results.values())
         })
@@ -6008,7 +6276,7 @@ def get_config():
 def get_version():
     """Get application version from git."""
     version_info = {
-        'version': 'v3.2.3',
+        'version': 'v3.2.4',
         'commit': None,
         'branch': None,
         'session_id': SESSION_ID  # Used by frontend to detect restarts
@@ -6024,7 +6292,7 @@ def get_version():
         if result.returncode == 0:
             commit = result.stdout.strip()
             version_info['commit'] = commit
-            version_info['version'] = f'v3.2.3-{commit}'
+            version_info['version'] = f'v3.2.4-{commit}'
 
         # Get branch name
         result = subprocess.run(
