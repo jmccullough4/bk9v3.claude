@@ -138,6 +138,7 @@
                     <button class="tools-tab" onclick="showToolsTab('phonebook')">Phone Book</button>
                     <button class="tools-tab" onclick="showToolsTab('services')">Services</button>
                     <button class="tools-tab" onclick="showToolsTab('analysis')">Analysis</button>
+                    <button class="tools-tab" onclick="showToolsTab('cyber')">Cyber Tools</button>
                 </div>
 
                 <!-- Target Tracking Tab -->
@@ -283,6 +284,129 @@
                         </div>
                         <div class="analysis-results mt-10 hidden" id="analysisResults">
                             <div class="analysis-results-content" id="analysisResultsContent">
+                                <!-- Results populated by JS -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Cyber Tools Tab -->
+                <div id="toolsCyber" class="tools-content">
+                    <div class="tools-group">
+                        <h3>Bluetooth HID Injection (hi_my_name_is_keyboard)</h3>
+                        <p class="tools-hint">Exploit CVE-2023-45866 to inject keystrokes into vulnerable Bluetooth devices. Requires compatible Broadcom adapter (BCM20702A0).</p>
+
+                        <!-- Tool Status -->
+                        <div class="cyber-tool-status" id="hidToolStatus">
+                            <div class="status-row">
+                                <span class="status-label">Tool Status:</span>
+                                <span class="status-value" id="hidToolInstalled">Checking...</span>
+                            </div>
+                            <div class="status-row">
+                                <span class="status-label">Adapter:</span>
+                                <span class="status-value" id="hidAdapterStatus">--</span>
+                            </div>
+                        </div>
+
+                        <div class="form-row mt-10">
+                            <label>Target Platform:</label>
+                            <select id="hidTargetPlatform" class="input">
+                                <option value="android">Android</option>
+                                <option value="linux">Linux</option>
+                                <option value="macos">macOS</option>
+                                <option value="ios">iOS</option>
+                                <option value="windows">Windows</option>
+                            </select>
+                        </div>
+
+                        <div class="form-row">
+                            <label>Target Device:</label>
+                            <div class="input-with-btn">
+                                <input type="text" id="hidTargetAddress" class="input" placeholder="XX:XX:XX:XX:XX:XX">
+                                <button class="btn btn-sm btn-secondary" onclick="fillHidTargetFromSurvey()" title="Fill from selected device">&#8592; SURVEY</button>
+                            </div>
+                        </div>
+
+                        <div class="form-row">
+                            <label>Payload Type:</label>
+                            <select id="hidPayloadType" class="input" onchange="updateHidPayloadPreview()">
+                                <option value="custom">Custom Keystrokes</option>
+                                <option value="hello">Hello World Test</option>
+                                <option value="revshell_linux">Reverse Shell (Linux)</option>
+                                <option value="revshell_macos">Reverse Shell (macOS)</option>
+                                <option value="download_exec">Download & Execute</option>
+                            </select>
+                        </div>
+
+                        <div class="form-row" id="hidCustomPayloadRow">
+                            <label>Payload / Keystrokes:</label>
+                            <textarea id="hidPayloadText" class="input textarea" rows="4" placeholder="Enter keystrokes to inject..."></textarea>
+                        </div>
+
+                        <!-- Preset payload options -->
+                        <div class="form-row hidden" id="hidRevshellOptions">
+                            <label>LHOST:</label>
+                            <input type="text" id="hidLhost" class="input" placeholder="192.168.1.100">
+                            <label class="ml-10">LPORT:</label>
+                            <input type="text" id="hidLport" class="input" placeholder="4444" style="width: 80px;">
+                        </div>
+
+                        <div class="form-row hidden" id="hidDownloadOptions">
+                            <label>URL:</label>
+                            <input type="text" id="hidDownloadUrl" class="input" placeholder="http://192.168.1.100/payload.sh">
+                        </div>
+
+                        <div class="cyber-warning">
+                            <span class="warning-icon">&#9888;</span>
+                            <span>This tool is for authorized security testing only. Ensure you have proper authorization before use.</span>
+                        </div>
+
+                        <div class="btn-group mt-10">
+                            <button class="btn btn-success" id="btnHidInject" onclick="startHidInjection()">
+                                &#9889; INJECT
+                            </button>
+                            <button class="btn btn-danger" id="btnHidStop" onclick="stopHidInjection()" disabled>
+                                &#9632; STOP
+                            </button>
+                            <button class="btn btn-secondary" onclick="setupHidTool()">
+                                &#128295; SETUP TOOL
+                            </button>
+                        </div>
+
+                        <div class="hid-results mt-10 hidden" id="hidResults">
+                            <div class="hid-results-header">INJECTION LOG</div>
+                            <div class="hid-results-log" id="hidResultsLog">
+                                <!-- Results populated by JS -->
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="tools-group mt-20">
+                        <h3>Link Key Extraction</h3>
+                        <p class="tools-hint">Extract Bluetooth link keys from paired devices (requires physical access or vulnerable pairing).</p>
+
+                        <div class="form-row">
+                            <label>Extraction Method:</label>
+                            <select id="linkKeyMethod" class="input">
+                                <option value="bluetooth">Bluetooth (Magic Keyboard)</option>
+                                <option value="lightning">Lightning Port (iOS)</option>
+                                <option value="usb_spoof">USB Spoofing</option>
+                            </select>
+                        </div>
+
+                        <div class="form-row">
+                            <label>Target Address:</label>
+                            <input type="text" id="linkKeyTargetAddress" class="input" placeholder="XX:XX:XX:XX:XX:XX">
+                        </div>
+
+                        <div class="btn-group mt-10">
+                            <button class="btn btn-primary" onclick="extractLinkKey()">
+                                &#128273; EXTRACT KEY
+                            </button>
+                        </div>
+
+                        <div class="linkkey-results mt-10 hidden" id="linkKeyResults">
+                            <div class="linkkey-results-content" id="linkKeyResultsContent">
                                 <!-- Results populated by JS -->
                             </div>
                         </div>

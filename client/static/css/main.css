@@ -5224,6 +5224,185 @@ body.resizing-vertical * {
     font-weight: 600;
 }
 
+/* ==================== CYBER TOOLS ==================== */
+
+.cyber-tool-status {
+    background: rgba(0, 10, 20, 0.5);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 12px;
+    margin-bottom: 15px;
+}
+
+.cyber-tool-status .status-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+}
+
+.cyber-tool-status .status-row:last-child {
+    margin-bottom: 0;
+}
+
+.cyber-tool-status .status-label {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+}
+
+.cyber-tool-status .status-value {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-primary);
+}
+
+.cyber-tool-status .status-value.installed {
+    color: var(--accent-success);
+}
+
+.cyber-tool-status .status-value.not-installed {
+    color: var(--accent-warning);
+}
+
+.cyber-tool-status .status-value.error {
+    color: var(--accent-danger);
+}
+
+.input-with-btn {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.input-with-btn .input {
+    flex: 1;
+}
+
+.cyber-warning {
+    background: rgba(255, 176, 0, 0.1);
+    border: 1px solid var(--accent-warning);
+    border-radius: 6px;
+    padding: 10px 12px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 15px;
+}
+
+.cyber-warning .warning-icon {
+    font-size: 18px;
+    color: var(--accent-warning);
+}
+
+.cyber-warning span {
+    font-size: 11px;
+    color: var(--accent-warning);
+    line-height: 1.4;
+}
+
+.hid-results, .linkkey-results {
+    background: rgba(0, 10, 20, 0.5);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.hid-results-header {
+    font-family: var(--font-heading);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 8px 12px;
+    background: rgba(0, 212, 255, 0.1);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.hid-results-log {
+    padding: 12px;
+    max-height: 200px;
+    overflow-y: auto;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 1.6;
+}
+
+.hid-log-entry {
+    margin-bottom: 4px;
+    padding: 4px 8px;
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: 3px;
+}
+
+.hid-log-entry.success {
+    border-left: 3px solid var(--accent-success);
+}
+
+.hid-log-entry.error {
+    border-left: 3px solid var(--accent-danger);
+}
+
+.hid-log-entry.info {
+    border-left: 3px solid var(--accent-primary);
+}
+
+.hid-log-entry .log-time {
+    color: var(--text-muted);
+    margin-right: 8px;
+}
+
+.hid-log-entry .log-message {
+    color: var(--text-primary);
+}
+
+.linkkey-results-content {
+    padding: 12px;
+}
+
+.linkkey-result {
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: 4px;
+    padding: 10px;
+    margin-bottom: 8px;
+}
+
+.linkkey-result:last-child {
+    margin-bottom: 0;
+}
+
+.linkkey-label {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    margin-bottom: 4px;
+}
+
+.linkkey-value {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--accent);
+    word-break: break-all;
+}
+
+.textarea {
+    resize: vertical;
+    min-height: 60px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+}
+
+.ml-10 {
+    margin-left: 10px;
+}
+
+.mt-20 {
+    margin-top: 20px;
+}
+
 /* ==================== TARGETS MODAL ==================== */
 
 .targets-btn {

