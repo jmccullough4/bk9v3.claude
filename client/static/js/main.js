@@ -5980,9 +5980,31 @@ function handleGeoPing(data) {
     if (data.bd_address === manualTrackingBd) {
         updateTrackingStats(data);
 
-        // Update direction finder if we have direction data
-        if (data.direction) {
-            updateDirectionFinder(data.direction);
+        // Show direction finder when tracking (even without full direction data)
+        const finder = document.getElementById('directionFinder');
+        if (finder) {
+            finder.classList.remove('hidden');
+
+            // Update direction finder with data if available
+            if (data.direction) {
+                updateDirectionFinder(data.direction);
+            } else {
+                // Show waiting message when no direction data yet
+                const trendEl = document.getElementById('directionTrend');
+                const bearingEl = document.getElementById('directionBearing');
+                const confEl = document.getElementById('directionConfidence');
+
+                if (trendEl) {
+                    trendEl.textContent = data.rssi ? 'ACQUIRING SIGNAL' : 'SEARCHING...';
+                    trendEl.className = 'direction-trend';
+                }
+                if (bearingEl) {
+                    bearingEl.textContent = 'Move with GPS to calculate bearing';
+                }
+                if (confEl) {
+                    confEl.textContent = data.rssi ? `RSSI: ${data.rssi} dBm` : 'Waiting for response...';
+                }
+            }
         }
     }
 
@@ -7618,13 +7640,37 @@ function updateToolsTrackingDisplay(data) {
     if (compassRssiEl) compassRssiEl.textContent = rssi;
 
     // Update bearing if available (from geo ping data)
-    if (data.direction && data.direction.bearing !== undefined) {
-        document.getElementById('toolsTrackingBearing').textContent = `${Math.round(data.direction.bearing)}°`;
-
-        // Rotate compass arrow
+    if (data.direction) {
+        const bearingEl = document.getElementById('toolsTrackingBearing');
         const arrow = document.getElementById('toolsCompassArrow');
-        if (arrow) {
-            arrow.style.transform = `translate(-50%, -100%) rotate(${data.direction.bearing}deg)`;
+
+        if (data.direction.bearing !== null && data.direction.bearing !== undefined) {
+            const cardinalDir = getCardinalDirection(data.direction.bearing);
+            bearingEl.textContent = `${Math.round(data.direction.bearing)}° ${cardinalDir}`;
+
+            // Rotate compass arrow
+            if (arrow) {
+                arrow.style.transform = `translate(-50%, -100%) rotate(${data.direction.bearing}deg)`;
+            }
+        } else {
+            bearingEl.textContent = data.direction.message || 'Move to find';
+        }
+
+        // Show trend indicator
+        if (data.direction.trend) {
+            const statusEl = document.getElementById('toolsTrackingStatus');
+            if (statusEl) {
+                if (data.direction.trend === 'closer') {
+                    statusEl.textContent = 'GETTING CLOSER';
+                    statusEl.style.color = 'var(--success)';
+                } else if (data.direction.trend === 'farther') {
+                    statusEl.textContent = 'MOVING AWAY';
+                    statusEl.style.color = 'var(--danger)';
+                } else if (data.direction.trend === 'stable') {
+                    statusEl.textContent = 'SIGNAL STABLE';
+                    statusEl.style.color = 'var(--warning)';
+                }
+            }
         }
     }
 

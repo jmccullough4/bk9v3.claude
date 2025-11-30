@@ -5244,6 +5244,31 @@ def active_geo_track(bd_address, interface='hci0', methods=None):
             # - Got RSSI from direct query (device is connected)
             got_response = (rtt is not None) or (rssi is not None)
 
+            # If device not in survey yet AND we got an actual response, add it now
+            # This triggers target alerts and adds to survey table
+            if bd_address not in devices and got_response:
+                device_type = get_device_type(bd_address)
+                device_data = {
+                    'bd_address': bd_address,
+                    'device_name': None,
+                    'device_type': device_type if device_type != 'unknown' else 'classic',
+                    'manufacturer': get_manufacturer(bd_address),
+                    'rssi': rssi
+                }
+                process_found_device(device_data)
+                add_log(f"Device {bd_address} confirmed present (response received)", "INFO")
+
+            # Update device in survey table with latest data
+            if bd_address in devices and got_response:
+                if rssi is not None:
+                    devices[bd_address]['rssi'] = rssi
+                if rtt is not None:
+                    devices[bd_address]['last_rtt'] = rtt
+                devices[bd_address]['last_seen'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+            # Direction finding data (requires GPS and RSSI for meaningful results)
+            direction = None
+
             # Record observation if we have location and RSSI
             if current_location.get('lat') and current_location.get('lon') and rssi:
                 conn = get_db()
@@ -5255,53 +5280,17 @@ def active_geo_track(bd_address, interface='hci0', methods=None):
                 conn.commit()
                 conn.close()
 
-                # If device not in survey yet AND we got an actual response, add it now
-                # This is the ONLY place we should add a geo-tracked device to the survey
-                if bd_address not in devices and got_response:
-                    device_type = get_device_type(bd_address)
-                    device_data = {
-                        'bd_address': bd_address,
-                        'device_name': None,
-                        'device_type': device_type if device_type != 'unknown' else 'classic',
-                        'manufacturer': get_manufacturer(bd_address),
-                        'rssi': rssi
-                    }
-                    process_found_device(device_data)
-                    add_log(f"Device {bd_address} confirmed present (response received)", "INFO")
-
-                # Update RSSI in devices dictionary for survey table
-                if bd_address in devices:
-                    devices[bd_address]['rssi'] = rssi
-                    devices[bd_address]['last_seen'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-
                 # Add reading to direction history for direction finding
-                if current_location['lat'] and current_location['lon'] and rssi:
-                    try:
-                        add_direction_reading(bd_address, current_location['lat'], current_location['lon'], rssi)
-                    except Exception as dir_err:
-                        add_log(f"Direction history error: {dir_err}", "DEBUG")
+                try:
+                    add_direction_reading(bd_address, current_location['lat'], current_location['lon'], rssi)
+                except Exception as dir_err:
+                    add_log(f"Direction history error: {dir_err}", "DEBUG")
 
                 # Calculate direction to target
-                direction = None
                 try:
                     direction = calculate_direction_to_target(bd_address)
                 except Exception as dir_err:
                     add_log(f"Direction calculation error: {dir_err}", "DEBUG")
-
-                # Emit real-time ping data to UI with direction info
-                socketio.emit('geo_ping', {
-                    'bd_address': bd_address,
-                    'rssi': rssi,
-                    'rtt': rtt,
-                    'ping': ping_count,
-                    'rssi_readings': rssi_readings,
-                    'success_rate': round(successful_pings / ping_count * 100, 1) if ping_count > 0 else 0,
-                    'avg_rtt': round(sum(rtt_history[-10:]) / len(rtt_history[-10:]), 2) if rtt_history else None,
-                    'system_lat': current_location['lat'],
-                    'system_lon': current_location['lon'],
-                    'methods': methods,
-                    'direction': direction  # Direction finding data
-                })
 
                 add_log(f"GEO [{method_str}] {bd_address}: RSSI={rssi}dBm RTT={rtt}ms", "DEBUG")
 
@@ -5313,23 +5302,28 @@ def active_geo_track(bd_address, interface='hci0', methods=None):
                         devices[bd_address]['emitter_lon'] = location[1]
                         devices[bd_address]['emitter_accuracy'] = location[2]
 
-                # Always emit device update to refresh survey table with latest RSSI
-                if bd_address in devices:
-                    socketio.emit('device_update', devices[bd_address])
+            # Emit geo_ping event for tracking stats UI
+            geo_ping_data = {
+                'bd_address': bd_address,
+                'rssi': rssi,
+                'rtt': rtt,
+                'ping': ping_count,
+                'rssi_readings': rssi_readings,
+                'success_rate': round(successful_pings / ping_count * 100, 1) if ping_count > 0 else 0,
+                'avg_rtt': round(sum(rtt_history[-10:]) / len(rtt_history[-10:]), 2) if rtt_history else None,
+                'methods': methods,
+                'direction': direction
+            }
+            if current_location.get('lat') and current_location.get('lon'):
+                geo_ping_data['system_lat'] = current_location['lat']
+                geo_ping_data['system_lon'] = current_location['lon']
+            if not rssi and not (current_location.get('lat') and current_location.get('lon')):
+                geo_ping_data['status'] = 'no_rssi' if not rssi else 'no_gps'
+            socketio.emit('geo_ping', geo_ping_data)
 
-            else:
-                # No RSSI - emit status anyway
-                socketio.emit('geo_ping', {
-                    'bd_address': bd_address,
-                    'rssi': rssi,
-                    'rtt': rtt,
-                    'ping': ping_count,
-                    'rssi_readings': rssi_readings,
-                    'success_rate': round(successful_pings / ping_count * 100, 1) if ping_count > 0 else 0,
-                    'avg_rtt': round(sum(rtt_history[-10:]) / len(rtt_history[-10:]), 2) if rtt_history else None,
-                    'status': 'no_rssi' if not rssi else 'no_gps',
-                    'methods': methods
-                })
+            # Always emit device update when we have a response to refresh survey table
+            if bd_address in devices and got_response:
+                socketio.emit('device_update', devices[bd_address])
 
             # Short delay between cycles
             time.sleep(0.5)
