@@ -8938,9 +8938,35 @@ function checkCyberToolsStatus() {
 }
 
 /**
- * Install a cyber tool
+ * Install a cyber tool with visual feedback
  */
-function installTool(toolName) {
+function installTool(toolName, button = null) {
+    // Find the install button if not passed
+    if (!button) {
+        button = document.querySelector(`button[onclick*="installTool('${toolName}')"]`);
+    }
+
+    // Store original button state
+    const originalHtml = button ? button.innerHTML : '';
+    const originalDisabled = button ? button.disabled : false;
+
+    // Show loading state on button
+    if (button) {
+        button.disabled = true;
+        button.innerHTML = '<span class="spinner"></span> Installing...';
+        button.classList.add('installing');
+    }
+
+    // Update status banner
+    const statusText = document.getElementById('cyberToolsStatusText');
+    const statusDot = document.getElementById('cyberToolsStatusDot');
+    if (statusText) {
+        statusText.textContent = `Installing ${toolName}...`;
+    }
+    if (statusDot) {
+        statusDot.className = 'status-dot installing';
+    }
+
     addLogEntry(`Installing ${toolName}...`, 'INFO');
 
     fetch('/api/cyber/tools/install', {
@@ -8952,13 +8978,99 @@ function installTool(toolName) {
     .then(data => {
         if (data.status === 'success') {
             addLogEntry(`${toolName} installed successfully`, 'INFO');
-            checkCyberToolsStatus();
+            if (button) {
+                button.innerHTML = '&#10003; Installed';
+                button.classList.remove('installing');
+                button.classList.add('btn-success');
+                // Re-enable after 2 seconds
+                setTimeout(() => {
+                    button.innerHTML = originalHtml;
+                    button.disabled = originalDisabled;
+                    button.classList.remove('btn-success');
+                }, 2000);
+            }
         } else {
             addLogEntry(`Failed to install ${toolName}: ${data.error}`, 'ERROR');
+            if (button) {
+                button.innerHTML = '&#10007; Failed';
+                button.classList.remove('installing');
+                button.classList.add('btn-danger');
+                setTimeout(() => {
+                    button.innerHTML = originalHtml;
+                    button.disabled = originalDisabled;
+                    button.classList.remove('btn-danger');
+                }, 3000);
+            }
         }
+        checkCyberToolsStatus();
     })
     .catch(e => {
         addLogEntry(`Install error: ${e}`, 'ERROR');
+        if (button) {
+            button.innerHTML = '&#10007; Error';
+            button.classList.remove('installing');
+            setTimeout(() => {
+                button.innerHTML = originalHtml;
+                button.disabled = originalDisabled;
+            }, 3000);
+        }
+        checkCyberToolsStatus();
+    });
+}
+
+/**
+ * Install all uninstalled cyber tools
+ */
+function installAllTools() {
+    const installAllBtn = document.getElementById('btnInstallAll');
+    if (installAllBtn) {
+        installAllBtn.disabled = true;
+        installAllBtn.innerHTML = '<span class="spinner"></span> Installing All...';
+    }
+
+    const statusText = document.getElementById('cyberToolsStatusText');
+    if (statusText) {
+        statusText.textContent = 'Installing all tools...';
+    }
+
+    addLogEntry('Starting installation of all tools...', 'INFO');
+
+    fetch('/api/cyber/tools/install-all', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success' || data.status === 'partial') {
+            const installed = data.installed || [];
+            const failed = data.failed || [];
+
+            if (installed.length > 0) {
+                addLogEntry(`Successfully installed: ${installed.join(', ')}`, 'INFO');
+            }
+            if (failed.length > 0) {
+                addLogEntry(`Failed to install: ${failed.map(f => f.tool).join(', ')}`, 'WARNING');
+            }
+            if (data.already_installed && data.already_installed.length > 0) {
+                addLogEntry(`Already installed: ${data.already_installed.join(', ')}`, 'INFO');
+            }
+        } else {
+            addLogEntry(`Install all failed: ${data.error}`, 'ERROR');
+        }
+
+        if (installAllBtn) {
+            installAllBtn.disabled = false;
+            installAllBtn.innerHTML = '&#128229; Install All';
+        }
+        checkCyberToolsStatus();
+    })
+    .catch(e => {
+        addLogEntry(`Install all error: ${e}`, 'ERROR');
+        if (installAllBtn) {
+            installAllBtn.disabled = false;
+            installAllBtn.innerHTML = '&#128229; Install All';
+        }
+        checkCyberToolsStatus();
     });
 }
 

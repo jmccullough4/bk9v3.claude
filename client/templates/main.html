@@ -330,7 +330,10 @@
                             <span class="status-dot" id="cyberToolsStatusDot"></span>
                             <span id="cyberToolsStatusText">Checking tools...</span>
                         </div>
-                        <button class="btn btn-sm btn-secondary" onclick="checkCyberToolsStatus()">&#8635; Refresh</button>
+                        <div class="status-actions">
+                            <button class="btn btn-sm btn-primary" id="btnInstallAll" onclick="installAllTools()">&#128229; Install All</button>
+                            <button class="btn btn-sm btn-secondary" onclick="checkCyberToolsStatus()">&#8635; Refresh</button>
+                        </div>
                     </div>
 
                     <!-- ==================== RECONNAISSANCE ==================== -->

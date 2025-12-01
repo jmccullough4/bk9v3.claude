@@ -10903,17 +10903,92 @@ def install_cyber_tool():
     add_log(f"Installing cyber tool: {tool_name}", "INFO")
 
     try:
-        # Run installation command
-        result = subprocess.run(install_cmd.split(), capture_output=True, text=True, timeout=300)
+        # Handle complex commands with shell=True
+        if '&&' in install_cmd or '|' in install_cmd:
+            result = subprocess.run(install_cmd, shell=True, capture_output=True, text=True, timeout=300)
+        else:
+            result = subprocess.run(install_cmd.split(), capture_output=True, text=True, timeout=300)
+
         if result.returncode == 0:
             add_log(f"Successfully installed {tool_name}", "INFO")
             return jsonify({'status': 'success'})
         else:
             add_log(f"Failed to install {tool_name}: {result.stderr}", "ERROR")
             return jsonify({'status': 'error', 'error': result.stderr})
+    except subprocess.TimeoutExpired:
+        add_log(f"Timeout installing {tool_name}", "ERROR")
+        return jsonify({'status': 'error', 'error': 'Installation timed out (5 min limit)'})
     except Exception as e:
         add_log(f"Install error for {tool_name}: {e}", "ERROR")
         return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/cyber/tools/install-all', methods=['POST'])
+@login_required
+def install_all_cyber_tools():
+    """Install all uninstalled cyber tools."""
+    add_log("Starting installation of all cyber tools...", "INFO")
+
+    # First check which tools are already installed
+    tools_status = {}
+    for tool_name, tool_info in CYBER_TOOLS.items():
+        if tool_info['cmd']:
+            result = subprocess.run(['which', tool_info['cmd']], capture_output=True)
+            installed = result.returncode == 0
+        else:
+            installed = os.path.exists(f'/opt/{tool_name}') or os.path.exists(f'/usr/share/{tool_name}')
+        tools_status[tool_name] = installed
+
+    already_installed = [t for t, installed in tools_status.items() if installed]
+    to_install = [t for t, installed in tools_status.items() if not installed]
+
+    if not to_install:
+        add_log("All cyber tools are already installed", "INFO")
+        return jsonify({
+            'status': 'success',
+            'message': 'All tools already installed',
+            'already_installed': already_installed,
+            'installed': [],
+            'failed': []
+        })
+
+    installed = []
+    failed = []
+
+    for tool_name in to_install:
+        tool_info = CYBER_TOOLS[tool_name]
+        install_cmd = tool_info['install']
+        add_log(f"Installing {tool_name}...", "INFO")
+
+        try:
+            # Handle complex commands with shell=True
+            if '&&' in install_cmd or '|' in install_cmd:
+                result = subprocess.run(install_cmd, shell=True, capture_output=True, text=True, timeout=300)
+            else:
+                result = subprocess.run(install_cmd.split(), capture_output=True, text=True, timeout=300)
+
+            if result.returncode == 0:
+                add_log(f"Successfully installed {tool_name}", "INFO")
+                installed.append(tool_name)
+            else:
+                add_log(f"Failed to install {tool_name}: {result.stderr}", "ERROR")
+                failed.append({'tool': tool_name, 'error': result.stderr})
+        except subprocess.TimeoutExpired:
+            add_log(f"Timeout installing {tool_name}", "ERROR")
+            failed.append({'tool': tool_name, 'error': 'Installation timed out'})
+        except Exception as e:
+            add_log(f"Install error for {tool_name}: {e}", "ERROR")
+            failed.append({'tool': tool_name, 'error': str(e)})
+
+    status = 'success' if not failed else 'partial' if installed else 'error'
+    add_log(f"Install all complete: {len(installed)} installed, {len(failed)} failed", "INFO")
+
+    return jsonify({
+        'status': status,
+        'already_installed': already_installed,
+        'installed': installed,
+        'failed': failed
+    })
 
 
 # ==================== RECON TOOLS API ====================
