@@ -10833,24 +10833,24 @@ def linkkey_extract():
 
 # Define known cyber tools and their installation paths
 CYBER_TOOLS = {
-    'bluetoolkit': {'cmd': 'bluekit', 'install': 'git clone https://github.com/sgxgsx/BlueToolkit --recurse-submodules && sudo ./BlueToolkit/install.sh'},
-    'blue_hydra': {'cmd': 'blue_hydra', 'install': 'git clone https://github.com/ZeroChaos-/blue_hydra.git'},
-    'blesuite': {'cmd': 'blesuite', 'install': 'pip3 install blesuite'},
-    'bleah': {'cmd': 'bleah', 'install': 'pip3 install bleah'},
+    'bluetoolkit': {'cmd': 'bluekit', 'install': 'rm -rf /opt/BlueToolkit && git clone https://github.com/sgxgsx/BlueToolkit /opt/BlueToolkit --recurse-submodules && cd /opt/BlueToolkit && ./install.sh'},
+    'blue_hydra': {'cmd': 'blue_hydra', 'install': 'rm -rf /opt/blue_hydra && git clone https://github.com/ZeroChaos-/blue_hydra.git /opt/blue_hydra && cd /opt/blue_hydra && bundle install'},
+    'blesuite': {'cmd': None, 'install': 'rm -rf /opt/blesuite && git clone https://github.com/nccgroup/blesuite.git /opt/blesuite && cd /opt/blesuite && pip3 install -e .'},
+    'bleah': {'cmd': None, 'install': 'rm -rf /opt/bleah && git clone https://github.com/evilsocket/bleah.git /opt/bleah && cd /opt/bleah && pip3 install -r requirements.txt'},
     'btlejack': {'cmd': 'btlejack', 'install': 'pip3 install btlejack'},
-    'crackle': {'cmd': 'crackle', 'install': 'apt install crackle'},
-    'ubertooth': {'cmd': 'ubertooth-btle', 'install': 'apt install ubertooth'},
-    'blueborne': {'cmd': None, 'install': 'git clone https://github.com/ArmisLabs/blueborne-scanner.git'},
+    'crackle': {'cmd': 'crackle', 'install': 'apt-get install -y crackle || (rm -rf /opt/crackle && git clone https://github.com/mikeryan/crackle.git /opt/crackle && cd /opt/crackle && make && make install)'},
+    'ubertooth': {'cmd': 'ubertooth-btle', 'install': 'apt-get install -y ubertooth'},
+    'blueborne': {'cmd': None, 'install': 'rm -rf /opt/blueborne && git clone https://github.com/ArmisLabs/blueborne-scanner.git /opt/blueborne'},
     'btlejuice': {'cmd': 'btlejuice', 'install': 'npm install -g btlejuice'},
-    'gattacker': {'cmd': None, 'install': 'git clone https://github.com/securing/gattacker.git'},
+    'gattacker': {'cmd': None, 'install': 'rm -rf /opt/gattacker && git clone https://github.com/securing/gattacker.git /opt/gattacker && cd /opt/gattacker && npm install'},
     'btproxy': {'cmd': 'btproxy', 'install': 'pip3 install btproxy'},
     'internalblue': {'cmd': 'internalblue', 'install': 'pip3 install internalblue'},
-    'frankenstein': {'cmd': None, 'install': 'git clone https://github.com/InternalBlue/frankenstein.git'},
+    'frankenstein': {'cmd': None, 'install': 'rm -rf /opt/frankenstein && git clone https://github.com/InternalBlue/frankenstein.git /opt/frankenstein'},
     'polypyus': {'cmd': 'polypyus', 'install': 'pip3 install polypyus'},
-    'bdaddr': {'cmd': 'bdaddr', 'install': 'apt install bluez-utils'},
-    'spooftooph': {'cmd': 'spooftooph', 'install': 'apt install spooftooph'},
-    'redfang': {'cmd': 'redfang', 'install': 'apt install redfang'},
-    'uberducky': {'cmd': None, 'install': 'git clone https://github.com/mikeryan/uberducky.git'},
+    'bdaddr': {'cmd': 'bdaddr', 'install': 'apt-get install -y bluez'},
+    'spooftooph': {'cmd': 'spooftooph', 'install': 'apt-get install -y spooftooph'},
+    'redfang': {'cmd': 'redfang', 'install': 'apt-get install -y redfang'},
+    'uberducky': {'cmd': None, 'install': 'rm -rf /opt/uberducky && git clone https://github.com/mikeryan/uberducky.git /opt/uberducky'},
 }
 
 # Track running cyber tool processes
@@ -10864,14 +10864,34 @@ def cyber_tools_status():
     tools_status = {}
     installed_count = 0
 
+    # Special path mappings for tools installed to non-standard locations
+    path_mappings = {
+        'bluetoolkit': '/opt/BlueToolkit',
+        'blue_hydra': '/opt/blue_hydra',
+        'blesuite': '/opt/blesuite',
+        'bleah': '/opt/bleah',
+        'blueborne': '/opt/blueborne',
+        'gattacker': '/opt/gattacker',
+        'frankenstein': '/opt/frankenstein',
+        'uberducky': '/opt/uberducky',
+        'crackle': '/opt/crackle',
+    }
+
     for tool_name, tool_info in CYBER_TOOLS.items():
+        installed = False
+
         if tool_info['cmd']:
             # Check if command exists
             result = subprocess.run(['which', tool_info['cmd']], capture_output=True)
             installed = result.returncode == 0
-        else:
-            # For tools without commands, check common paths
-            installed = os.path.exists(f'/opt/{tool_name}') or os.path.exists(f'/usr/share/{tool_name}')
+
+        # Also check path mappings for tools that may not have commands in PATH
+        if not installed and tool_name in path_mappings:
+            installed = os.path.exists(path_mappings[tool_name])
+
+        # Fallback to generic /opt check
+        if not installed:
+            installed = os.path.exists(f'/opt/{tool_name}')
 
         tools_status[tool_name] = installed
         if installed:
@@ -10902,12 +10922,15 @@ def install_cyber_tool():
 
     add_log(f"Installing cyber tool: {tool_name}", "INFO")
 
+    # Use longer timeout for complex installs
+    timeout = 600 if tool_name in ['bluetoolkit', 'blue_hydra', 'gattacker'] else 300
+
     try:
         # Handle complex commands with shell=True
         if '&&' in install_cmd or '|' in install_cmd:
-            result = subprocess.run(install_cmd, shell=True, capture_output=True, text=True, timeout=300)
+            result = subprocess.run(install_cmd, shell=True, capture_output=True, text=True, timeout=timeout)
         else:
-            result = subprocess.run(install_cmd.split(), capture_output=True, text=True, timeout=300)
+            result = subprocess.run(install_cmd.split(), capture_output=True, text=True, timeout=timeout)
 
         if result.returncode == 0:
             add_log(f"Successfully installed {tool_name}", "INFO")
@@ -10917,7 +10940,7 @@ def install_cyber_tool():
             return jsonify({'status': 'error', 'error': result.stderr})
     except subprocess.TimeoutExpired:
         add_log(f"Timeout installing {tool_name}", "ERROR")
-        return jsonify({'status': 'error', 'error': 'Installation timed out (5 min limit)'})
+        return jsonify({'status': 'error', 'error': f'Installation timed out ({timeout//60} min limit)'})
     except Exception as e:
         add_log(f"Install error for {tool_name}: {e}", "ERROR")
         return jsonify({'status': 'error', 'error': str(e)})
@@ -10929,18 +10952,34 @@ def install_all_cyber_tools():
     """Install all uninstalled cyber tools."""
     add_log("Starting installation of all cyber tools...", "INFO")
 
+    # Path mappings for tools installed to non-standard locations
+    path_mappings = {
+        'bluetoolkit': '/opt/BlueToolkit',
+        'blue_hydra': '/opt/blue_hydra',
+        'blesuite': '/opt/blesuite',
+        'bleah': '/opt/bleah',
+        'blueborne': '/opt/blueborne',
+        'gattacker': '/opt/gattacker',
+        'frankenstein': '/opt/frankenstein',
+        'uberducky': '/opt/uberducky',
+        'crackle': '/opt/crackle',
+    }
+
     # First check which tools are already installed
     tools_status = {}
     for tool_name, tool_info in CYBER_TOOLS.items():
+        is_installed = False
         if tool_info['cmd']:
             result = subprocess.run(['which', tool_info['cmd']], capture_output=True)
-            installed = result.returncode == 0
-        else:
-            installed = os.path.exists(f'/opt/{tool_name}') or os.path.exists(f'/usr/share/{tool_name}')
-        tools_status[tool_name] = installed
+            is_installed = result.returncode == 0
+        if not is_installed and tool_name in path_mappings:
+            is_installed = os.path.exists(path_mappings[tool_name])
+        if not is_installed:
+            is_installed = os.path.exists(f'/opt/{tool_name}')
+        tools_status[tool_name] = is_installed
 
-    already_installed = [t for t, installed in tools_status.items() if installed]
-    to_install = [t for t, installed in tools_status.items() if not installed]
+    already_installed = [t for t, is_inst in tools_status.items() if is_inst]
+    to_install = [t for t, is_inst in tools_status.items() if not is_inst]
 
     if not to_install:
         add_log("All cyber tools are already installed", "INFO")
@@ -10960,12 +10999,15 @@ def install_all_cyber_tools():
         install_cmd = tool_info['install']
         add_log(f"Installing {tool_name}...", "INFO")
 
+        # Use longer timeout for complex installs
+        timeout = 600 if tool_name in ['bluetoolkit', 'blue_hydra', 'gattacker'] else 300
+
         try:
             # Handle complex commands with shell=True
             if '&&' in install_cmd or '|' in install_cmd:
-                result = subprocess.run(install_cmd, shell=True, capture_output=True, text=True, timeout=300)
+                result = subprocess.run(install_cmd, shell=True, capture_output=True, text=True, timeout=timeout)
             else:
-                result = subprocess.run(install_cmd.split(), capture_output=True, text=True, timeout=300)
+                result = subprocess.run(install_cmd.split(), capture_output=True, text=True, timeout=timeout)
 
             if result.returncode == 0:
                 add_log(f"Successfully installed {tool_name}", "INFO")
