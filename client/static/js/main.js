@@ -8809,6 +8809,1156 @@ function extractLinkKey() {
     });
 }
 
+// ==================== CYBER TOOLS ARSENAL ====================
+
+/**
+ * Show a cyber tools category
+ */
+function showCyberCategory(category) {
+    // Hide all categories
+    document.querySelectorAll('.cyber-category').forEach(el => {
+        el.classList.remove('active');
+    });
+
+    // Deactivate all nav buttons
+    document.querySelectorAll('.cyber-nav-btn').forEach(btn => {
+        btn.classList.remove('active');
+    });
+
+    // Show selected category
+    const categoryMap = {
+        'recon': 'cyberRecon',
+        'sniff': 'cyberSniff',
+        'exploit': 'cyberExploit',
+        'mitm': 'cyberMitm',
+        'inject': 'cyberInject',
+        'firmware': 'cyberFirmware',
+        'utils': 'cyberUtils'
+    };
+
+    const categoryId = categoryMap[category];
+    if (categoryId) {
+        const el = document.getElementById(categoryId);
+        if (el) el.classList.add('active');
+    }
+
+    // Activate nav button
+    const navBtn = document.querySelector(`.cyber-nav-btn[data-category="${category}"]`);
+    if (navBtn) navBtn.classList.add('active');
+}
+
+/**
+ * Toggle cyber tool card expansion
+ */
+function toggleToolCard(headerEl) {
+    const card = headerEl.closest('.cyber-tool-card');
+    const isExpanded = card.classList.contains('expanded');
+
+    // Optionally collapse others
+    // document.querySelectorAll('.cyber-tool-card.expanded').forEach(c => c.classList.remove('expanded'));
+
+    if (isExpanded) {
+        card.classList.remove('expanded');
+        headerEl.classList.remove('expanded');
+    } else {
+        card.classList.add('expanded');
+        headerEl.classList.add('expanded');
+    }
+}
+
+/**
+ * Fill target input from survey selection
+ */
+function fillFromSurvey(inputId) {
+    // Get selected device from survey table
+    const selectedRow = document.querySelector('#deviceTableBody tr.selected');
+    if (selectedRow) {
+        const bdAddr = selectedRow.querySelector('td:first-child')?.textContent?.trim();
+        if (bdAddr) {
+            document.getElementById(inputId).value = bdAddr;
+            return;
+        }
+    }
+
+    // Fallback - try to get from a targeted device
+    const targetRow = document.querySelector('#deviceTableBody tr.target-row');
+    if (targetRow) {
+        const bdAddr = targetRow.querySelector('td:first-child')?.textContent?.trim();
+        if (bdAddr) {
+            document.getElementById(inputId).value = bdAddr;
+            return;
+        }
+    }
+
+    addLogEntry('No device selected in survey', 'WARNING');
+}
+
+/**
+ * Check status of all cyber tools
+ */
+function checkCyberToolsStatus() {
+    fetch('/api/cyber/tools/status')
+        .then(r => r.json())
+        .then(data => {
+            const statusDot = document.getElementById('cyberToolsStatusDot');
+            const statusText = document.getElementById('cyberToolsStatusText');
+
+            if (data.status === 'ready') {
+                statusDot.className = 'status-dot ready';
+                statusText.textContent = `${data.installed_count}/${data.total_count} tools installed`;
+            } else if (data.status === 'partial') {
+                statusDot.className = 'status-dot warning';
+                statusText.textContent = `${data.installed_count}/${data.total_count} tools installed`;
+            } else {
+                statusDot.className = 'status-dot error';
+                statusText.textContent = 'Tools not installed';
+            }
+
+            // Update individual tool statuses
+            if (data.tools) {
+                Object.entries(data.tools).forEach(([tool, installed]) => {
+                    const statusEl = document.getElementById(`${tool}Status`);
+                    if (statusEl) {
+                        statusEl.textContent = installed ? 'Installed' : 'Not Found';
+                        statusEl.className = `tool-status ${installed ? 'installed' : 'missing'}`;
+                    }
+                });
+            }
+        })
+        .catch(e => {
+            console.error('Failed to check cyber tools status:', e);
+            const statusDot = document.getElementById('cyberToolsStatusDot');
+            const statusText = document.getElementById('cyberToolsStatusText');
+            statusDot.className = 'status-dot';
+            statusText.textContent = 'Status check failed';
+        });
+
+    // Also check HID tool
+    checkHidToolStatus();
+}
+
+/**
+ * Install a cyber tool
+ */
+function installTool(toolName) {
+    addLogEntry(`Installing ${toolName}...`, 'INFO');
+
+    fetch('/api/cyber/tools/install', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tool: toolName })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            addLogEntry(`${toolName} installed successfully`, 'INFO');
+            checkCyberToolsStatus();
+        } else {
+            addLogEntry(`Failed to install ${toolName}: ${data.error}`, 'ERROR');
+        }
+    })
+    .catch(e => {
+        addLogEntry(`Install error: ${e}`, 'ERROR');
+    });
+}
+
+/**
+ * Append output to a tool's output panel
+ */
+function appendToolOutput(outputId, text, type = 'info') {
+    const outputEl = document.getElementById(outputId);
+    if (!outputEl) return;
+
+    outputEl.classList.remove('hidden');
+    const content = outputEl.querySelector('.tool-output-content') || outputEl;
+
+    const line = document.createElement('div');
+    line.className = `tool-output-line ${type}`;
+    line.textContent = text;
+    content.appendChild(line);
+    content.scrollTop = content.scrollHeight;
+}
+
+/**
+ * Clear a tool's output panel
+ */
+function clearToolOutput(outputId) {
+    const outputEl = document.getElementById(outputId);
+    if (!outputEl) return;
+
+    const content = outputEl.querySelector('.tool-output-content') || outputEl;
+    content.innerHTML = '';
+}
+
+// ==================== RECON TOOLS ====================
+
+/**
+ * Start Blue Hydra
+ */
+function startBlueHydra() {
+    const useUbertooth = document.getElementById('blueHydraUbertooth')?.checked;
+    const passiveOnly = document.getElementById('blueHydraPassive')?.checked;
+
+    clearToolOutput('blueHydraOutput');
+    appendToolOutput('blueHydraOutput', 'Starting Blue Hydra...', 'info');
+
+    fetch('/api/cyber/recon/blue_hydra/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ubertooth: useUbertooth, passive: passiveOnly })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'started') {
+            document.getElementById('btnStopBlueHydra').disabled = false;
+            appendToolOutput('blueHydraOutput', 'Blue Hydra started', 'success');
+        } else {
+            appendToolOutput('blueHydraOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('blueHydraOutput', `Error: ${e}`, 'error'));
+}
+
+function stopBlueHydra() {
+    fetch('/api/cyber/recon/blue_hydra/stop', { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+            document.getElementById('btnStopBlueHydra').disabled = true;
+            appendToolOutput('blueHydraOutput', 'Blue Hydra stopped', 'info');
+        });
+}
+
+/**
+ * Run BLESuite scan
+ */
+function runBLESuite() {
+    const target = document.getElementById('blesuiteTarget')?.value?.trim();
+    const scanType = document.getElementById('blesuiteScanType')?.value;
+
+    if (!target) {
+        addLogEntry('BLESuite requires a target address', 'WARNING');
+        return;
+    }
+
+    clearToolOutput('blesuiteOutput');
+    appendToolOutput('blesuiteOutput', `Running BLESuite ${scanType} on ${target}...`, 'info');
+
+    fetch('/api/cyber/recon/blesuite/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target, scan_type: scanType })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            appendToolOutput('blesuiteOutput', data.output || 'Scan complete', 'success');
+        } else {
+            appendToolOutput('blesuiteOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('blesuiteOutput', `Error: ${e}`, 'error'));
+}
+
+/**
+ * Run Bleah scan
+ */
+function runBleah() {
+    const target = document.getElementById('bleahTarget')?.value?.trim();
+    const enumerate = document.getElementById('bleahEnumerate')?.checked;
+    const force = document.getElementById('bleahForce')?.checked;
+
+    clearToolOutput('bleahOutput');
+    appendToolOutput('bleahOutput', 'Running Bleah scan...', 'info');
+
+    fetch('/api/cyber/recon/bleah/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target, enumerate, force })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            appendToolOutput('bleahOutput', data.output || 'Scan complete', 'success');
+        } else {
+            appendToolOutput('bleahOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('bleahOutput', `Error: ${e}`, 'error'));
+}
+
+/**
+ * Run Redfang brute force
+ */
+function runRedfang() {
+    const oui = document.getElementById('redfangOui')?.value?.trim();
+    const range = parseInt(document.getElementById('redfangRange')?.value || '16');
+
+    if (!oui) {
+        addLogEntry('Redfang requires an OUI prefix', 'WARNING');
+        return;
+    }
+
+    clearToolOutput('redfangOutput');
+    appendToolOutput('redfangOutput', `Brute forcing from ${oui} (${range} addresses)...`, 'info');
+
+    fetch('/api/cyber/recon/redfang/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ oui, range })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            if (data.found && data.found.length > 0) {
+                data.found.forEach(addr => {
+                    appendToolOutput('redfangOutput', `Found: ${addr}`, 'success');
+                });
+            } else {
+                appendToolOutput('redfangOutput', 'No devices found in range', 'warning');
+            }
+        } else {
+            appendToolOutput('redfangOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('redfangOutput', `Error: ${e}`, 'error'));
+}
+
+/**
+ * Run Spooftooph clone
+ */
+function runSpooftooph() {
+    const source = document.getElementById('spooftoophSource')?.value?.trim();
+    const iface = document.getElementById('spooftoophInterface')?.value;
+
+    if (!source) {
+        addLogEntry('Spooftooph requires a source address', 'WARNING');
+        return;
+    }
+
+    clearToolOutput('spooftoophOutput');
+    appendToolOutput('spooftoophOutput', `Cloning profile from ${source}...`, 'info');
+
+    fetch('/api/cyber/recon/spooftooph/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source, interface: iface })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            appendToolOutput('spooftoophOutput', `Profile cloned: ${data.cloned_name}`, 'success');
+            appendToolOutput('spooftoophOutput', `New address: ${data.new_address}`, 'success');
+        } else {
+            appendToolOutput('spooftoophOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('spooftoophOutput', `Error: ${e}`, 'error'));
+}
+
+// ==================== SNIFFING TOOLS ====================
+
+let spectrumInterval = null;
+let spectrumCanvas = null;
+let spectrumCtx = null;
+
+/**
+ * Start spectrum analyzer
+ */
+function startSpectrum() {
+    spectrumCanvas = document.getElementById('spectrumCanvas');
+    spectrumCtx = spectrumCanvas?.getContext('2d');
+
+    if (!spectrumCtx) return;
+
+    document.getElementById('btnStopSpectrum').disabled = false;
+
+    fetch('/api/cyber/sniff/spectrum/start', { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+            if (data.status === 'started') {
+                // Poll for spectrum data
+                spectrumInterval = setInterval(updateSpectrum, 100);
+            }
+        });
+}
+
+function stopSpectrum() {
+    if (spectrumInterval) {
+        clearInterval(spectrumInterval);
+        spectrumInterval = null;
+    }
+
+    document.getElementById('btnStopSpectrum').disabled = true;
+    fetch('/api/cyber/sniff/spectrum/stop', { method: 'POST' });
+}
+
+function updateSpectrum() {
+    fetch('/api/cyber/sniff/spectrum/data')
+        .then(r => r.json())
+        .then(data => {
+            if (data.spectrum && spectrumCtx) {
+                drawSpectrum(data.spectrum);
+            }
+        });
+}
+
+function drawSpectrum(spectrum) {
+    const width = spectrumCanvas.width;
+    const height = spectrumCanvas.height;
+    const barWidth = width / spectrum.length;
+
+    spectrumCtx.fillStyle = 'rgba(10, 14, 20, 0.3)';
+    spectrumCtx.fillRect(0, 0, width, height);
+
+    spectrum.forEach((val, i) => {
+        const barHeight = (val / 255) * height;
+        const hue = 180 + (val / 255) * 60; // Cyan to blue
+        spectrumCtx.fillStyle = `hsl(${hue}, 100%, 50%)`;
+        spectrumCtx.fillRect(i * barWidth, height - barHeight, barWidth - 1, barHeight);
+    });
+}
+
+/**
+ * Start Ubertooth BTLE sniffer
+ */
+function startUbertoothBtle() {
+    const mode = document.getElementById('ubertoothBtleMode')?.value;
+    const target = document.getElementById('ubertoothBtleTarget')?.value?.trim();
+    const output = document.getElementById('ubertoothBtleOutput')?.value;
+
+    clearToolOutput('ubertoothBtleOutput');
+    appendToolOutput('ubertoothBtleOutput', 'Starting Ubertooth BTLE capture...', 'info');
+
+    fetch('/api/cyber/sniff/ubertooth_btle/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode, target, output_format: output })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'started') {
+            document.getElementById('btnStopUbertoothBtle').disabled = false;
+            appendToolOutput('ubertoothBtleOutput', 'Capture started', 'success');
+        } else {
+            appendToolOutput('ubertoothBtleOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('ubertoothBtleOutput', `Error: ${e}`, 'error'));
+}
+
+function stopUbertoothBtle() {
+    fetch('/api/cyber/sniff/ubertooth_btle/stop', { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+            document.getElementById('btnStopUbertoothBtle').disabled = true;
+            appendToolOutput('ubertoothBtleOutput', 'Capture stopped', 'info');
+            if (data.pcap_file) {
+                appendToolOutput('ubertoothBtleOutput', `PCAP saved: ${data.pcap_file}`, 'success');
+            }
+        });
+}
+
+/**
+ * Run BTLEJack
+ */
+function runBtlejack() {
+    const mode = document.getElementById('btlejackMode')?.value;
+    const accessAddress = document.getElementById('btlejackAA')?.value?.trim();
+
+    clearToolOutput('btlejackOutput');
+    appendToolOutput('btlejackOutput', `Starting BTLEJack in ${mode} mode...`, 'info');
+
+    fetch('/api/cyber/sniff/btlejack/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode, access_address: accessAddress })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            appendToolOutput('btlejackOutput', data.output || 'Complete', 'success');
+        } else {
+            appendToolOutput('btlejackOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('btlejackOutput', `Error: ${e}`, 'error'));
+}
+
+/**
+ * Run Crackle
+ */
+function runCrackle() {
+    const fileInput = document.getElementById('cracklePcap');
+    const decrypt = document.getElementById('crackleDecrypt')?.checked;
+
+    if (!fileInput?.files?.length) {
+        addLogEntry('Please select a PCAP file', 'WARNING');
+        return;
+    }
+
+    clearToolOutput('crackleOutput');
+    appendToolOutput('crackleOutput', 'Cracking BLE encryption...', 'info');
+
+    const formData = new FormData();
+    formData.append('pcap', fileInput.files[0]);
+    formData.append('decrypt', decrypt);
+
+    fetch('/api/cyber/sniff/crackle/run', {
+        method: 'POST',
+        body: formData
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            if (data.ltk) {
+                appendToolOutput('crackleOutput', `LTK Found: ${data.ltk}`, 'success');
+            }
+            if (data.decrypted_file) {
+                appendToolOutput('crackleOutput', `Decrypted: ${data.decrypted_file}`, 'success');
+            }
+        } else {
+            appendToolOutput('crackleOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('crackleOutput', `Error: ${e}`, 'error'));
+}
+
+// ==================== EXPLOIT TOOLS ====================
+
+/**
+ * Run BlueBorne vulnerability scan
+ */
+function runBlueborneScan() {
+    const target = document.getElementById('blueborneTarget')?.value?.trim();
+
+    if (!target) {
+        addLogEntry('BlueBorne scanner requires a target address', 'WARNING');
+        return;
+    }
+
+    clearToolOutput('blueborneOutput');
+    appendToolOutput('blueborneOutput', `Scanning ${target} for BlueBorne vulnerabilities...`, 'info');
+
+    fetch('/api/cyber/exploit/blueborne/scan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            if (data.vulnerabilities && data.vulnerabilities.length > 0) {
+                appendToolOutput('blueborneOutput', 'VULNERABILITIES FOUND:', 'error');
+                data.vulnerabilities.forEach(vuln => {
+                    appendToolOutput('blueborneOutput', `  ${vuln.cve}: ${vuln.description}`, 'error');
+                });
+            } else {
+                appendToolOutput('blueborneOutput', 'No vulnerabilities detected', 'success');
+            }
+            appendToolOutput('blueborneOutput', `Device: ${data.device_info || 'Unknown'}`, 'info');
+        } else {
+            appendToolOutput('blueborneOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('blueborneOutput', `Error: ${e}`, 'error'));
+}
+
+/**
+ * Run KNOB attack
+ */
+function runKnobAttack() {
+    const target = document.getElementById('knobTarget')?.value?.trim();
+    const entropy = document.getElementById('knobEntropy')?.value;
+
+    if (!target) {
+        addLogEntry('KNOB attack requires a target address', 'WARNING');
+        return;
+    }
+
+    clearToolOutput('knobOutput');
+    appendToolOutput('knobOutput', `Running KNOB attack on ${target}...`, 'info');
+    appendToolOutput('knobOutput', `Forcing ${entropy}-byte entropy`, 'warning');
+
+    fetch('/api/cyber/exploit/knob/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target, entropy_bytes: parseInt(entropy) })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            appendToolOutput('knobOutput', 'KNOB attack succeeded', 'success');
+            if (data.negotiated_entropy) {
+                appendToolOutput('knobOutput', `Negotiated entropy: ${data.negotiated_entropy} bytes`, 'success');
+            }
+        } else {
+            appendToolOutput('knobOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('knobOutput', `Error: ${e}`, 'error'));
+}
+
+/**
+ * Run BIAS attack
+ */
+function runBiasAttack() {
+    const target = document.getElementById('biasTarget')?.value?.trim();
+    const impersonate = document.getElementById('biasImpersonate')?.value?.trim();
+
+    if (!target || !impersonate) {
+        addLogEntry('BIAS attack requires target and device to impersonate', 'WARNING');
+        return;
+    }
+
+    clearToolOutput('biasOutput');
+    appendToolOutput('biasOutput', `Running BIAS attack: impersonating ${impersonate}...`, 'info');
+
+    fetch('/api/cyber/exploit/bias/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target, impersonate })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            appendToolOutput('biasOutput', 'BIAS attack succeeded - impersonation established', 'success');
+        } else {
+            appendToolOutput('biasOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('biasOutput', `Error: ${e}`, 'error'));
+}
+
+/**
+ * Run SDP leak
+ */
+function runSdpLeak() {
+    const target = document.getElementById('sdpLeakTarget')?.value?.trim();
+
+    if (!target) {
+        addLogEntry('SDP leak requires a target address', 'WARNING');
+        return;
+    }
+
+    clearToolOutput('sdpLeakOutput');
+    appendToolOutput('sdpLeakOutput', `Extracting SDP info from ${target}...`, 'info');
+
+    fetch('/api/cyber/exploit/sdp_leak/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            appendToolOutput('sdpLeakOutput', 'SDP Information:', 'success');
+            if (data.services) {
+                data.services.forEach(svc => {
+                    appendToolOutput('sdpLeakOutput', `  ${svc.name}: ${svc.uuid}`, 'info');
+                });
+            }
+            if (data.device_info) {
+                appendToolOutput('sdpLeakOutput', `Device: ${data.device_info}`, 'info');
+            }
+        } else {
+            appendToolOutput('sdpLeakOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('sdpLeakOutput', `Error: ${e}`, 'error'));
+}
+
+// ==================== MITM TOOLS ====================
+
+/**
+ * Start BTLEJuice
+ */
+function startBtlejuice() {
+    const target = document.getElementById('btlejuiceTarget')?.value?.trim();
+    const iface = document.getElementById('btlejuiceInterface')?.value;
+
+    if (!target) {
+        addLogEntry('BTLEJuice requires a target address', 'WARNING');
+        return;
+    }
+
+    clearToolOutput('btlejuiceOutput');
+    appendToolOutput('btlejuiceOutput', 'Starting BTLEJuice proxy...', 'info');
+
+    fetch('/api/cyber/mitm/btlejuice/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target, interface: iface })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'started') {
+            document.getElementById('btnStopBtlejuice').disabled = false;
+            appendToolOutput('btlejuiceOutput', 'Proxy started - waiting for connection', 'success');
+            appendToolOutput('btlejuiceOutput', `Web UI: http://localhost:${data.port || 8080}`, 'info');
+        } else {
+            appendToolOutput('btlejuiceOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('btlejuiceOutput', `Error: ${e}`, 'error'));
+}
+
+function stopBtlejuice() {
+    fetch('/api/cyber/mitm/btlejuice/stop', { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+            document.getElementById('btnStopBtlejuice').disabled = true;
+            appendToolOutput('btlejuiceOutput', 'Proxy stopped', 'info');
+        });
+}
+
+/**
+ * Run GATTacker
+ */
+function runGattacker() {
+    const target = document.getElementById('gattackerTarget')?.value?.trim();
+    const relay = document.getElementById('gattackerRelay')?.checked;
+    const log = document.getElementById('gattackerLog')?.checked;
+
+    if (!target) {
+        addLogEntry('GATTacker requires a target address', 'WARNING');
+        return;
+    }
+
+    clearToolOutput('gattackerOutput');
+    appendToolOutput('gattackerOutput', `Cloning ${target}...`, 'info');
+
+    fetch('/api/cyber/mitm/gattacker/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target, relay, log })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            appendToolOutput('gattackerOutput', 'Clone created - MITM active', 'success');
+        } else {
+            appendToolOutput('gattackerOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('gattackerOutput', `Error: ${e}`, 'error'));
+}
+
+/**
+ * Run BT Proxy
+ */
+function runBtproxy() {
+    const master = document.getElementById('btproxyMaster')?.value?.trim();
+    const slave = document.getElementById('btproxySlave')?.value?.trim();
+
+    if (!master || !slave) {
+        addLogEntry('BT Proxy requires both master and slave addresses', 'WARNING');
+        return;
+    }
+
+    clearToolOutput('btproxyOutput');
+    appendToolOutput('btproxyOutput', `Setting up proxy between ${master} and ${slave}...`, 'info');
+
+    fetch('/api/cyber/mitm/btproxy/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ master, slave })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            appendToolOutput('btproxyOutput', 'Proxy active - intercepting traffic', 'success');
+        } else {
+            appendToolOutput('btproxyOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('btproxyOutput', `Error: ${e}`, 'error'));
+}
+
+/**
+ * Run BLE Replay
+ */
+function runBleReplay() {
+    const fileInput = document.getElementById('blereplayFile');
+    const target = document.getElementById('blereplayTarget')?.value?.trim();
+
+    if (!fileInput?.files?.length) {
+        addLogEntry('Please select a capture file', 'WARNING');
+        return;
+    }
+
+    clearToolOutput('blereplayOutput');
+    appendToolOutput('blereplayOutput', 'Replaying captured traffic...', 'info');
+
+    const formData = new FormData();
+    formData.append('capture', fileInput.files[0]);
+    if (target) formData.append('target', target);
+
+    fetch('/api/cyber/mitm/ble_replay/run', {
+        method: 'POST',
+        body: formData
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            appendToolOutput('blereplayOutput', 'Replay complete', 'success');
+            appendToolOutput('blereplayOutput', `Packets replayed: ${data.packets_sent || 0}`, 'info');
+        } else {
+            appendToolOutput('blereplayOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('blereplayOutput', `Error: ${e}`, 'error'));
+}
+
+// ==================== INJECTION TOOLS ====================
+
+/**
+ * Run Uberducky
+ */
+function runUberducky() {
+    const target = document.getElementById('uberduckyTarget')?.value?.trim();
+    const script = document.getElementById('uberduckyScript')?.value?.trim();
+
+    if (!target || !script) {
+        addLogEntry('Uberducky requires target address and script', 'WARNING');
+        return;
+    }
+
+    clearToolOutput('uberduckyOutput');
+    appendToolOutput('uberduckyOutput', 'Running Uberducky script...', 'info');
+
+    fetch('/api/cyber/inject/uberducky/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target, script })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            appendToolOutput('uberduckyOutput', 'Script executed', 'success');
+        } else {
+            appendToolOutput('uberduckyOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('uberduckyOutput', `Error: ${e}`, 'error'));
+}
+
+// ==================== FIRMWARE TOOLS ====================
+
+/**
+ * Run InternalBlue
+ */
+function runInternalblue() {
+    const device = document.getElementById('internalblueDevice')?.value;
+    const action = document.getElementById('internalblueAction')?.value;
+
+    clearToolOutput('internalblueOutput');
+    appendToolOutput('internalblueOutput', `Running InternalBlue (${action})...`, 'info');
+
+    fetch('/api/cyber/firmware/internalblue/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ device, action })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            appendToolOutput('internalblueOutput', data.output || 'Complete', 'success');
+        } else {
+            appendToolOutput('internalblueOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('internalblueOutput', `Error: ${e}`, 'error'));
+}
+
+/**
+ * Run Frankenstein
+ */
+function runFrankenstein() {
+    const fileInput = document.getElementById('frankensteinFirmware');
+    const mode = document.getElementById('frankensteinMode')?.value;
+
+    if (!fileInput?.files?.length) {
+        addLogEntry('Please select a firmware file', 'WARNING');
+        return;
+    }
+
+    clearToolOutput('frankensteinOutput');
+    appendToolOutput('frankensteinOutput', `Running Frankenstein (${mode})...`, 'info');
+
+    const formData = new FormData();
+    formData.append('firmware', fileInput.files[0]);
+    formData.append('mode', mode);
+
+    fetch('/api/cyber/firmware/frankenstein/run', {
+        method: 'POST',
+        body: formData
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            appendToolOutput('frankensteinOutput', data.output || 'Complete', 'success');
+        } else {
+            appendToolOutput('frankensteinOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('frankensteinOutput', `Error: ${e}`, 'error'));
+}
+
+/**
+ * Run Polypyus
+ */
+function runPolypyus() {
+    const refInput = document.getElementById('polypyusReference');
+    const targetInput = document.getElementById('polypyusTarget');
+
+    if (!refInput?.files?.length || !targetInput?.files?.length) {
+        addLogEntry('Please select both reference and target binaries', 'WARNING');
+        return;
+    }
+
+    clearToolOutput('polypyusOutput');
+    appendToolOutput('polypyusOutput', 'Analyzing binaries...', 'info');
+
+    const formData = new FormData();
+    formData.append('reference', refInput.files[0]);
+    formData.append('target', targetInput.files[0]);
+
+    fetch('/api/cyber/firmware/polypyus/run', {
+        method: 'POST',
+        body: formData
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            appendToolOutput('polypyusOutput', `Found ${data.matches || 0} function matches`, 'success');
+        } else {
+            appendToolOutput('polypyusOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('polypyusOutput', `Error: ${e}`, 'error'));
+}
+
+// ==================== UTILITY TOOLS ====================
+
+/**
+ * Run Bluefog
+ */
+function runBluefog() {
+    const count = parseInt(document.getElementById('bluefogCount')?.value || '10');
+    const deviceClass = document.getElementById('bluefogClass')?.value;
+
+    clearToolOutput('bluefogOutput');
+    appendToolOutput('bluefogOutput', `Creating ${count} fake devices...`, 'info');
+
+    fetch('/api/cyber/utils/bluefog/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ count, device_class: deviceClass })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'started') {
+            document.getElementById('btnStopBluefog').disabled = false;
+            appendToolOutput('bluefogOutput', `Fog active: ${data.devices_created} fake devices`, 'success');
+        } else {
+            appendToolOutput('bluefogOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('bluefogOutput', `Error: ${e}`, 'error'));
+}
+
+function stopBluefog() {
+    fetch('/api/cyber/utils/bluefog/stop', { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+            document.getElementById('btnStopBluefog').disabled = true;
+            appendToolOutput('bluefogOutput', 'Fog stopped', 'info');
+        });
+}
+
+/**
+ * Start BLE Beacon
+ */
+function startBeacon() {
+    const type = document.getElementById('beaconType')?.value;
+    const uuid = document.getElementById('beaconUuid')?.value?.trim();
+    const url = document.getElementById('beaconUrl')?.value?.trim();
+    const txPower = document.getElementById('beaconTxPower')?.value;
+
+    fetch('/api/cyber/utils/beacon/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type, uuid, url, tx_power: txPower })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'started') {
+            document.getElementById('btnStopBeacon').disabled = false;
+            addLogEntry('Beacon broadcasting', 'INFO');
+        } else {
+            addLogEntry(`Beacon error: ${data.error}`, 'ERROR');
+        }
+    });
+}
+
+function stopBeacon() {
+    fetch('/api/cyber/utils/beacon/stop', { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+            document.getElementById('btnStopBeacon').disabled = true;
+            addLogEntry('Beacon stopped', 'INFO');
+        });
+}
+
+/**
+ * Start Bluepot honeypot
+ */
+function startBluepot() {
+    const sdp = document.getElementById('bluepotSdp')?.checked;
+    const obex = document.getElementById('bluepotObex')?.checked;
+    const hid = document.getElementById('bluepotHid')?.checked;
+
+    clearToolOutput('bluepotOutput');
+    appendToolOutput('bluepotOutput', 'Starting honeypot...', 'info');
+
+    fetch('/api/cyber/utils/bluepot/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ emulate_sdp: sdp, emulate_obex: obex, emulate_hid: hid })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'started') {
+            document.getElementById('btnStopBluepot').disabled = false;
+            appendToolOutput('bluepotOutput', 'Honeypot active - monitoring for attacks', 'success');
+        } else {
+            appendToolOutput('bluepotOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('bluepotOutput', `Error: ${e}`, 'error'));
+}
+
+function stopBluepot() {
+    fetch('/api/cyber/utils/bluepot/stop', { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+            document.getElementById('btnStopBluepot').disabled = true;
+            appendToolOutput('bluepotOutput', 'Honeypot stopped', 'info');
+            if (data.attacks_logged > 0) {
+                appendToolOutput('bluepotOutput', `Attacks logged: ${data.attacks_logged}`, 'warning');
+            }
+        });
+}
+
+/**
+ * Generate random BD address
+ */
+function generateRandomBdaddr() {
+    const hexChars = '0123456789ABCDEF';
+    let addr = '';
+    for (let i = 0; i < 6; i++) {
+        if (i > 0) addr += ':';
+        addr += hexChars[Math.floor(Math.random() * 16)];
+        addr += hexChars[Math.floor(Math.random() * 16)];
+    }
+    document.getElementById('bdaddrNew').value = addr;
+}
+
+/**
+ * Change BD address
+ */
+function changeBdaddr() {
+    const iface = document.getElementById('bdaddrInterface')?.value;
+    const newAddr = document.getElementById('bdaddrNew')?.value?.trim();
+
+    if (!newAddr || !newAddr.match(/^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/)) {
+        addLogEntry('Invalid BD address format', 'WARNING');
+        return;
+    }
+
+    clearToolOutput('bdaddrOutput');
+    appendToolOutput('bdaddrOutput', `Changing ${iface} to ${newAddr}...`, 'info');
+
+    fetch('/api/cyber/utils/bdaddr/change', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ interface: iface, new_address: newAddr })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            appendToolOutput('bdaddrOutput', 'Address changed successfully', 'success');
+        } else {
+            appendToolOutput('bdaddrOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('bdaddrOutput', `Error: ${e}`, 'error'));
+}
+
+function resetBdaddr() {
+    const iface = document.getElementById('bdaddrInterface')?.value;
+
+    clearToolOutput('bdaddrOutput');
+    appendToolOutput('bdaddrOutput', `Resetting ${iface} to original address...`, 'info');
+
+    fetch('/api/cyber/utils/bdaddr/reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ interface: iface })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            appendToolOutput('bdaddrOutput', `Reset to ${data.original_address}`, 'success');
+        } else {
+            appendToolOutput('bdaddrOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('bdaddrOutput', `Error: ${e}`, 'error'));
+}
+
+/**
+ * Run L2ping flood
+ */
+function runL2pingFlood() {
+    const target = document.getElementById('l2pingTarget')?.value?.trim();
+    const size = parseInt(document.getElementById('l2pingSize')?.value || '44');
+    const count = parseInt(document.getElementById('l2pingCount')?.value || '100');
+
+    if (!target) {
+        addLogEntry('L2ping requires a target address', 'WARNING');
+        return;
+    }
+
+    clearToolOutput('l2pingOutput');
+    appendToolOutput('l2pingOutput', `Sending ${count} packets (${size} bytes) to ${target}...`, 'info');
+
+    fetch('/api/cyber/utils/l2ping/flood', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target, size, count })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'started') {
+            document.getElementById('btnStopL2ping').disabled = false;
+            appendToolOutput('l2pingOutput', 'Flood started', 'warning');
+        } else {
+            appendToolOutput('l2pingOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('l2pingOutput', `Error: ${e}`, 'error'));
+}
+
+function stopL2ping() {
+    fetch('/api/cyber/utils/l2ping/stop', { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+            document.getElementById('btnStopL2ping').disabled = true;
+            appendToolOutput('l2pingOutput', `Stopped - ${data.packets_sent || 0} packets sent`, 'info');
+        });
+}
+
 // Check HID tool status when cyber tools tab is opened
 document.addEventListener('DOMContentLoaded', () => {
     // Add event listener for when cyber tab is shown
@@ -8816,7 +9966,23 @@ document.addEventListener('DOMContentLoaded', () => {
     showToolsTab = function(tabName) {
         origShowToolsTab.call(this, tabName);
         if (tabName === 'cyber') {
-            checkHidToolStatus();
+            checkCyberToolsStatus();
         }
     };
+
+    // Handle beacon type change
+    const beaconType = document.getElementById('beaconType');
+    if (beaconType) {
+        beaconType.addEventListener('change', function() {
+            const uuidRow = document.getElementById('beaconUuidRow');
+            const urlRow = document.getElementById('beaconUrlRow');
+            if (this.value === 'eddystone_url') {
+                uuidRow.style.display = 'none';
+                urlRow.style.display = 'block';
+            } else {
+                uuidRow.style.display = 'block';
+                urlRow.style.display = 'none';
+            }
+        });
+    }
 });

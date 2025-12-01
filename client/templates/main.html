@@ -290,126 +290,1114 @@
                     </div>
                 </div>
 
-                <!-- Cyber Tools Tab -->
+                <!-- Cyber Tools Tab - Comprehensive Bluetooth Arsenal -->
                 <div id="toolsCyber" class="tools-content">
-                    <div class="tools-group">
-                        <h3>Bluetooth HID Injection (hi_my_name_is_keyboard)</h3>
-                        <p class="tools-hint">Exploit CVE-2023-45866 to inject keystrokes into vulnerable Bluetooth devices. Requires compatible Broadcom adapter (BCM20702A0).</p>
+                    <!-- Cyber Tools Sub-Navigation -->
+                    <div class="cyber-nav">
+                        <button class="cyber-nav-btn active" onclick="showCyberCategory('recon')" data-category="recon">
+                            <span class="cyber-nav-icon">&#128269;</span>
+                            <span class="cyber-nav-label">Recon</span>
+                        </button>
+                        <button class="cyber-nav-btn" onclick="showCyberCategory('sniff')" data-category="sniff">
+                            <span class="cyber-nav-icon">&#128225;</span>
+                            <span class="cyber-nav-label">Sniff</span>
+                        </button>
+                        <button class="cyber-nav-btn" onclick="showCyberCategory('exploit')" data-category="exploit">
+                            <span class="cyber-nav-icon">&#9889;</span>
+                            <span class="cyber-nav-label">Exploit</span>
+                        </button>
+                        <button class="cyber-nav-btn" onclick="showCyberCategory('mitm')" data-category="mitm">
+                            <span class="cyber-nav-icon">&#128279;</span>
+                            <span class="cyber-nav-label">MITM</span>
+                        </button>
+                        <button class="cyber-nav-btn" onclick="showCyberCategory('inject')" data-category="inject">
+                            <span class="cyber-nav-icon">&#9000;</span>
+                            <span class="cyber-nav-label">Inject</span>
+                        </button>
+                        <button class="cyber-nav-btn" onclick="showCyberCategory('firmware')" data-category="firmware">
+                            <span class="cyber-nav-icon">&#128187;</span>
+                            <span class="cyber-nav-label">Firmware</span>
+                        </button>
+                        <button class="cyber-nav-btn" onclick="showCyberCategory('utils')" data-category="utils">
+                            <span class="cyber-nav-icon">&#128295;</span>
+                            <span class="cyber-nav-label">Utils</span>
+                        </button>
+                    </div>
 
-                        <!-- Tool Status -->
-                        <div class="cyber-tool-status" id="hidToolStatus">
-                            <div class="status-row">
-                                <span class="status-label">Tool Status:</span>
-                                <span class="status-value" id="hidToolInstalled">Checking...</span>
+                    <!-- Tool Status Banner -->
+                    <div class="cyber-status-banner" id="cyberStatusBanner">
+                        <div class="status-item">
+                            <span class="status-dot" id="cyberToolsStatusDot"></span>
+                            <span id="cyberToolsStatusText">Checking tools...</span>
+                        </div>
+                        <button class="btn btn-sm btn-secondary" onclick="checkCyberToolsStatus()">&#8635; Refresh</button>
+                    </div>
+
+                    <!-- ==================== RECONNAISSANCE ==================== -->
+                    <div id="cyberRecon" class="cyber-category active">
+                        <div class="cyber-category-header">
+                            <h3>&#128269; Reconnaissance & Discovery</h3>
+                            <p>Advanced Bluetooth device discovery, enumeration, and fingerprinting tools</p>
+                        </div>
+
+                        <!-- Blue Hydra -->
+                        <div class="cyber-tool-card">
+                            <div class="tool-card-header" onclick="toggleToolCard(this)">
+                                <div class="tool-info">
+                                    <span class="tool-icon">&#128038;</span>
+                                    <span class="tool-name">Blue Hydra</span>
+                                    <span class="tool-badge">Discovery</span>
+                                </div>
+                                <div class="tool-status" id="blueHydraStatus">--</div>
+                                <span class="tool-expand">&#9660;</span>
                             </div>
-                            <div class="status-row">
-                                <span class="status-label">Adapter:</span>
-                                <span class="status-value" id="hidAdapterStatus">--</span>
+                            <div class="tool-card-body">
+                                <p class="tool-desc">Passive Bluetooth discovery service using Ubertooth and standard adapters. Detects discoverable and non-discoverable devices.</p>
+                                <div class="tool-options">
+                                    <label class="toggle">
+                                        <input type="checkbox" id="blueHydraUbertooth" checked>
+                                        <span class="toggle-slider"></span>
+                                        <span class="toggle-label">Use Ubertooth</span>
+                                    </label>
+                                    <label class="toggle">
+                                        <input type="checkbox" id="blueHydraPassive">
+                                        <span class="toggle-slider"></span>
+                                        <span class="toggle-label">Passive Only</span>
+                                    </label>
+                                </div>
+                                <div class="tool-actions">
+                                    <button class="btn btn-success" onclick="startBlueHydra()">&#9654; START</button>
+                                    <button class="btn btn-danger" onclick="stopBlueHydra()" disabled id="btnStopBlueHydra">&#9632; STOP</button>
+                                    <button class="btn btn-secondary" onclick="installTool('blue_hydra')">&#128229; INSTALL</button>
+                                </div>
+                                <div class="tool-output hidden" id="blueHydraOutput"></div>
                             </div>
                         </div>
 
-                        <div class="form-row mt-10">
-                            <label>Target Platform:</label>
-                            <select id="hidTargetPlatform" class="input">
-                                <option value="android">Android</option>
-                                <option value="linux">Linux</option>
-                                <option value="macos">macOS</option>
-                                <option value="ios">iOS</option>
-                                <option value="windows">Windows</option>
-                            </select>
-                        </div>
-
-                        <div class="form-row">
-                            <label>Target Device:</label>
-                            <div class="input-with-btn">
-                                <input type="text" id="hidTargetAddress" class="input" placeholder="XX:XX:XX:XX:XX:XX">
-                                <button class="btn btn-sm btn-secondary" onclick="fillHidTargetFromSurvey()" title="Fill from selected device">&#8592; SURVEY</button>
+                        <!-- BLESuite -->
+                        <div class="cyber-tool-card">
+                            <div class="tool-card-header" onclick="toggleToolCard(this)">
+                                <div class="tool-info">
+                                    <span class="tool-icon">&#128272;</span>
+                                    <span class="tool-name">BLESuite</span>
+                                    <span class="tool-badge">BLE Testing</span>
+                                </div>
+                                <div class="tool-status" id="blesuiteStatus">--</div>
+                                <span class="tool-expand">&#9660;</span>
+                            </div>
+                            <div class="tool-card-body">
+                                <p class="tool-desc">Comprehensive BLE security testing framework. Enumerate services, characteristics, and test for common vulnerabilities.</p>
+                                <div class="form-row">
+                                    <label>Target:</label>
+                                    <div class="input-with-btn">
+                                        <input type="text" id="blesuiteTarget" class="input" placeholder="XX:XX:XX:XX:XX:XX">
+                                        <button class="btn btn-sm" onclick="fillFromSurvey('blesuiteTarget')">&#8592;</button>
+                                    </div>
+                                </div>
+                                <div class="form-row">
+                                    <label>Scan Type:</label>
+                                    <select id="blesuiteScanType" class="input">
+                                        <option value="enum">Enumerate Services</option>
+                                        <option value="read">Read All Characteristics</option>
+                                        <option value="write_test">Write Test</option>
+                                        <option value="fuzz">Fuzzing Mode</option>
+                                    </select>
+                                </div>
+                                <div class="tool-actions">
+                                    <button class="btn btn-primary" onclick="runBLESuite()">&#9654; RUN SCAN</button>
+                                    <button class="btn btn-secondary" onclick="installTool('blesuite')">&#128229; INSTALL</button>
+                                </div>
+                                <div class="tool-output hidden" id="blesuiteOutput"></div>
                             </div>
                         </div>
 
-                        <div class="form-row">
-                            <label>Payload Type:</label>
-                            <select id="hidPayloadType" class="input" onchange="updateHidPayloadPreview()">
-                                <option value="custom">Custom Keystrokes</option>
-                                <option value="hello">Hello World Test</option>
-                                <option value="revshell_linux">Reverse Shell (Linux)</option>
-                                <option value="revshell_macos">Reverse Shell (macOS)</option>
-                                <option value="download_exec">Download & Execute</option>
-                            </select>
+                        <!-- Bleah -->
+                        <div class="cyber-tool-card">
+                            <div class="tool-card-header" onclick="toggleToolCard(this)">
+                                <div class="tool-info">
+                                    <span class="tool-icon">&#128123;</span>
+                                    <span class="tool-name">Bleah</span>
+                                    <span class="tool-badge">BLE Scanner</span>
+                                </div>
+                                <div class="tool-status" id="bleahStatus">--</div>
+                                <span class="tool-expand">&#9660;</span>
+                            </div>
+                            <div class="tool-card-body">
+                                <p class="tool-desc">BLE scanner with enumeration capabilities. Quick discovery of nearby BLE devices with GATT info.</p>
+                                <div class="form-row">
+                                    <label>Target (optional):</label>
+                                    <input type="text" id="bleahTarget" class="input" placeholder="Leave blank for scan all">
+                                </div>
+                                <div class="tool-options">
+                                    <label class="toggle">
+                                        <input type="checkbox" id="bleahEnumerate" checked>
+                                        <span class="toggle-slider"></span>
+                                        <span class="toggle-label">Enumerate GATT</span>
+                                    </label>
+                                    <label class="toggle">
+                                        <input type="checkbox" id="bleahForce">
+                                        <span class="toggle-slider"></span>
+                                        <span class="toggle-label">Force Connection</span>
+                                    </label>
+                                </div>
+                                <div class="tool-actions">
+                                    <button class="btn btn-primary" onclick="runBleah()">&#9654; SCAN</button>
+                                    <button class="btn btn-secondary" onclick="installTool('bleah')">&#128229; INSTALL</button>
+                                </div>
+                                <div class="tool-output hidden" id="bleahOutput"></div>
+                            </div>
                         </div>
 
-                        <div class="form-row" id="hidCustomPayloadRow">
-                            <label>Payload / Keystrokes:</label>
-                            <textarea id="hidPayloadText" class="input textarea" rows="4" placeholder="Enter keystrokes to inject..."></textarea>
+                        <!-- Redfang -->
+                        <div class="cyber-tool-card">
+                            <div class="tool-card-header" onclick="toggleToolCard(this)">
+                                <div class="tool-info">
+                                    <span class="tool-icon">&#128126;</span>
+                                    <span class="tool-name">Redfang</span>
+                                    <span class="tool-badge">Hidden Device</span>
+                                </div>
+                                <div class="tool-status" id="redfangStatus">--</div>
+                                <span class="tool-expand">&#9660;</span>
+                            </div>
+                            <div class="tool-card-body">
+                                <p class="tool-desc">Find non-discoverable Bluetooth devices by brute-forcing the last 6 bytes of the BD address.</p>
+                                <div class="form-row">
+                                    <label>OUI Prefix:</label>
+                                    <input type="text" id="redfangOui" class="input" placeholder="AA:BB:CC (first 3 bytes)">
+                                </div>
+                                <div class="form-row">
+                                    <label>Range:</label>
+                                    <select id="redfangRange" class="input">
+                                        <option value="16">16 addresses</option>
+                                        <option value="256">256 addresses</option>
+                                        <option value="4096">4096 addresses (slow)</option>
+                                    </select>
+                                </div>
+                                <div class="tool-actions">
+                                    <button class="btn btn-warning" onclick="runRedfang()">&#9654; BRUTE FORCE</button>
+                                </div>
+                                <div class="tool-output hidden" id="redfangOutput"></div>
+                            </div>
                         </div>
 
-                        <!-- Preset payload options -->
-                        <div class="form-row hidden" id="hidRevshellOptions">
-                            <label>LHOST:</label>
-                            <input type="text" id="hidLhost" class="input" placeholder="192.168.1.100">
-                            <label class="ml-10">LPORT:</label>
-                            <input type="text" id="hidLport" class="input" placeholder="4444" style="width: 80px;">
-                        </div>
-
-                        <div class="form-row hidden" id="hidDownloadOptions">
-                            <label>URL:</label>
-                            <input type="text" id="hidDownloadUrl" class="input" placeholder="http://192.168.1.100/payload.sh">
-                        </div>
-
-                        <div class="cyber-warning">
-                            <span class="warning-icon">&#9888;</span>
-                            <span>This tool is for authorized security testing only. Ensure you have proper authorization before use.</span>
-                        </div>
-
-                        <div class="btn-group mt-10">
-                            <button class="btn btn-success" id="btnHidInject" onclick="startHidInjection()">
-                                &#9889; INJECT
-                            </button>
-                            <button class="btn btn-danger" id="btnHidStop" onclick="stopHidInjection()" disabled>
-                                &#9632; STOP
-                            </button>
-                            <button class="btn btn-secondary" onclick="setupHidTool()">
-                                &#128295; SETUP TOOL
-                            </button>
-                        </div>
-
-                        <div class="hid-results mt-10 hidden" id="hidResults">
-                            <div class="hid-results-header">INJECTION LOG</div>
-                            <div class="hid-results-log" id="hidResultsLog">
-                                <!-- Results populated by JS -->
+                        <!-- Spooftooph -->
+                        <div class="cyber-tool-card">
+                            <div class="tool-card-header" onclick="toggleToolCard(this)">
+                                <div class="tool-info">
+                                    <span class="tool-icon">&#128065;</span>
+                                    <span class="tool-name">Spooftooph</span>
+                                    <span class="tool-badge">Fingerprint</span>
+                                </div>
+                                <div class="tool-status" id="spooftoophStatus">--</div>
+                                <span class="tool-expand">&#9660;</span>
+                            </div>
+                            <div class="tool-card-body">
+                                <p class="tool-desc">Clone a Bluetooth device's profile (name, class, address). Useful for impersonation testing.</p>
+                                <div class="form-row">
+                                    <label>Clone From:</label>
+                                    <div class="input-with-btn">
+                                        <input type="text" id="spooftoophSource" class="input" placeholder="Source BD Address">
+                                        <button class="btn btn-sm" onclick="fillFromSurvey('spooftoophSource')">&#8592;</button>
+                                    </div>
+                                </div>
+                                <div class="form-row">
+                                    <label>Interface:</label>
+                                    <select id="spooftoophInterface" class="input">
+                                        <option value="hci0">hci0</option>
+                                        <option value="hci1">hci1</option>
+                                    </select>
+                                </div>
+                                <div class="tool-actions">
+                                    <button class="btn btn-warning" onclick="runSpooftooph()">&#128065; CLONE PROFILE</button>
+                                </div>
+                                <div class="tool-output hidden" id="spooftoophOutput"></div>
                             </div>
                         </div>
                     </div>
 
-                    <div class="tools-group mt-20">
-                        <h3>Link Key Extraction</h3>
-                        <p class="tools-hint">Extract Bluetooth link keys from paired devices (requires physical access or vulnerable pairing).</p>
-
-                        <div class="form-row">
-                            <label>Extraction Method:</label>
-                            <select id="linkKeyMethod" class="input">
-                                <option value="bluetooth">Bluetooth (Magic Keyboard)</option>
-                                <option value="lightning">Lightning Port (iOS)</option>
-                                <option value="usb_spoof">USB Spoofing</option>
-                            </select>
+                    <!-- ==================== SNIFFING ==================== -->
+                    <div id="cyberSniff" class="cyber-category">
+                        <div class="cyber-category-header">
+                            <h3>&#128225; Sniffing & Capture</h3>
+                            <p>Bluetooth packet capture, protocol analysis, and traffic monitoring</p>
                         </div>
 
-                        <div class="form-row">
-                            <label>Target Address:</label>
-                            <input type="text" id="linkKeyTargetAddress" class="input" placeholder="XX:XX:XX:XX:XX:XX">
-                        </div>
-
-                        <div class="btn-group mt-10">
-                            <button class="btn btn-primary" onclick="extractLinkKey()">
-                                &#128273; EXTRACT KEY
-                            </button>
-                        </div>
-
-                        <div class="linkkey-results mt-10 hidden" id="linkKeyResults">
-                            <div class="linkkey-results-content" id="linkKeyResultsContent">
-                                <!-- Results populated by JS -->
+                        <!-- Ubertooth Spectrum -->
+                        <div class="cyber-tool-card">
+                            <div class="tool-card-header" onclick="toggleToolCard(this)">
+                                <div class="tool-info">
+                                    <span class="tool-icon">&#128225;</span>
+                                    <span class="tool-name">Ubertooth Spectrum</span>
+                                    <span class="tool-badge">2.4GHz Analyzer</span>
+                                </div>
+                                <div class="tool-status" id="ubertoothSpectrumStatus">--</div>
+                                <span class="tool-expand">&#9660;</span>
+                            </div>
+                            <div class="tool-card-body">
+                                <p class="tool-desc">2.4GHz spectrum analyzer using Ubertooth hardware. Visualize Bluetooth and WiFi activity in real-time.</p>
+                                <div class="spectrum-display" id="spectrumDisplay">
+                                    <canvas id="spectrumCanvas" width="600" height="200"></canvas>
+                                </div>
+                                <div class="tool-options">
+                                    <label class="toggle">
+                                        <input type="checkbox" id="spectrumLive" checked>
+                                        <span class="toggle-slider"></span>
+                                        <span class="toggle-label">Live Update</span>
+                                    </label>
+                                </div>
+                                <div class="tool-actions">
+                                    <button class="btn btn-success" onclick="startSpectrum()">&#9654; START</button>
+                                    <button class="btn btn-danger" onclick="stopSpectrum()" disabled id="btnStopSpectrum">&#9632; STOP</button>
+                                </div>
                             </div>
                         </div>
+
+                        <!-- Ubertooth BTLE Sniffer -->
+                        <div class="cyber-tool-card">
+                            <div class="tool-card-header" onclick="toggleToolCard(this)">
+                                <div class="tool-info">
+                                    <span class="tool-icon">&#128752;</span>
+                                    <span class="tool-name">Ubertooth BTLE</span>
+                                    <span class="tool-badge">BLE Sniffer</span>
+                                </div>
+                                <div class="tool-status" id="ubertoothBtleStatus">--</div>
+                                <span class="tool-expand">&#9660;</span>
+                            </div>
+                            <div class="tool-card-body">
+                                <p class="tool-desc">Capture BLE packets in promiscuous mode. Follow connections and capture encrypted traffic.</p>
+                                <div class="form-row">
+                                    <label>Mode:</label>
+                                    <select id="ubertoothBtleMode" class="input">
+                                        <option value="follow">Follow New Connections</option>
+                                        <option value="target">Target Specific Device</option>
+                                        <option value="promiscuous">Promiscuous Mode</option>
+                                    </select>
+                                </div>
+                                <div class="form-row" id="ubertoothBtleTargetRow">
+                                    <label>Target:</label>
+                                    <input type="text" id="ubertoothBtleTarget" class="input" placeholder="XX:XX:XX:XX:XX:XX">
+                                </div>
+                                <div class="form-row">
+                                    <label>Output:</label>
+                                    <select id="ubertoothBtleOutput" class="input">
+                                        <option value="pcap">PCAP File</option>
+                                        <option value="wireshark">Wireshark (Live)</option>
+                                        <option value="console">Console</option>
+                                    </select>
+                                </div>
+                                <div class="tool-actions">
+                                    <button class="btn btn-success" onclick="startUbertoothBtle()">&#9654; CAPTURE</button>
+                                    <button class="btn btn-danger" onclick="stopUbertoothBtle()" disabled id="btnStopUbertoothBtle">&#9632; STOP</button>
+                                </div>
+                                <div class="tool-output hidden" id="ubertoothBtleOutput"></div>
+                            </div>
+                        </div>
+
+                        <!-- Btlejack -->
+                        <div class="cyber-tool-card">
+                            <div class="tool-card-header" onclick="toggleToolCard(this)">
+                                <div class="tool-info">
+                                    <span class="tool-icon">&#127919;</span>
+                                    <span class="tool-name">BTLEJack</span>
+                                    <span class="tool-badge">BLE Hijacker</span>
+                                </div>
+                                <div class="tool-status" id="btlejackStatus">--</div>
+                                <span class="tool-expand">&#9660;</span>
+                            </div>
+                            <div class="tool-card-body">
+                                <p class="tool-desc">Sniff, jam, and hijack BLE connections using Micro:Bit or nRF51 devices.</p>
+                                <div class="form-row">
+                                    <label>Mode:</label>
+                                    <select id="btlejackMode" class="input">
+                                        <option value="sniff">Sniff Connections</option>
+                                        <option value="jam">Jam Connection</option>
+                                        <option value="hijack">Hijack Connection</option>
+                                    </select>
+                                </div>
+                                <div class="form-row">
+                                    <label>Access Address:</label>
+                                    <input type="text" id="btlejackAA" class="input" placeholder="0x12345678 (or auto-detect)">
+                                </div>
+                                <div class="tool-actions">
+                                    <button class="btn btn-warning" onclick="runBtlejack()">&#9654; RUN</button>
+                                    <button class="btn btn-secondary" onclick="installTool('btlejack')">&#128229; INSTALL</button>
+                                </div>
+                                <div class="tool-output hidden" id="btlejackOutput"></div>
+                            </div>
+                        </div>
+
+                        <!-- Crackle -->
+                        <div class="cyber-tool-card">
+                            <div class="tool-card-header" onclick="toggleToolCard(this)">
+                                <div class="tool-info">
+                                    <span class="tool-icon">&#128274;</span>
+                                    <span class="tool-name">Crackle</span>
+                                    <span class="tool-badge">BLE Crypto</span>
+                                </div>
+                                <div class="tool-status" id="crackleStatus">--</div>
+                                <span class="tool-expand">&#9660;</span>
+                            </div>
+                            <div class="tool-card-body">
+                                <p class="tool-desc">Crack BLE encryption by exploiting weak pairing. Works on BLE Legacy Pairing (LE Legacy Pairing with Temporary Key).</p>
+                                <div class="form-row">
+                                    <label>PCAP File:</label>
+                                    <input type="file" id="cracklePcap" class="input" accept=".pcap,.pcapng">
+                                </div>
+                                <div class="tool-options">
+                                    <label class="toggle">
+                                        <input type="checkbox" id="crackleDecrypt" checked>
+                                        <span class="toggle-slider"></span>
+                                        <span class="toggle-label">Decrypt Traffic</span>
+                                    </label>
+                                </div>
+                                <div class="tool-actions">
+                                    <button class="btn btn-warning" onclick="runCrackle()">&#128274; CRACK</button>
+                                    <button class="btn btn-secondary" onclick="installTool('crackle')">&#128229; INSTALL</button>
+                                </div>
+                                <div class="tool-output hidden" id="crackleOutput"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- ==================== EXPLOITATION ==================== -->
+                    <div id="cyberExploit" class="cyber-category">
+                        <div class="cyber-category-header">
+                            <h3>&#9889; Exploitation & Vulnerabilities</h3>
+                            <p>Bluetooth vulnerability scanners and exploit tools for authorized security testing</p>
+                        </div>
+
+                        <!-- BlueBorne Scanner -->
+                        <div class="cyber-tool-card exploit-card">
+                            <div class="tool-card-header" onclick="toggleToolCard(this)">
+                                <div class="tool-info">
+                                    <span class="tool-icon">&#128128;</span>
+                                    <span class="tool-name">BlueBorne Scanner</span>
+                                    <span class="tool-badge critical">CVE-2017</span>
+                                </div>
+                                <div class="tool-status" id="blueborneStatus">--</div>
+                                <span class="tool-expand">&#9660;</span>
+                            </div>
+                            <div class="tool-card-body">
+                                <p class="tool-desc">Scan for BlueBorne vulnerabilities (CVE-2017-0781, 0782, 0783, 0785). Affects Android, Linux, iOS, Windows.</p>
+                                <div class="vuln-info">
+                                    <div class="vuln-item"><span class="vuln-id">CVE-2017-0781</span> Android RCE (BNEP)</div>
+                                    <div class="vuln-item"><span class="vuln-id">CVE-2017-0782</span> Android RCE (BNEP)</div>
+                                    <div class="vuln-item"><span class="vuln-id">CVE-2017-0783</span> Android MITM</div>
+                                    <div class="vuln-item"><span class="vuln-id">CVE-2017-0785</span> Android Info Leak</div>
+                                    <div class="vuln-item"><span class="vuln-id">CVE-2017-1000251</span> Linux RCE</div>
+                                </div>
+                                <div class="form-row">
+                                    <label>Target:</label>
+                                    <div class="input-with-btn">
+                                        <input type="text" id="blueborneTarget" class="input" placeholder="XX:XX:XX:XX:XX:XX">
+                                        <button class="btn btn-sm" onclick="fillFromSurvey('blueborneTarget')">&#8592;</button>
+                                    </div>
+                                </div>
+                                <div class="tool-actions">
+                                    <button class="btn btn-danger" onclick="runBlueborneScan()">&#128128; SCAN</button>
+                                    <button class="btn btn-secondary" onclick="installTool('blueborne')">&#128229; INSTALL</button>
+                                </div>
+                                <div class="tool-output hidden" id="blueborneOutput"></div>
+                            </div>
+                        </div>
+
+                        <!-- KNOB Attack -->
+                        <div class="cyber-tool-card exploit-card">
+                            <div class="tool-card-header" onclick="toggleToolCard(this)">
+                                <div class="tool-info">
+                                    <span class="tool-icon">&#128477;</span>
+                                    <span class="tool-name">KNOB Attack</span>
+                                    <span class="tool-badge critical">CVE-2019-9506</span>
+                                </div>
+                                <div class="tool-status" id="knobStatus">--</div>
+                                <span class="tool-expand">&#9660;</span>
+                            </div>
+                            <div class="tool-card-body">
+                                <p class="tool-desc">Key Negotiation of Bluetooth - forces weak encryption during connection. Affects all Bluetooth BR/EDR devices.</p>
+                                <div class="form-row">
+                                    <label>Target:</label>
+                                    <div class="input-with-btn">
+                                        <input type="text" id="knobTarget" class="input" placeholder="XX:XX:XX:XX:XX:XX">
+                                        <button class="btn btn-sm" onclick="fillFromSurvey('knobTarget')">&#8592;</button>
+                                    </div>
+                                </div>
+                                <div class="form-row">
+                                    <label>Entropy Bytes:</label>
+                                    <select id="knobEntropy" class="input">
+                                        <option value="1">1 byte (weakest)</option>
+                                        <option value="2">2 bytes</option>
+                                        <option value="3">3 bytes</option>
+                                        <option value="7">7 bytes</option>
+                                    </select>
+                                </div>
+                                <div class="tool-actions">
+                                    <button class="btn btn-danger" onclick="runKnobAttack()">&#9889; ATTACK</button>
+                                    <button class="btn btn-secondary" onclick="installTool('knob')">&#128229; INSTALL</button>
+                                </div>
+                                <div class="tool-output hidden" id="knobOutput"></div>
+                            </div>
+                        </div>
+
+                        <!-- BIAS Attack -->
+                        <div class="cyber-tool-card exploit-card">
+                            <div class="tool-card-header" onclick="toggleToolCard(this)">
+                                <div class="tool-info">
+                                    <span class="tool-icon">&#128373;</span>
+                                    <span class="tool-name">BIAS Attack</span>
+                                    <span class="tool-badge critical">CVE-2020-10135</span>
+                                </div>
+                                <div class="tool-status" id="biasStatus">--</div>
+                                <span class="tool-expand">&#9660;</span>
+                            </div>
+                            <div class="tool-card-body">
+                                <p class="tool-desc">Bluetooth Impersonation Attack - bypass authentication and impersonate a trusted device.</p>
+                                <div class="form-row">
+                                    <label>Target:</label>
+                                    <input type="text" id="biasTarget" class="input" placeholder="XX:XX:XX:XX:XX:XX">
+                                </div>
+                                <div class="form-row">
+                                    <label>Impersonate:</label>
+                                    <input type="text" id="biasImpersonate" class="input" placeholder="Device to impersonate">
+                                </div>
+                                <div class="tool-actions">
+                                    <button class="btn btn-danger" onclick="runBiasAttack()">&#128373; IMPERSONATE</button>
+                                    <button class="btn btn-secondary" onclick="installTool('bias')">&#128229; INSTALL</button>
+                                </div>
+                                <div class="tool-output hidden" id="biasOutput"></div>
+                            </div>
+                        </div>
+
+                        <!-- SDP Leak -->
+                        <div class="cyber-tool-card">
+                            <div class="tool-card-header" onclick="toggleToolCard(this)">
+                                <div class="tool-info">
+                                    <span class="tool-icon">&#128203;</span>
+                                    <span class="tool-name">SDP Leak-It</span>
+                                    <span class="tool-badge">Info Leak</span>
+                                </div>
+                                <div class="tool-status" id="sdpLeakStatus">--</div>
+                                <span class="tool-expand">&#9660;</span>
+                            </div>
+                            <div class="tool-card-body">
+                                <p class="tool-desc">Exploit SDP to leak information from Bluetooth devices. Extract service records, device info.</p>
+                                <div class="form-row">
+                                    <label>Target:</label>
+                                    <div class="input-with-btn">
+                                        <input type="text" id="sdpLeakTarget" class="input" placeholder="XX:XX:XX:XX:XX:XX">
+                                        <button class="btn btn-sm" onclick="fillFromSurvey('sdpLeakTarget')">&#8592;</button>
+                                    </div>
+                                </div>
+                                <div class="tool-actions">
+                                    <button class="btn btn-warning" onclick="runSdpLeak()">&#128203; EXTRACT</button>
+                                </div>
+                                <div class="tool-output hidden" id="sdpLeakOutput"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- ==================== MITM ==================== -->
+                    <div id="cyberMitm" class="cyber-category">
+                        <div class="cyber-category-header">
+                            <h3>&#128279; Man-in-the-Middle</h3>
+                            <p>Bluetooth traffic interception, proxy, and relay tools</p>
+                        </div>
+
+                        <!-- BTLEJuice -->
+                        <div class="cyber-tool-card">
+                            <div class="tool-card-header" onclick="toggleToolCard(this)">
+                                <div class="tool-info">
+                                    <span class="tool-icon">&#127863;</span>
+                                    <span class="tool-name">BTLEJuice</span>
+                                    <span class="tool-badge">BLE MITM</span>
+                                </div>
+                                <div class="tool-status" id="btlejuiceStatus">--</div>
+                                <span class="tool-expand">&#9660;</span>
+                            </div>
+                            <div class="tool-card-body">
+                                <p class="tool-desc">BLE Man-in-the-Middle framework. Intercept, modify, and replay BLE traffic between devices.</p>
+                                <div class="tool-requirements">
+                                    <span class="req-label">Requires:</span> 2x BLE adapters (1 peripheral, 1 central)
+                                </div>
+                                <div class="form-row">
+                                    <label>Target Device:</label>
+                                    <input type="text" id="btlejuiceTarget" class="input" placeholder="XX:XX:XX:XX:XX:XX">
+                                </div>
+                                <div class="form-row">
+                                    <label>Proxy Interface:</label>
+                                    <select id="btlejuiceInterface" class="input">
+                                        <option value="hci0">hci0</option>
+                                        <option value="hci1">hci1</option>
+                                    </select>
+                                </div>
+                                <div class="tool-actions">
+                                    <button class="btn btn-success" onclick="startBtlejuice()">&#9654; START PROXY</button>
+                                    <button class="btn btn-danger" onclick="stopBtlejuice()" disabled id="btnStopBtlejuice">&#9632; STOP</button>
+                                    <button class="btn btn-secondary" onclick="installTool('btlejuice')">&#128229; INSTALL</button>
+                                </div>
+                                <div class="tool-output hidden" id="btlejuiceOutput"></div>
+                            </div>
+                        </div>
+
+                        <!-- GATTacker -->
+                        <div class="cyber-tool-card">
+                            <div class="tool-card-header" onclick="toggleToolCard(this)">
+                                <div class="tool-info">
+                                    <span class="tool-icon">&#128737;</span>
+                                    <span class="tool-name">GATTacker</span>
+                                    <span class="tool-badge">BLE Clone</span>
+                                </div>
+                                <div class="tool-status" id="gattackerStatus">--</div>
+                                <span class="tool-expand">&#9660;</span>
+                            </div>
+                            <div class="tool-card-body">
+                                <p class="tool-desc">Clone BLE devices and intercept connections. Create a rogue device that mimics the target.</p>
+                                <div class="form-row">
+                                    <label>Target Device:</label>
+                                    <input type="text" id="gattackerTarget" class="input" placeholder="XX:XX:XX:XX:XX:XX">
+                                </div>
+                                <div class="tool-options">
+                                    <label class="toggle">
+                                        <input type="checkbox" id="gattackerRelay" checked>
+                                        <span class="toggle-slider"></span>
+                                        <span class="toggle-label">Relay to Original</span>
+                                    </label>
+                                    <label class="toggle">
+                                        <input type="checkbox" id="gattackerLog" checked>
+                                        <span class="toggle-slider"></span>
+                                        <span class="toggle-label">Log Traffic</span>
+                                    </label>
+                                </div>
+                                <div class="tool-actions">
+                                    <button class="btn btn-warning" onclick="runGattacker()">&#128737; CLONE & INTERCEPT</button>
+                                    <button class="btn btn-secondary" onclick="installTool('gattacker')">&#128229; INSTALL</button>
+                                </div>
+                                <div class="tool-output hidden" id="gattackerOutput"></div>
+                            </div>
+                        </div>
+
+                        <!-- BT Proxy -->
+                        <div class="cyber-tool-card">
+                            <div class="tool-card-header" onclick="toggleToolCard(this)">
+                                <div class="tool-info">
+                                    <span class="tool-icon">&#128260;</span>
+                                    <span class="tool-name">BT Proxy</span>
+                                    <span class="tool-badge">Classic MITM</span>
+                                </div>
+                                <div class="tool-status" id="btproxyStatus">--</div>
+                                <span class="tool-expand">&#9660;</span>
+                            </div>
+                            <div class="tool-card-body">
+                                <p class="tool-desc">Classic Bluetooth MITM proxy. Intercept RFCOMM, L2CAP connections.</p>
+                                <div class="form-row">
+                                    <label>Master Device:</label>
+                                    <input type="text" id="btproxyMaster" class="input" placeholder="Phone/Laptop">
+                                </div>
+                                <div class="form-row">
+                                    <label>Slave Device:</label>
+                                    <input type="text" id="btproxySlave" class="input" placeholder="Headset/Keyboard">
+                                </div>
+                                <div class="tool-actions">
+                                    <button class="btn btn-warning" onclick="runBtproxy()">&#128260; START PROXY</button>
+                                    <button class="btn btn-secondary" onclick="installTool('btproxy')">&#128229; INSTALL</button>
+                                </div>
+                                <div class="tool-output hidden" id="btproxyOutput"></div>
+                            </div>
+                        </div>
+
+                        <!-- BLE Replay -->
+                        <div class="cyber-tool-card">
+                            <div class="tool-card-header" onclick="toggleToolCard(this)">
+                                <div class="tool-info">
+                                    <span class="tool-icon">&#9654;&#9654;</span>
+                                    <span class="tool-name">BLE Replay</span>
+                                    <span class="tool-badge">Traffic Replay</span>
+                                </div>
+                                <div class="tool-status" id="blereplayStatus">--</div>
+                                <span class="tool-expand">&#9660;</span>
+                            </div>
+                            <div class="tool-card-body">
+                                <p class="tool-desc">Replay captured BLE traffic. Useful for testing authentication bypasses.</p>
+                                <div class="form-row">
+                                    <label>Capture File:</label>
+                                    <input type="file" id="blereplayFile" class="input" accept=".pcap,.json">
+                                </div>
+                                <div class="form-row">
+                                    <label>Target:</label>
+                                    <input type="text" id="blereplayTarget" class="input" placeholder="XX:XX:XX:XX:XX:XX">
+                                </div>
+                                <div class="tool-actions">
+                                    <button class="btn btn-warning" onclick="runBleReplay()">&#9654;&#9654; REPLAY</button>
+                                </div>
+                                <div class="tool-output hidden" id="blereplayOutput"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- ==================== INJECTION ==================== -->
+                    <div id="cyberInject" class="cyber-category">
+                        <div class="cyber-category-header">
+                            <h3>&#9000; HID Injection & Ducky</h3>
+                            <p>Keystroke injection, BadUSB-style attacks over Bluetooth</p>
+                        </div>
+
+                        <!-- HID Injection (existing tool, enhanced) -->
+                        <div class="cyber-tool-card">
+                            <div class="tool-card-header" onclick="toggleToolCard(this)">
+                                <div class="tool-info">
+                                    <span class="tool-icon">&#9000;</span>
+                                    <span class="tool-name">HID Injection</span>
+                                    <span class="tool-badge critical">CVE-2023-45866</span>
+                                </div>
+                                <div class="tool-status" id="hidToolInstalled">--</div>
+                                <span class="tool-expand">&#9660;</span>
+                            </div>
+                            <div class="tool-card-body">
+                                <p class="tool-desc">Inject keystrokes into vulnerable Bluetooth devices. Exploits unauthenticated HID pairing.</p>
+                                <div class="cyber-tool-status" id="hidToolStatus">
+                                    <div class="status-row">
+                                        <span class="status-label">Adapter:</span>
+                                        <span class="status-value" id="hidAdapterStatus">--</span>
+                                    </div>
+                                </div>
+                                <div class="form-row">
+                                    <label>Target Platform:</label>
+                                    <select id="hidTargetPlatform" class="input">
+                                        <option value="android">Android</option>
+                                        <option value="linux">Linux</option>
+                                        <option value="macos">macOS</option>
+                                        <option value="ios">iOS</option>
+                                        <option value="windows">Windows</option>
+                                    </select>
+                                </div>
+                                <div class="form-row">
+                                    <label>Target Device:</label>
+                                    <div class="input-with-btn">
+                                        <input type="text" id="hidTargetAddress" class="input" placeholder="XX:XX:XX:XX:XX:XX">
+                                        <button class="btn btn-sm" onclick="fillFromSurvey('hidTargetAddress')">&#8592;</button>
+                                    </div>
+                                </div>
+                                <div class="form-row">
+                                    <label>Payload:</label>
+                                    <select id="hidPayloadType" class="input" onchange="updateHidPayloadPreview()">
+                                        <option value="custom">Custom Keystrokes</option>
+                                        <option value="hello">Hello World Test</option>
+                                        <option value="revshell_linux">Reverse Shell (Linux)</option>
+                                        <option value="revshell_macos">Reverse Shell (macOS)</option>
+                                        <option value="download_exec">Download & Execute</option>
+                                        <option value="rickroll">Rickroll (Open YouTube)</option>
+                                    </select>
+                                </div>
+                                <div class="form-row" id="hidCustomPayloadRow">
+                                    <textarea id="hidPayloadText" class="input textarea" rows="4" placeholder="Enter keystrokes to inject..."></textarea>
+                                </div>
+                                <div class="form-row hidden" id="hidRevshellOptions">
+                                    <label>LHOST:</label>
+                                    <input type="text" id="hidLhost" class="input" placeholder="192.168.1.100">
+                                    <label class="ml-10">LPORT:</label>
+                                    <input type="text" id="hidLport" class="input" placeholder="4444" style="width: 80px;">
+                                </div>
+                                <div class="form-row hidden" id="hidDownloadOptions">
+                                    <label>URL:</label>
+                                    <input type="text" id="hidDownloadUrl" class="input" placeholder="http://192.168.1.100/payload.sh">
+                                </div>
+                                <div class="tool-actions">
+                                    <button class="btn btn-success" id="btnHidInject" onclick="startHidInjection()">&#9889; INJECT</button>
+                                    <button class="btn btn-danger" id="btnHidStop" onclick="stopHidInjection()" disabled>&#9632; STOP</button>
+                                    <button class="btn btn-secondary" onclick="setupHidTool()">&#128295; SETUP</button>
+                                </div>
+                                <div class="tool-output hidden" id="hidResults">
+                                    <div class="tool-output-content" id="hidResultsLog"></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Uberducky -->
+                        <div class="cyber-tool-card">
+                            <div class="tool-card-header" onclick="toggleToolCard(this)">
+                                <div class="tool-info">
+                                    <span class="tool-icon">&#129414;</span>
+                                    <span class="tool-name">Uberducky</span>
+                                    <span class="tool-badge">Ubertooth HID</span>
+                                </div>
+                                <div class="tool-status" id="uberducky Status">--</div>
+                                <span class="tool-expand">&#9660;</span>
+                            </div>
+                            <div class="tool-card-body">
+                                <p class="tool-desc">Use Ubertooth as a Rubber Ducky. Inject keystrokes using Ubertooth hardware.</p>
+                                <div class="form-row">
+                                    <label>Target:</label>
+                                    <input type="text" id="uberducky Target" class="input" placeholder="XX:XX:XX:XX:XX:XX">
+                                </div>
+                                <div class="form-row">
+                                    <label>Ducky Script:</label>
+                                    <textarea id="uberducky Script" class="input textarea" rows="6" placeholder="REM Uberducky Script&#10;DELAY 1000&#10;STRING Hello World!&#10;ENTER"></textarea>
+                                </div>
+                                <div class="tool-actions">
+                                    <button class="btn btn-warning" onclick="runUberducky()">&#129414; INJECT</button>
+                                    <button class="btn btn-secondary" onclick="installTool('uberducky')">&#128229; INSTALL</button>
+                                </div>
+                                <div class="tool-output hidden" id="uberducky Output"></div>
+                            </div>
+                        </div>
+
+                        <!-- Link Key Extraction -->
+                        <div class="cyber-tool-card">
+                            <div class="tool-card-header" onclick="toggleToolCard(this)">
+                                <div class="tool-info">
+                                    <span class="tool-icon">&#128273;</span>
+                                    <span class="tool-name">Link Key Extraction</span>
+                                    <span class="tool-badge">Key Theft</span>
+                                </div>
+                                <div class="tool-status" id="linkKeyStatus">--</div>
+                                <span class="tool-expand">&#9660;</span>
+                            </div>
+                            <div class="tool-card-body">
+                                <p class="tool-desc">Extract Bluetooth link keys from paired devices for impersonation attacks.</p>
+                                <div class="form-row">
+                                    <label>Method:</label>
+                                    <select id="linkKeyMethod" class="input">
+                                        <option value="bluetooth">Bluetooth (Magic Keyboard)</option>
+                                        <option value="lightning">Lightning Port (iOS)</option>
+                                        <option value="usb_spoof">USB Spoofing</option>
+                                        <option value="filesystem">Filesystem (rooted)</option>
+                                    </select>
+                                </div>
+                                <div class="form-row">
+                                    <label>Target:</label>
+                                    <input type="text" id="linkKeyTargetAddress" class="input" placeholder="XX:XX:XX:XX:XX:XX">
+                                </div>
+                                <div class="tool-actions">
+                                    <button class="btn btn-warning" onclick="extractLinkKey()">&#128273; EXTRACT KEY</button>
+                                </div>
+                                <div class="tool-output hidden" id="linkKeyResults">
+                                    <div class="tool-output-content" id="linkKeyResultsContent"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- ==================== FIRMWARE ==================== -->
+                    <div id="cyberFirmware" class="cyber-category">
+                        <div class="cyber-category-header">
+                            <h3>&#128187; Firmware Analysis</h3>
+                            <p>Bluetooth chip firmware debugging, patching, and analysis</p>
+                        </div>
+
+                        <!-- InternalBlue -->
+                        <div class="cyber-tool-card">
+                            <div class="tool-card-header" onclick="toggleToolCard(this)">
+                                <div class="tool-info">
+                                    <span class="tool-icon">&#128187;</span>
+                                    <span class="tool-name">InternalBlue</span>
+                                    <span class="tool-badge">Broadcom/Cypress</span>
+                                </div>
+                                <div class="tool-status" id="internalblueStatus">--</div>
+                                <span class="tool-expand">&#9660;</span>
+                            </div>
+                            <div class="tool-card-body">
+                                <p class="tool-desc">Bluetooth experimentation framework for Broadcom/Cypress chips. Patch firmware, dump memory, inject packets.</p>
+                                <div class="tool-requirements">
+                                    <span class="req-label">Supported:</span> Nexus, Raspberry Pi, iPhone, Mac, Samsung, Eval Boards
+                                </div>
+                                <div class="form-row">
+                                    <label>Device:</label>
+                                    <select id="internalblueDevice" class="input">
+                                        <option value="adb">Android (ADB)</option>
+                                        <option value="hci">HCI (Linux)</option>
+                                        <option value="ios">iOS (SSH)</option>
+                                        <option value="macos">macOS</option>
+                                    </select>
+                                </div>
+                                <div class="form-row">
+                                    <label>Action:</label>
+                                    <select id="internalblueAction" class="input">
+                                        <option value="info">Device Info</option>
+                                        <option value="memdump">Memory Dump</option>
+                                        <option value="patch">Load Patch</option>
+                                        <option value="fuzz">Fuzzing Mode</option>
+                                    </select>
+                                </div>
+                                <div class="tool-actions">
+                                    <button class="btn btn-primary" onclick="runInternalblue()">&#128187; RUN</button>
+                                    <button class="btn btn-secondary" onclick="installTool('internalblue')">&#128229; INSTALL</button>
+                                </div>
+                                <div class="tool-output hidden" id="internalblueOutput"></div>
+                            </div>
+                        </div>
+
+                        <!-- Frankenstein -->
+                        <div class="cyber-tool-card">
+                            <div class="tool-card-header" onclick="toggleToolCard(this)">
+                                <div class="tool-info">
+                                    <span class="tool-icon">&#129302;</span>
+                                    <span class="tool-name">Frankenstein</span>
+                                    <span class="tool-badge">Emulator</span>
+                                </div>
+                                <div class="tool-status" id="frankensteinStatus">--</div>
+                                <span class="tool-expand">&#9660;</span>
+                            </div>
+                            <div class="tool-card-body">
+                                <p class="tool-desc">Broadcom/Cypress Bluetooth firmware emulator. Fuzz and analyze firmware without hardware.</p>
+                                <div class="form-row">
+                                    <label>Firmware:</label>
+                                    <input type="file" id="frankensteinFirmware" class="input" accept=".bin,.elf">
+                                </div>
+                                <div class="form-row">
+                                    <label>Mode:</label>
+                                    <select id="frankensteinMode" class="input">
+                                        <option value="emulate">Emulate</option>
+                                        <option value="fuzz">Fuzz</option>
+                                        <option value="trace">Trace Execution</option>
+                                    </select>
+                                </div>
+                                <div class="tool-actions">
+                                    <button class="btn btn-primary" onclick="runFrankenstein()">&#129302; EMULATE</button>
+                                    <button class="btn btn-secondary" onclick="installTool('frankenstein')">&#128229; INSTALL</button>
+                                </div>
+                                <div class="tool-output hidden" id="frankensteinOutput"></div>
+                            </div>
+                        </div>
+
+                        <!-- Polypyus -->
+                        <div class="cyber-tool-card">
+                            <div class="tool-card-header" onclick="toggleToolCard(this)">
+                                <div class="tool-info">
+                                    <span class="tool-icon">&#128300;</span>
+                                    <span class="tool-name">Polypyus</span>
+                                    <span class="tool-badge">Binary Analysis</span>
+                                </div>
+                                <div class="tool-status" id="polypyusStatus">--</div>
+                                <span class="tool-expand">&#9660;</span>
+                            </div>
+                            <div class="tool-card-body">
+                                <p class="tool-desc">Learn functions from binaries and apply to other Bluetooth firmware for reverse engineering.</p>
+                                <div class="form-row">
+                                    <label>Reference Binary:</label>
+                                    <input type="file" id="polypyusReference" class="input" accept=".bin,.elf">
+                                </div>
+                                <div class="form-row">
+                                    <label>Target Binary:</label>
+                                    <input type="file" id="polypyusTarget" class="input" accept=".bin,.elf">
+                                </div>
+                                <div class="tool-actions">
+                                    <button class="btn btn-primary" onclick="runPolypyus()">&#128300; ANALYZE</button>
+                                    <button class="btn btn-secondary" onclick="installTool('polypyus')">&#128229; INSTALL</button>
+                                </div>
+                                <div class="tool-output hidden" id="polypyusOutput"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- ==================== UTILITIES ==================== -->
+                    <div id="cyberUtils" class="cyber-category">
+                        <div class="cyber-category-header">
+                            <h3>&#128295; Utilities</h3>
+                            <p>MAC spoofing, beacons, miscellaneous Bluetooth tools</p>
+                        </div>
+
+                        <!-- Bluefog -->
+                        <div class="cyber-tool-card">
+                            <div class="tool-card-header" onclick="toggleToolCard(this)">
+                                <div class="tool-info">
+                                    <span class="tool-icon">&#127787;</span>
+                                    <span class="tool-name">Bluefog</span>
+                                    <span class="tool-badge">MAC Spoof</span>
+                                </div>
+                                <div class="tool-status" id="bluefogStatus">--</div>
+                                <span class="tool-expand">&#9660;</span>
+                            </div>
+                            <div class="tool-card-body">
+                                <p class="tool-desc">Flood the area with fake Bluetooth devices. Creates noise and confusion for tracking systems.</p>
+                                <div class="form-row">
+                                    <label>Number of Devices:</label>
+                                    <input type="number" id="bluefogCount" class="input" value="10" min="1" max="100">
+                                </div>
+                                <div class="form-row">
+                                    <label>Device Class:</label>
+                                    <select id="bluefogClass" class="input">
+                                        <option value="random">Random</option>
+                                        <option value="phone">Phone</option>
+                                        <option value="computer">Computer</option>
+                                        <option value="audio">Audio Device</option>
+                                        <option value="peripheral">Peripheral</option>
+                                    </select>
+                                </div>
+                                <div class="tool-actions">
+                                    <button class="btn btn-warning" onclick="runBluefog()">&#127787; START FOG</button>
+                                    <button class="btn btn-danger" onclick="stopBluefog()" disabled id="btnStopBluefog">&#9632; STOP</button>
+                                </div>
+                                <div class="tool-output hidden" id="bluefogOutput"></div>
+                            </div>
+                        </div>
+
+                        <!-- MiniBeacon -->
+                        <div class="cyber-tool-card">
+                            <div class="tool-card-header" onclick="toggleToolCard(this)">
+                                <div class="tool-info">
+                                    <span class="tool-icon">&#128246;</span>
+                                    <span class="tool-name">BLE Beacon</span>
+                                    <span class="tool-badge">iBeacon/Eddystone</span>
+                                </div>
+                                <div class="tool-status" id="beaconStatus">--</div>
+                                <span class="tool-expand">&#9660;</span>
+                            </div>
+                            <div class="tool-card-body">
+                                <p class="tool-desc">Create custom BLE beacons. Useful for testing location services and phishing.</p>
+                                <div class="form-row">
+                                    <label>Beacon Type:</label>
+                                    <select id="beaconType" class="input">
+                                        <option value="ibeacon">iBeacon (Apple)</option>
+                                        <option value="eddystone_uid">Eddystone UID</option>
+                                        <option value="eddystone_url">Eddystone URL</option>
+                                        <option value="altbeacon">AltBeacon</option>
+                                    </select>
+                                </div>
+                                <div class="form-row" id="beaconUuidRow">
+                                    <label>UUID:</label>
+                                    <input type="text" id="beaconUuid" class="input" placeholder="E2C56DB5-DFFB-48D2-B060-D0F5A71096E0">
+                                </div>
+                                <div class="form-row" id="beaconUrlRow" style="display:none;">
+                                    <label>URL:</label>
+                                    <input type="text" id="beaconUrl" class="input" placeholder="https://example.com">
+                                </div>
+                                <div class="form-row">
+                                    <label>TX Power:</label>
+                                    <select id="beaconTxPower" class="input">
+                                        <option value="high">High</option>
+                                        <option value="medium" selected>Medium</option>
+                                        <option value="low">Low</option>
+                                    </select>
+                                </div>
+                                <div class="tool-actions">
+                                    <button class="btn btn-success" onclick="startBeacon()">&#128246; BROADCAST</button>
+                                    <button class="btn btn-danger" onclick="stopBeacon()" disabled id="btnStopBeacon">&#9632; STOP</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Bluepot Honeypot -->
+                        <div class="cyber-tool-card">
+                            <div class="tool-card-header" onclick="toggleToolCard(this)">
+                                <div class="tool-info">
+                                    <span class="tool-icon">&#127855;</span>
+                                    <span class="tool-name">Bluepot</span>
+                                    <span class="tool-badge">Honeypot</span>
+                                </div>
+                                <div class="tool-status" id="bluepotStatus">--</div>
+                                <span class="tool-expand">&#9660;</span>
+                            </div>
+                            <div class="tool-card-body">
+                                <p class="tool-desc">Bluetooth honeypot. Emulate vulnerable services to detect and log attack attempts.</p>
+                                <div class="tool-options">
+                                    <label class="toggle">
+                                        <input type="checkbox" id="bluepotSdp" checked>
+                                        <span class="toggle-slider"></span>
+                                        <span class="toggle-label">Emulate SDP</span>
+                                    </label>
+                                    <label class="toggle">
+                                        <input type="checkbox" id="bluepotObex" checked>
+                                        <span class="toggle-slider"></span>
+                                        <span class="toggle-label">Emulate OBEX</span>
+                                    </label>
+                                    <label class="toggle">
+                                        <input type="checkbox" id="bluepotHid">
+                                        <span class="toggle-slider"></span>
+                                        <span class="toggle-label">Emulate HID</span>
+                                    </label>
+                                </div>
+                                <div class="tool-actions">
+                                    <button class="btn btn-success" onclick="startBluepot()">&#127855; START HONEYPOT</button>
+                                    <button class="btn btn-danger" onclick="stopBluepot()" disabled id="btnStopBluepot">&#9632; STOP</button>
+                                </div>
+                                <div class="tool-output hidden" id="bluepotOutput"></div>
+                            </div>
+                        </div>
+
+                        <!-- Bdaddr Changer -->
+                        <div class="cyber-tool-card">
+                            <div class="tool-card-header" onclick="toggleToolCard(this)">
+                                <div class="tool-info">
+                                    <span class="tool-icon">&#128260;</span>
+                                    <span class="tool-name">BD Address Changer</span>
+                                    <span class="tool-badge">MAC Spoof</span>
+                                </div>
+                                <div class="tool-status" id="bdaddrStatus">--</div>
+                                <span class="tool-expand">&#9660;</span>
+                            </div>
+                            <div class="tool-card-body">
+                                <p class="tool-desc">Change your Bluetooth adapter's BD address for anonymity or impersonation.</p>
+                                <div class="form-row">
+                                    <label>Interface:</label>
+                                    <select id="bdaddrInterface" class="input">
+                                        <option value="hci0">hci0</option>
+                                        <option value="hci1">hci1</option>
+                                    </select>
+                                </div>
+                                <div class="form-row">
+                                    <label>New Address:</label>
+                                    <div class="input-with-btn">
+                                        <input type="text" id="bdaddrNew" class="input" placeholder="XX:XX:XX:XX:XX:XX">
+                                        <button class="btn btn-sm" onclick="generateRandomBdaddr()">&#127922; Random</button>
+                                    </div>
+                                </div>
+                                <div class="tool-actions">
+                                    <button class="btn btn-warning" onclick="changeBdaddr()">&#128260; CHANGE</button>
+                                    <button class="btn btn-secondary" onclick="resetBdaddr()">&#8634; RESET</button>
+                                </div>
+                                <div class="tool-output hidden" id="bdaddrOutput"></div>
+                            </div>
+                        </div>
+
+                        <!-- L2ping Flood -->
+                        <div class="cyber-tool-card">
+                            <div class="tool-card-header" onclick="toggleToolCard(this)">
+                                <div class="tool-info">
+                                    <span class="tool-icon">&#128165;</span>
+                                    <span class="tool-name">L2ping Stress</span>
+                                    <span class="tool-badge">DoS Testing</span>
+                                </div>
+                                <div class="tool-status" id="l2pingStatus">--</div>
+                                <span class="tool-expand">&#9660;</span>
+                            </div>
+                            <div class="tool-card-body">
+                                <p class="tool-desc">Bluetooth stress testing with L2CAP ping. Test device stability under load.</p>
+                                <div class="form-row">
+                                    <label>Target:</label>
+                                    <div class="input-with-btn">
+                                        <input type="text" id="l2pingTarget" class="input" placeholder="XX:XX:XX:XX:XX:XX">
+                                        <button class="btn btn-sm" onclick="fillFromSurvey('l2pingTarget')">&#8592;</button>
+                                    </div>
+                                </div>
+                                <div class="form-row">
+                                    <label>Packet Size:</label>
+                                    <select id="l2pingSize" class="input">
+                                        <option value="44">44 bytes (default)</option>
+                                        <option value="600">600 bytes</option>
+                                        <option value="1024">1024 bytes</option>
+                                    </select>
+                                </div>
+                                <div class="form-row">
+                                    <label>Count:</label>
+                                    <input type="number" id="l2pingCount" class="input" value="100" min="1" max="10000">
+                                </div>
+                                <div class="cyber-warning">
+                                    <span class="warning-icon">&#9888;</span>
+                                    <span>DoS testing requires explicit authorization.</span>
+                                </div>
+                                <div class="tool-actions">
+                                    <button class="btn btn-danger" onclick="runL2pingFlood()">&#128165; FLOOD</button>
+                                    <button class="btn btn-danger" onclick="stopL2ping()" disabled id="btnStopL2ping">&#9632; STOP</button>
+                                </div>
+                                <div class="tool-output hidden" id="l2pingOutput"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Authorization Warning -->
+                    <div class="cyber-auth-warning">
+                        <span class="warning-icon">&#9888;</span>
+                        <strong>AUTHORIZED USE ONLY</strong>
+                        <p>These tools are for authorized security testing, penetration testing, and research only. Ensure you have proper written authorization before using any offensive tools. Unauthorized access to computer systems is illegal.</p>
                     </div>
                 </div>
             </div>
