@@ -12919,7 +12919,7 @@ def hci_clkoff():
 
 @app.route('/api/sdp/browse', methods=['POST'])
 @login_required
-def sdp_browse():
+def sdp_browse_services():
     """Browse all SDP services (sdptool browse)."""
     data = request.json or {}
     bd_address = data.get('bd_address')
