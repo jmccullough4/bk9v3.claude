@@ -8827,6 +8827,8 @@ function showCyberCategory(category) {
 
     // Show selected category
     const categoryMap = {
+        'hci': 'cyberHci',
+        'sdp': 'cyberSdp',
         'recon': 'cyberRecon',
         'sniff': 'cyberSniff',
         'exploit': 'cyberExploit',
@@ -10208,6 +10210,931 @@ function stopL2ping() {
             document.getElementById('btnStopL2ping').disabled = true;
             appendToolOutput('l2pingOutput', `Stopped - ${data.packets_sent || 0} packets sent`, 'info');
         });
+}
+
+// ==================== HCI SUITE JAVASCRIPT HANDLERS ====================
+
+function hciDev() {
+    appendToolOutput('hciDevOutput', 'Listing adapters...', 'info');
+    fetch('/api/hci/dev')
+        .then(r => r.json())
+        .then(data => {
+            if (data.status === 'success') {
+                if (data.adapters && data.adapters.length > 0) {
+                    let output = 'Local Bluetooth Adapters:\n';
+                    data.adapters.forEach(a => {
+                        output += `  ${a.interface}: ${a.bd_address}\n`;
+                    });
+                    appendToolOutput('hciDevOutput', output, 'success');
+                } else {
+                    appendToolOutput('hciDevOutput', 'No adapters found', 'warning');
+                }
+            } else {
+                appendToolOutput('hciDevOutput', `Error: ${data.error}`, 'error');
+            }
+        })
+        .catch(e => appendToolOutput('hciDevOutput', `Error: ${e}`, 'error'));
+}
+
+function hciInq() {
+    const iface = document.getElementById('hciInqInterface').value;
+    const length = parseInt(document.getElementById('hciInqLength').value) || 8;
+    const flush = document.getElementById('hciInqFlush').checked;
+
+    appendToolOutput('hciInqOutput', `Running inquiry for ${(length * 1.28).toFixed(1)}s...`, 'info');
+
+    fetch('/api/hci/inq', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({interface: iface, length, flush})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            let output = `Found ${data.devices_found} devices:\n`;
+            if (data.devices && data.devices.length > 0) {
+                data.devices.forEach(d => {
+                    output += `  ${d.bd_address} class:${d.device_class} offset:${d.clock_offset}\n`;
+                });
+            }
+            appendToolOutput('hciInqOutput', output, 'success');
+            addLogEntry(`HCI inquiry found ${data.devices_found} devices`, 'INFO');
+        } else {
+            appendToolOutput('hciInqOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('hciInqOutput', `Error: ${e}`, 'error'));
+}
+
+function hciScan() {
+    const iface = document.getElementById('hciScanInterface').value;
+    const length = parseInt(document.getElementById('hciScanLength').value) || 8;
+    const flush = document.getElementById('hciScanFlush').checked;
+    const refresh = document.getElementById('hciScanRefresh').checked;
+
+    appendToolOutput('hciScanOutput', `Running scan for ${(length * 1.28).toFixed(1)}s...`, 'info');
+
+    fetch('/api/hci/scan', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({interface: iface, length, flush, refresh})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            let output = `Found ${data.devices_found} devices:\n`;
+            if (data.devices && data.devices.length > 0) {
+                data.devices.forEach(d => {
+                    output += `  ${d.bd_address} "${d.device_name}"\n`;
+                });
+            }
+            appendToolOutput('hciScanOutput', output, 'success');
+            addLogEntry(`HCI scan found ${data.devices_found} devices`, 'INFO');
+        } else {
+            appendToolOutput('hciScanOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('hciScanOutput', `Error: ${e}`, 'error'));
+}
+
+function hciLescan() {
+    const iface = document.getElementById('hciLescanInterface').value;
+    const duration = parseInt(document.getElementById('hciLescanDuration').value) || 10;
+    const duplicates = document.getElementById('hciLescanDuplicates').checked;
+    const passive = document.getElementById('hciLescanPassive').checked;
+
+    appendToolOutput('hciLescanOutput', `Running LE scan for ${duration}s...`, 'info');
+
+    fetch('/api/hci/lescan', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({interface: iface, duration, duplicates, passive})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            let output = `Found ${data.devices_found} BLE devices:\n`;
+            if (data.devices && data.devices.length > 0) {
+                data.devices.forEach(d => {
+                    output += `  ${d.bd_address} "${d.device_name || '(unknown)'}"\n`;
+                });
+            }
+            appendToolOutput('hciLescanOutput', output, 'success');
+            addLogEntry(`LE scan found ${data.devices_found} devices`, 'INFO');
+        } else {
+            appendToolOutput('hciLescanOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('hciLescanOutput', `Error: ${e}`, 'error'));
+}
+
+function hciName() {
+    const target = document.getElementById('hciNameTarget').value;
+    if (!target) {
+        appendToolOutput('hciNameOutput', 'BD Address required', 'error');
+        return;
+    }
+
+    appendToolOutput('hciNameOutput', `Querying name for ${target}...`, 'info');
+
+    fetch('/api/hci/name', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({bd_address: target})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            appendToolOutput('hciNameOutput', `Name: "${data.name}"`, 'success');
+        } else {
+            appendToolOutput('hciNameOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('hciNameOutput', `Error: ${e}`, 'error'));
+}
+
+function hciInfo() {
+    const target = document.getElementById('hciInfoTarget').value;
+    if (!target) {
+        appendToolOutput('hciInfoOutput', 'BD Address required', 'error');
+        return;
+    }
+
+    appendToolOutput('hciInfoOutput', `Querying info for ${target}...`, 'info');
+
+    fetch('/api/hci/info', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({bd_address: target})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            appendToolOutput('hciInfoOutput', data.raw || JSON.stringify(data.info, null, 2), 'success');
+        } else {
+            appendToolOutput('hciInfoOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('hciInfoOutput', `Error: ${e}`, 'error'));
+}
+
+function hciCon() {
+    appendToolOutput('hciConOutput', 'Listing connections...', 'info');
+
+    fetch('/api/hci/con')
+        .then(r => r.json())
+        .then(data => {
+            if (data.status === 'success') {
+                if (data.connections && data.connections.length > 0) {
+                    let output = 'Active Connections:\n';
+                    data.connections.forEach(c => {
+                        output += `  ${c.bd_address} handle:${c.handle} state:${c.state} lm:${c.link_mode}\n`;
+                    });
+                    appendToolOutput('hciConOutput', output, 'success');
+                } else {
+                    appendToolOutput('hciConOutput', 'No active connections', 'info');
+                }
+            } else {
+                appendToolOutput('hciConOutput', `Error: ${data.error}`, 'error');
+            }
+        })
+        .catch(e => appendToolOutput('hciConOutput', `Error: ${e}`, 'error'));
+}
+
+function hciCc() {
+    const target = document.getElementById('hciConnTarget').value;
+    const role = document.getElementById('hciConnRole').value;
+    if (!target) {
+        appendToolOutput('hciConnOutput', 'BD Address required', 'error');
+        return;
+    }
+
+    appendToolOutput('hciConnOutput', `Connecting to ${target}...`, 'info');
+
+    fetch('/api/hci/cc', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({bd_address: target, role})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            appendToolOutput('hciConnOutput', `Connected to ${target}`, 'success');
+        } else {
+            appendToolOutput('hciConnOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('hciConnOutput', `Error: ${e}`, 'error'));
+}
+
+function hciDc() {
+    const target = document.getElementById('hciConnTarget').value;
+    if (!target) {
+        appendToolOutput('hciConnOutput', 'BD Address required', 'error');
+        return;
+    }
+
+    fetch('/api/hci/dc', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({bd_address: target})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            appendToolOutput('hciConnOutput', `Disconnected from ${target}`, 'success');
+        } else {
+            appendToolOutput('hciConnOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('hciConnOutput', `Error: ${e}`, 'error'));
+}
+
+function hciLecc() {
+    const target = document.getElementById('hciLeConnTarget').value;
+    const random = document.getElementById('hciLeConnRandom').checked;
+    if (!target) {
+        appendToolOutput('hciLeConnOutput', 'BD Address required', 'error');
+        return;
+    }
+
+    appendToolOutput('hciLeConnOutput', `LE Connecting to ${target}...`, 'info');
+
+    fetch('/api/hci/lecc', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({bd_address: target, random})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            appendToolOutput('hciLeConnOutput', `LE Connected: ${data.output}`, 'success');
+        } else {
+            appendToolOutput('hciLeConnOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('hciLeConnOutput', `Error: ${e}`, 'error'));
+}
+
+function hciLedc() {
+    const handle = prompt('Enter connection handle:');
+    if (!handle) return;
+
+    fetch('/api/hci/ledc', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({handle})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            appendToolOutput('hciLeConnOutput', `LE Disconnected handle ${handle}`, 'success');
+        } else {
+            appendToolOutput('hciLeConnOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('hciLeConnOutput', `Error: ${e}`, 'error'));
+}
+
+function hciRssi() {
+    const target = document.getElementById('hciLinkTarget').value;
+    if (!target) {
+        appendToolOutput('hciLinkOutput', 'BD Address required', 'error');
+        return;
+    }
+
+    fetch('/api/hci/rssi', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({bd_address: target})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            appendToolOutput('hciLinkOutput', `RSSI: ${data.rssi} dBm`, 'success');
+        } else {
+            appendToolOutput('hciLinkOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('hciLinkOutput', `Error: ${e}`, 'error'));
+}
+
+function hciLq() {
+    const target = document.getElementById('hciLinkTarget').value;
+    if (!target) {
+        appendToolOutput('hciLinkOutput', 'BD Address required', 'error');
+        return;
+    }
+
+    fetch('/api/hci/lq', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({bd_address: target})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            appendToolOutput('hciLinkOutput', `Link Quality: ${data.link_quality}`, 'success');
+        } else {
+            appendToolOutput('hciLinkOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('hciLinkOutput', `Error: ${e}`, 'error'));
+}
+
+function hciTpl() {
+    const target = document.getElementById('hciLinkTarget').value;
+    if (!target) {
+        appendToolOutput('hciLinkOutput', 'BD Address required', 'error');
+        return;
+    }
+
+    fetch('/api/hci/tpl', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({bd_address: target})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            appendToolOutput('hciLinkOutput', `TX Power (${data.type}): ${data.tx_power} dBm`, 'success');
+        } else {
+            appendToolOutput('hciLinkOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('hciLinkOutput', `Error: ${e}`, 'error'));
+}
+
+function hciAfh() {
+    const target = document.getElementById('hciLinkTarget').value;
+    if (!target) {
+        appendToolOutput('hciLinkOutput', 'BD Address required', 'error');
+        return;
+    }
+
+    fetch('/api/hci/afh', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({bd_address: target})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            appendToolOutput('hciLinkOutput', `AFH Map:\n${data.afh_map}`, 'success');
+        } else {
+            appendToolOutput('hciLinkOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('hciLinkOutput', `Error: ${e}`, 'error'));
+}
+
+function hciLewladd() {
+    const target = document.getElementById('hciWlTarget').value;
+    const random = document.getElementById('hciWlRandom').checked;
+    if (!target) {
+        appendToolOutput('hciWlOutput', 'BD Address required', 'error');
+        return;
+    }
+
+    fetch('/api/hci/lewladd', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({bd_address: target, random})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            appendToolOutput('hciWlOutput', `Added ${target} to whitelist`, 'success');
+        } else {
+            appendToolOutput('hciWlOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('hciWlOutput', `Error: ${e}`, 'error'));
+}
+
+function hciLewlrm() {
+    const target = document.getElementById('hciWlTarget').value;
+    if (!target) {
+        appendToolOutput('hciWlOutput', 'BD Address required', 'error');
+        return;
+    }
+
+    fetch('/api/hci/lewlrm', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({bd_address: target})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            appendToolOutput('hciWlOutput', `Removed ${target} from whitelist`, 'success');
+        } else {
+            appendToolOutput('hciWlOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('hciWlOutput', `Error: ${e}`, 'error'));
+}
+
+function hciLewlsz() {
+    fetch('/api/hci/lewlsz')
+        .then(r => r.json())
+        .then(data => {
+            if (data.status === 'success') {
+                appendToolOutput('hciWlOutput', `Whitelist size: ${data.whitelist_size}`, 'success');
+            } else {
+                appendToolOutput('hciWlOutput', `Error: ${data.error}`, 'error');
+            }
+        })
+        .catch(e => appendToolOutput('hciWlOutput', `Error: ${e}`, 'error'));
+}
+
+function hciLewlclr() {
+    fetch('/api/hci/lewlclr', { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+            if (data.status === 'success') {
+                appendToolOutput('hciWlOutput', 'Whitelist cleared', 'success');
+            } else {
+                appendToolOutput('hciWlOutput', `Error: ${data.error}`, 'error');
+            }
+        })
+        .catch(e => appendToolOutput('hciWlOutput', `Error: ${e}`, 'error'));
+}
+
+function hciAuth() {
+    const target = document.getElementById('hciAuthTarget').value;
+    if (!target) {
+        appendToolOutput('hciAuthOutput', 'BD Address required', 'error');
+        return;
+    }
+
+    appendToolOutput('hciAuthOutput', `Requesting authentication...`, 'info');
+
+    fetch('/api/hci/auth', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({bd_address: target})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            appendToolOutput('hciAuthOutput', `Authentication requested: ${data.output}`, 'success');
+        } else {
+            appendToolOutput('hciAuthOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('hciAuthOutput', `Error: ${e}`, 'error'));
+}
+
+function hciEnc(enable) {
+    const target = document.getElementById('hciAuthTarget').value;
+    if (!target) {
+        appendToolOutput('hciAuthOutput', 'BD Address required', 'error');
+        return;
+    }
+
+    fetch('/api/hci/enc', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({bd_address: target, encrypt: enable})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            appendToolOutput('hciAuthOutput', `Encryption ${data.encryption}`, 'success');
+        } else {
+            appendToolOutput('hciAuthOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('hciAuthOutput', `Error: ${e}`, 'error'));
+}
+
+function hciKey() {
+    const target = document.getElementById('hciAuthTarget').value;
+    if (!target) {
+        appendToolOutput('hciAuthOutput', 'BD Address required', 'error');
+        return;
+    }
+
+    fetch('/api/hci/key', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({bd_address: target})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            appendToolOutput('hciAuthOutput', `Link key changed: ${data.output}`, 'success');
+        } else {
+            appendToolOutput('hciAuthOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('hciAuthOutput', `Error: ${e}`, 'error'));
+}
+
+function hciClock() {
+    const target = document.getElementById('hciClockTarget').value;
+
+    fetch('/api/hci/clock', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({bd_address: target || null})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            appendToolOutput('hciClockOutput', `Clock: ${data.clock_info}`, 'success');
+        } else {
+            appendToolOutput('hciClockOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('hciClockOutput', `Error: ${e}`, 'error'));
+}
+
+function hciClkoff() {
+    const target = document.getElementById('hciClockTarget').value;
+    if (!target) {
+        appendToolOutput('hciClockOutput', 'BD Address required', 'error');
+        return;
+    }
+
+    fetch('/api/hci/clkoff', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({bd_address: target})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            appendToolOutput('hciClockOutput', `Clock Offset: ${data.clock_offset}`, 'success');
+        } else {
+            appendToolOutput('hciClockOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('hciClockOutput', `Error: ${e}`, 'error'));
+}
+
+function hciCmd() {
+    const ogf = document.getElementById('hciCmdOgf').value;
+    const ocf = document.getElementById('hciCmdOcf').value;
+    const paramsStr = document.getElementById('hciCmdParams').value;
+    const params = paramsStr ? paramsStr.split(/\s+/) : [];
+
+    if (!ogf || !ocf) {
+        appendToolOutput('hciCmdOutput', 'OGF and OCF required', 'error');
+        return;
+    }
+
+    appendToolOutput('hciCmdOutput', `Sending HCI command...`, 'info');
+
+    fetch('/api/hci/cmd', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ogf, ocf, params})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            appendToolOutput('hciCmdOutput', `Command: ${data.command}\nOutput: ${data.output}`, 'success');
+        } else {
+            appendToolOutput('hciCmdOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('hciCmdOutput', `Error: ${e}`, 'error'));
+}
+
+// ==================== SDP SUITE JAVASCRIPT HANDLERS ====================
+
+function sdpBrowse() {
+    const target = document.getElementById('sdpBrowseTarget').value;
+    const tree = document.getElementById('sdpBrowseTree').checked;
+    const xml = document.getElementById('sdpBrowseXml').checked;
+
+    appendToolOutput('sdpBrowseOutput', `Browsing SDP services${target ? ' on ' + target : ''}...`, 'info');
+
+    fetch('/api/sdp/browse', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({bd_address: target || null, tree, xml})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            let output = `Found ${data.services ? data.services.length : 0} services:\n\n`;
+            if (data.services) {
+                data.services.forEach(s => {
+                    output += `Service: ${s.name || 'Unknown'}\n`;
+                    output += `  Handle: ${s.handle || 'N/A'}\n`;
+                    if (s.channel) output += `  Channel: ${s.channel}\n`;
+                    if (s.psm) output += `  PSM: ${s.psm}\n`;
+                    output += '\n';
+                });
+            }
+            appendToolOutput('sdpBrowseOutput', output || data.raw, 'success');
+        } else {
+            appendToolOutput('sdpBrowseOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('sdpBrowseOutput', `Error: ${e}`, 'error'));
+}
+
+function sdpSearch() {
+    const target = document.getElementById('sdpSearchTarget').value;
+    const service = document.getElementById('sdpSearchService').value;
+
+    appendToolOutput('sdpSearchOutput', `Searching for ${service}...`, 'info');
+
+    fetch('/api/sdp/search', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({bd_address: target || null, service})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            appendToolOutput('sdpSearchOutput', data.found ? `Service ${service} FOUND\n\n${data.raw}` : `Service ${service} not found`, data.found ? 'success' : 'warning');
+        } else {
+            appendToolOutput('sdpSearchOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('sdpSearchOutput', `Error: ${e}`, 'error'));
+}
+
+function sdpRecords() {
+    const target = document.getElementById('sdpRecordsTarget').value;
+
+    appendToolOutput('sdpRecordsOutput', `Fetching SDP records...`, 'info');
+
+    fetch('/api/sdp/records', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({bd_address: target || null})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            appendToolOutput('sdpRecordsOutput', data.raw || 'No records', 'success');
+        } else {
+            appendToolOutput('sdpRecordsOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('sdpRecordsOutput', `Error: ${e}`, 'error'));
+}
+
+function sdpAdd() {
+    const service = document.getElementById('sdpAddService').value;
+    const channel = document.getElementById('sdpAddChannel').value;
+
+    fetch('/api/sdp/add', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({service, channel: channel || null})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            appendToolOutput('sdpAddOutput', `Added service: ${service}`, 'success');
+        } else {
+            appendToolOutput('sdpAddOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('sdpAddOutput', `Error: ${e}`, 'error'));
+}
+
+function sdpDel() {
+    const handle = document.getElementById('sdpDelHandle').value;
+    if (!handle) {
+        appendToolOutput('sdpDelOutput', 'Handle required', 'error');
+        return;
+    }
+
+    fetch('/api/sdp/del', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({handle})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            appendToolOutput('sdpDelOutput', `Deleted record: ${handle}`, 'success');
+        } else {
+            appendToolOutput('sdpDelOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('sdpDelOutput', `Error: ${e}`, 'error'));
+}
+
+function l2ping() {
+    const target = document.getElementById('l2pingTarget').value;
+    const count = parseInt(document.getElementById('l2pingCount').value) || 3;
+    const size = parseInt(document.getElementById('l2pingSize').value) || 44;
+
+    if (!target) {
+        appendToolOutput('l2pingOutput', 'BD Address required', 'error');
+        return;
+    }
+
+    appendToolOutput('l2pingOutput', `Pinging ${target}...`, 'info');
+
+    fetch('/api/l2ping', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({bd_address: target, count, size})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            let output = `${data.packets_received}/${data.packets_sent} packets received\n`;
+            output += `Reachable: ${data.reachable ? 'YES' : 'NO'}\n`;
+            if (data.avg_latency) output += `Avg Latency: ${data.avg_latency.toFixed(2)}ms\n`;
+            appendToolOutput('l2pingOutput', output, data.reachable ? 'success' : 'warning');
+        } else {
+            appendToolOutput('l2pingOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('l2pingOutput', `Error: ${e}`, 'error'));
+}
+
+function rfcommBind() {
+    const target = document.getElementById('rfcommTarget').value;
+    const dev = parseInt(document.getElementById('rfcommDev').value) || 0;
+    const channel = parseInt(document.getElementById('rfcommChannel').value) || 1;
+
+    if (!target) {
+        appendToolOutput('rfcommOutput', 'BD Address required', 'error');
+        return;
+    }
+
+    fetch('/api/rfcomm/bind', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({bd_address: target, dev, channel})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            appendToolOutput('rfcommOutput', `Bound ${data.device} to ${target} channel ${data.channel}`, 'success');
+        } else {
+            appendToolOutput('rfcommOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('rfcommOutput', `Error: ${e}`, 'error'));
+}
+
+function rfcommRelease() {
+    const dev = parseInt(document.getElementById('rfcommDev').value) || 0;
+
+    fetch('/api/rfcomm/release', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({dev})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            appendToolOutput('rfcommOutput', `Released ${data.device}`, 'success');
+        } else {
+            appendToolOutput('rfcommOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('rfcommOutput', `Error: ${e}`, 'error'));
+}
+
+function rfcommShow() {
+    fetch('/api/rfcomm/show')
+        .then(r => r.json())
+        .then(data => {
+            if (data.status === 'success') {
+                if (data.connections && data.connections.length > 0) {
+                    let output = 'RFCOMM Connections:\n';
+                    data.connections.forEach(c => {
+                        output += `  ${c.device}: ${c.bd_address} channel ${c.channel} (${c.state})\n`;
+                    });
+                    appendToolOutput('rfcommOutput', output, 'success');
+                } else {
+                    appendToolOutput('rfcommOutput', 'No RFCOMM connections', 'info');
+                }
+            } else {
+                appendToolOutput('rfcommOutput', `Error: ${data.error}`, 'error');
+            }
+        })
+        .catch(e => appendToolOutput('rfcommOutput', `Error: ${e}`, 'error'));
+}
+
+function gattDiscover() {
+    const target = document.getElementById('gattTarget').value;
+    const random = document.getElementById('gattRandom').checked;
+
+    if (!target) {
+        appendToolOutput('gattOutput', 'BD Address required', 'error');
+        return;
+    }
+
+    appendToolOutput('gattOutput', `Discovering GATT services on ${target}...`, 'info');
+
+    fetch('/api/kali/gatttool/discover', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({bd_address: target, random})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            let output = `Found ${data.services ? data.services.length : 0} services:\n`;
+            if (data.services) {
+                data.services.forEach(s => {
+                    output += `  [${s.start_handle}-${s.end_handle}] ${s.uuid}\n`;
+                });
+            }
+            appendToolOutput('gattOutput', output, 'success');
+        } else {
+            appendToolOutput('gattOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('gattOutput', `Error: ${e}`, 'error'));
+}
+
+function gattChar() {
+    const target = document.getElementById('gattTarget').value;
+
+    if (!target) {
+        appendToolOutput('gattOutput', 'BD Address required', 'error');
+        return;
+    }
+
+    appendToolOutput('gattOutput', `Listing characteristics...`, 'info');
+
+    fetch('/api/kali/gatttool/char', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({bd_address: target})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            let output = `Found ${data.characteristics ? data.characteristics.length : 0} characteristics:\n`;
+            if (data.characteristics) {
+                data.characteristics.forEach(c => {
+                    output += `  [${c.handle}] ${c.uuid} props:${c.properties}\n`;
+                });
+            }
+            appendToolOutput('gattOutput', output, 'success');
+        } else {
+            appendToolOutput('gattOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('gattOutput', `Error: ${e}`, 'error'));
+}
+
+function gattRead() {
+    const target = document.getElementById('gattTarget').value;
+    const handle = document.getElementById('gattHandle').value;
+
+    if (!target || !handle) {
+        appendToolOutput('gattOutput', 'BD Address and handle required', 'error');
+        return;
+    }
+
+    fetch('/api/kali/gatttool/read', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({bd_address: target, handle})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            appendToolOutput('gattOutput', `Value at ${handle}: ${data.value}`, 'success');
+        } else {
+            appendToolOutput('gattOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('gattOutput', `Error: ${e}`, 'error'));
+}
+
+function gattWrite() {
+    const target = document.getElementById('gattTarget').value;
+    const handle = document.getElementById('gattHandle').value;
+    const value = document.getElementById('gattValue').value;
+
+    if (!target || !handle || !value) {
+        appendToolOutput('gattOutput', 'BD Address, handle, and value required', 'error');
+        return;
+    }
+
+    fetch('/api/kali/gatttool/write', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({bd_address: target, handle, value})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            appendToolOutput('gattOutput', `Wrote ${value} to ${handle}`, 'success');
+        } else {
+            appendToolOutput('gattOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('gattOutput', `Error: ${e}`, 'error'));
 }
 
 // Check HID tool status when cyber tools tab is opened
