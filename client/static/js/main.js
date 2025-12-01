@@ -9326,6 +9326,145 @@ function runCrackle() {
 // ==================== EXPLOIT TOOLS ====================
 
 /**
+ * Run BlueToolkit vulnerability scan
+ */
+function runBlueToolkit() {
+    const target = document.getElementById('bluetoolkitTarget')?.value?.trim();
+    const mode = document.getElementById('bluetoolkitMode')?.value;
+    const hardware = document.getElementById('bluetoolkitHardware')?.value;
+    const checkpoint = document.getElementById('bluetoolkitCheckpoint')?.checked;
+    const report = document.getElementById('bluetoolkitReport')?.checked;
+
+    if (!target) {
+        addLogEntry('BlueToolkit requires a target address', 'WARNING');
+        return;
+    }
+
+    clearToolOutput('bluetoolkitOutput');
+    appendToolOutput('bluetoolkitOutput', `Starting BlueToolkit scan on ${target}...`, 'info');
+    appendToolOutput('bluetoolkitOutput', `Mode: ${mode}, Hardware: ${hardware}`, 'info');
+
+    let exploits = [];
+    if (mode === 'custom') {
+        const select = document.getElementById('bluetoolkitExploits');
+        exploits = Array.from(select.selectedOptions).map(opt => opt.value);
+    }
+
+    fetch('/api/cyber/exploit/bluetoolkit/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            target,
+            mode,
+            hardware,
+            checkpoint,
+            report,
+            exploits
+        })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success' || data.status === 'started') {
+            appendToolOutput('bluetoolkitOutput', 'Scan started - monitoring output...', 'success');
+            if (data.vulnerabilities && data.vulnerabilities.length > 0) {
+                appendToolOutput('bluetoolkitOutput', '\n=== VULNERABILITIES FOUND ===', 'error');
+                data.vulnerabilities.forEach(vuln => {
+                    appendToolOutput('bluetoolkitOutput', `[${vuln.severity}] ${vuln.name}: ${vuln.description}`,
+                        vuln.severity === 'Critical' ? 'error' : 'warning');
+                });
+            }
+            if (data.report_file) {
+                appendToolOutput('bluetoolkitOutput', `\nReport saved: ${data.report_file}`, 'success');
+            }
+        } else {
+            appendToolOutput('bluetoolkitOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('bluetoolkitOutput', `Error: ${e}`, 'error'));
+}
+
+/**
+ * Run BlueToolkit recon only
+ */
+function runBlueToolkitRecon() {
+    const target = document.getElementById('bluetoolkitTarget')?.value?.trim();
+
+    if (!target) {
+        addLogEntry('BlueToolkit requires a target address', 'WARNING');
+        return;
+    }
+
+    clearToolOutput('bluetoolkitOutput');
+    appendToolOutput('bluetoolkitOutput', `Running BlueToolkit reconnaissance on ${target}...`, 'info');
+
+    fetch('/api/cyber/exploit/bluetoolkit/recon', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'success') {
+            appendToolOutput('bluetoolkitOutput', '\n=== DEVICE INFO ===', 'success');
+            if (data.device_name) appendToolOutput('bluetoolkitOutput', `Name: ${data.device_name}`, 'info');
+            if (data.device_class) appendToolOutput('bluetoolkitOutput', `Class: ${data.device_class}`, 'info');
+            if (data.bt_version) appendToolOutput('bluetoolkitOutput', `BT Version: ${data.bt_version}`, 'info');
+            if (data.manufacturer) appendToolOutput('bluetoolkitOutput', `Manufacturer: ${data.manufacturer}`, 'info');
+            if (data.services) {
+                appendToolOutput('bluetoolkitOutput', '\n=== SERVICES ===', 'success');
+                data.services.forEach(svc => {
+                    appendToolOutput('bluetoolkitOutput', `  ${svc}`, 'info');
+                });
+            }
+            if (data.sc_supported !== undefined) {
+                appendToolOutput('bluetoolkitOutput', `\nSecure Connections: ${data.sc_supported ? 'Supported' : 'NOT Supported'}`,
+                    data.sc_supported ? 'success' : 'warning');
+            }
+        } else {
+            appendToolOutput('bluetoolkitOutput', `Error: ${data.error}`, 'error');
+        }
+    })
+    .catch(e => appendToolOutput('bluetoolkitOutput', `Error: ${e}`, 'error'));
+}
+
+/**
+ * List available BlueToolkit exploits
+ */
+function listBlueToolkitExploits() {
+    clearToolOutput('bluetoolkitOutput');
+    appendToolOutput('bluetoolkitOutput', 'Fetching exploit list...', 'info');
+
+    fetch('/api/cyber/exploit/bluetoolkit/list')
+        .then(r => r.json())
+        .then(data => {
+            if (data.status === 'success' && data.exploits) {
+                appendToolOutput('bluetoolkitOutput', '\n=== AVAILABLE EXPLOITS ===\n', 'success');
+                data.exploits.forEach(exp => {
+                    const line = `[${exp.category}] ${exp.name} - ${exp.type} (${exp.verification})`;
+                    const type = exp.category === 'Critical' ? 'error' : exp.category === 'MitM' ? 'warning' : 'info';
+                    appendToolOutput('bluetoolkitOutput', line, type);
+                });
+            } else {
+                appendToolOutput('bluetoolkitOutput', `Error: ${data.error}`, 'error');
+            }
+        })
+        .catch(e => appendToolOutput('bluetoolkitOutput', `Error: ${e}`, 'error'));
+}
+
+// Handle BlueToolkit mode change
+document.addEventListener('DOMContentLoaded', () => {
+    const modeSelect = document.getElementById('bluetoolkitMode');
+    if (modeSelect) {
+        modeSelect.addEventListener('change', function() {
+            const customRow = document.getElementById('bluetoolkitCustomRow');
+            if (customRow) {
+                customRow.classList.toggle('hidden', this.value !== 'custom');
+            }
+        });
+    }
+});
+
+/**
  * Run BlueBorne vulnerability scan
  */
 function runBlueborneScan() {

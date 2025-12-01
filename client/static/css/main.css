@@ -6376,6 +6376,78 @@ body.resizing-vertical * {
     color: var(--accent-primary);
 }
 
+/* Featured Tool - BlueToolkit */
+.cyber-tool-card.featured-tool {
+    border: 2px solid var(--accent-primary);
+    background: linear-gradient(135deg, rgba(0, 212, 255, 0.05), rgba(0, 153, 204, 0.02));
+    box-shadow: 0 0 20px rgba(0, 212, 255, 0.15);
+}
+
+.cyber-tool-card.featured-tool .tool-card-header {
+    background: linear-gradient(135deg, rgba(0, 212, 255, 0.1), rgba(0, 153, 204, 0.05));
+}
+
+.bluetoolkit-stats {
+    display: flex;
+    gap: 20px;
+    padding: 15px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    margin-bottom: 15px;
+    justify-content: center;
+}
+
+.bluetoolkit-stats .stat-item {
+    text-align: center;
+    padding: 0 15px;
+    border-right: 1px solid var(--border-color);
+}
+
+.bluetoolkit-stats .stat-item:last-child {
+    border-right: none;
+}
+
+.bluetoolkit-stats .stat-num {
+    display: block;
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--accent-primary);
+    font-family: var(--font-mono);
+}
+
+.bluetoolkit-stats .stat-label {
+    display: block;
+    font-size: 10px;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-top: 4px;
+}
+
+/* Multiple select styling */
+select[multiple].input {
+    height: auto;
+    padding: 5px;
+}
+
+select[multiple].input option {
+    padding: 4px 8px;
+    margin: 1px 0;
+    border-radius: 3px;
+}
+
+select[multiple].input option:checked {
+    background: var(--accent-primary);
+    color: var(--bg-primary);
+}
+
+select[multiple].input optgroup {
+    font-weight: 600;
+    color: var(--accent-warning);
+    padding: 8px 0 4px 0;
+}
+
 /* Mobile Responsive */
 @media (max-width: 768px) {
     .cyber-nav {

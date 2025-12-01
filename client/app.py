@@ -10833,6 +10833,7 @@ def linkkey_extract():
 
 # Define known cyber tools and their installation paths
 CYBER_TOOLS = {
+    'bluetoolkit': {'cmd': 'bluekit', 'install': 'git clone https://github.com/sgxgsx/BlueToolkit --recurse-submodules && sudo ./BlueToolkit/install.sh'},
     'blue_hydra': {'cmd': 'blue_hydra', 'install': 'git clone https://github.com/ZeroChaos-/blue_hydra.git'},
     'blesuite': {'cmd': 'blesuite', 'install': 'pip3 install blesuite'},
     'bleah': {'cmd': 'bleah', 'install': 'pip3 install bleah'},
@@ -11260,6 +11261,213 @@ def run_crackle():
 
 
 # ==================== EXPLOIT TOOLS API ====================
+
+# BlueToolkit exploits list
+BLUETOOLKIT_EXPLOITS = [
+    {'name': 'my_name_is_keyboard', 'category': 'Critical', 'type': 'RCE', 'verification': 'Semi-automated'},
+    {'name': 'cve_2017_0785', 'category': 'Critical', 'type': 'Memory leak', 'verification': 'Automated'},
+    {'name': 'cve_2018_19860', 'category': 'Critical', 'type': 'Memory execution', 'verification': 'Automated'},
+    {'name': 'cve_2017_1000251', 'category': 'Critical', 'type': 'RCE/DoS', 'verification': 'Automated'},
+    {'name': 'cve_2020_12351', 'category': 'Critical', 'type': 'RCE/DoS', 'verification': 'Automated'},
+    {'name': 'cve_2020_24490', 'category': 'Critical', 'type': 'DoS', 'verification': 'Automated'},
+    {'name': 'cve_2017_1000250', 'category': 'Critical', 'type': 'Info leak', 'verification': 'Automated'},
+    {'name': 'cve_2020_12352', 'category': 'Critical', 'type': 'Info leak', 'verification': 'Automated'},
+    {'name': 'knob', 'category': 'MitM', 'type': 'MitM', 'verification': 'Semi-automated'},
+    {'name': 'bias', 'category': 'MitM', 'type': 'MitM', 'verification': 'Automated'},
+    {'name': 'nino', 'category': 'MitM', 'type': 'MitM', 'verification': 'Semi-automated'},
+    {'name': 'method_confusion', 'category': 'MitM', 'type': 'MitM', 'verification': 'Automated'},
+    {'name': 'cve_2018_5383', 'category': 'MitM', 'type': 'MitM', 'verification': 'Automated'},
+    {'name': 'legacy_pairing', 'category': 'MitM', 'type': 'MitM', 'verification': 'Automated'},
+    {'name': 'invalid_max_slot', 'category': 'DoS', 'type': 'DoS', 'verification': 'Automated'},
+    {'name': 'duplicated_iocap', 'category': 'DoS', 'type': 'DoS', 'verification': 'Automated'},
+    {'name': 'truncated_sco_request', 'category': 'DoS', 'type': 'DoS', 'verification': 'Automated'},
+    {'name': 'feature_resp_flooding', 'category': 'DoS', 'type': 'DoS', 'verification': 'Automated'},
+    {'name': 'lmp_auto_rate_overflow', 'category': 'DoS', 'type': 'DoS', 'verification': 'Automated'},
+    {'name': 'lmp_overflow_2dh1', 'category': 'DoS', 'type': 'DoS', 'verification': 'Automated'},
+    {'name': 'lmp_overflow_dm1', 'category': 'DoS', 'type': 'DoS', 'verification': 'Automated'},
+    {'name': 'truncated_lmp_accepted', 'category': 'DoS', 'type': 'DoS', 'verification': 'Automated'},
+    {'name': 'invalid_setup_complete', 'category': 'DoS', 'type': 'DoS', 'verification': 'Automated'},
+    {'name': 'host_conn_flooding', 'category': 'DoS', 'type': 'DoS', 'verification': 'Automated'},
+    {'name': 'same_host_connection', 'category': 'DoS', 'type': 'DoS', 'verification': 'Automated'},
+    {'name': 'au_rand_flooding', 'category': 'DoS', 'type': 'DoS', 'verification': 'Automated'},
+    {'name': 'max_slot_length_overflow', 'category': 'DoS', 'type': 'DoS', 'verification': 'Automated'},
+    {'name': 'invalid_timing_accuracy', 'category': 'DoS', 'type': 'DoS', 'verification': 'Automated'},
+    {'name': 'paging_scan_deadlock', 'category': 'DoS', 'type': 'DoS', 'verification': 'Automated'},
+    {'name': 'feature_req_ping_pong', 'category': 'DoS', 'type': 'DoS', 'verification': 'Automated'},
+    {'name': 'sdp_unknown_element', 'category': 'DoS', 'type': 'DoS', 'verification': 'Automated'},
+    {'name': 'sdp_oversized_element', 'category': 'DoS', 'type': 'DoS', 'verification': 'Automated'},
+    {'name': 'lmp_invalid_transport', 'category': 'DoS', 'type': 'DoS', 'verification': 'Automated'},
+    {'name': 'sc_not_supported', 'category': 'Chaining', 'type': 'Info', 'verification': 'Automated'},
+    {'name': 'always_pairable', 'category': 'Chaining', 'type': 'Chaining', 'verification': 'Manual'},
+]
+
+
+@app.route('/api/cyber/exploit/bluetoolkit/run', methods=['POST'])
+@login_required
+def run_bluetoolkit():
+    """Run BlueToolkit vulnerability scan."""
+    data = request.json
+    target = data.get('target')
+    mode = data.get('mode', 'all')
+    hardware = data.get('hardware', 'auto')
+    checkpoint = data.get('checkpoint', False)
+    report = data.get('report', True)
+    exploits = data.get('exploits', [])
+
+    add_log(f"BlueToolkit scan: {target} (mode: {mode})", "INFO")
+
+    cmd = ['bluekit', '-t', target]
+
+    if mode == 'recon':
+        cmd.append('-r')
+    elif mode == 'quick':
+        # Only critical exploits
+        cmd.extend(['-e', 'my_name_is_keyboard', 'cve_2017_0785', 'cve_2020_12351', 'knob'])
+    elif mode == 'automotive':
+        # Automotive-focused exploits
+        cmd.extend(['-e', 'nino', 'knob', 'bias', 'invalid_max_slot', 'au_rand_flooding'])
+    elif mode == 'custom' and exploits:
+        cmd.extend(['-e'] + exploits)
+
+    if checkpoint:
+        cmd.append('-ch')
+
+    if report:
+        cmd.append('-re')
+
+    if hardware != 'auto':
+        cmd.extend(['-hh', hardware])
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+
+        # Parse output for vulnerabilities
+        vulnerabilities = []
+        for line in result.stdout.split('\n'):
+            if 'VULNERABLE' in line.upper() or 'FOUND' in line.upper():
+                vulnerabilities.append({
+                    'name': line.strip(),
+                    'severity': 'Critical' if 'RCE' in line or 'CVE-2017' in line else 'Medium',
+                    'description': line.strip()
+                })
+
+        report_file = None
+        if report:
+            report_file = f'/tmp/bluetoolkit_report_{target.replace(":", "")}_{int(time.time())}.json'
+
+        return jsonify({
+            'status': 'success',
+            'vulnerabilities': vulnerabilities,
+            'output': result.stdout,
+            'report_file': report_file if report else None
+        })
+
+    except FileNotFoundError:
+        return jsonify({
+            'status': 'error',
+            'error': 'BlueToolkit not installed. Run: git clone https://github.com/sgxgsx/BlueToolkit && sudo ./BlueToolkit/install.sh'
+        })
+    except subprocess.TimeoutExpired:
+        return jsonify({'status': 'error', 'error': 'Scan timed out after 10 minutes'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/cyber/exploit/bluetoolkit/recon', methods=['POST'])
+@login_required
+def bluetoolkit_recon():
+    """Run BlueToolkit reconnaissance."""
+    data = request.json
+    target = data.get('target')
+
+    add_log(f"BlueToolkit recon: {target}", "INFO")
+
+    try:
+        # Run bluekit recon
+        result = subprocess.run(
+            ['bluekit', '-t', target, '-r'],
+            capture_output=True, text=True, timeout=120
+        )
+
+        # Also get basic info using hcitool
+        info = {}
+        try:
+            hci_result = subprocess.run(
+                ['hcitool', 'info', target],
+                capture_output=True, text=True, timeout=15
+            )
+            for line in hci_result.stdout.split('\n'):
+                if 'Device Name:' in line:
+                    info['device_name'] = line.split(':')[1].strip()
+                elif 'LMP Version:' in line:
+                    info['bt_version'] = line.split(':')[1].strip()
+                elif 'Manufacturer:' in line:
+                    info['manufacturer'] = line.split(':')[1].strip()
+        except:
+            pass
+
+        # Get services
+        services = []
+        try:
+            sdp_result = subprocess.run(
+                ['sdptool', 'browse', target],
+                capture_output=True, text=True, timeout=30
+            )
+            for line in sdp_result.stdout.split('\n'):
+                if 'Service Name:' in line:
+                    services.append(line.split(':')[1].strip())
+        except:
+            pass
+
+        # Check for SC support
+        sc_supported = False
+        if 'Secure Connections' in result.stdout or 'SC supported' in result.stdout:
+            sc_supported = True
+
+        return jsonify({
+            'status': 'success',
+            'device_name': info.get('device_name', 'Unknown'),
+            'bt_version': info.get('bt_version', 'Unknown'),
+            'manufacturer': info.get('manufacturer', 'Unknown'),
+            'services': services,
+            'sc_supported': sc_supported,
+            'raw_output': result.stdout
+        })
+
+    except FileNotFoundError:
+        # Fallback to basic hcitool
+        try:
+            info_result = subprocess.run(
+                ['hcitool', 'info', target],
+                capture_output=True, text=True, timeout=15
+            )
+            info = {}
+            for line in info_result.stdout.split('\n'):
+                if 'Device Name:' in line:
+                    info['device_name'] = line.split(':')[1].strip()
+                elif 'LMP Version:' in line:
+                    info['bt_version'] = line.split(':')[1].strip()
+
+            return jsonify({
+                'status': 'success',
+                'device_name': info.get('device_name', 'Unknown'),
+                'bt_version': info.get('bt_version', 'Unknown'),
+                'services': [],
+                'sc_supported': None
+            })
+        except Exception as e:
+            return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/cyber/exploit/bluetoolkit/list')
+@login_required
+def list_bluetoolkit_exploits():
+    """List available BlueToolkit exploits."""
+    return jsonify({
+        'status': 'success',
+        'exploits': BLUETOOLKIT_EXPLOITS
+    })
+
 
 @app.route('/api/cyber/exploit/blueborne/scan', methods=['POST'])
 @login_required

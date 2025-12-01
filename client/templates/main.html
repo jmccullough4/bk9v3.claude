@@ -666,6 +666,107 @@
                             <p>Bluetooth vulnerability scanners and exploit tools for authorized security testing</p>
                         </div>
 
+                        <!-- BlueToolkit - Primary Framework -->
+                        <div class="cyber-tool-card exploit-card featured-tool">
+                            <div class="tool-card-header" onclick="toggleToolCard(this)">
+                                <div class="tool-info">
+                                    <span class="tool-icon">&#128737;</span>
+                                    <span class="tool-name">BlueToolkit</span>
+                                    <span class="tool-badge critical">43 EXPLOITS</span>
+                                    <span class="tool-badge">Automotive</span>
+                                </div>
+                                <div class="tool-status" id="bluetoolkitStatus">--</div>
+                                <span class="tool-expand">&#9660;</span>
+                            </div>
+                            <div class="tool-card-body">
+                                <p class="tool-desc">Comprehensive Bluetooth Classic vulnerability testing framework with 43 exploits. Supports BlueBorne, KNOB, BIAS, Braktooth, BleedingTooth and more. Found 64 vulnerabilities in 22 car models.</p>
+                                <div class="bluetoolkit-stats">
+                                    <div class="stat-item"><span class="stat-num">43</span><span class="stat-label">Exploits</span></div>
+                                    <div class="stat-item"><span class="stat-num">22</span><span class="stat-label">Cars Tested</span></div>
+                                    <div class="stat-item"><span class="stat-num">64</span><span class="stat-label">CVEs Found</span></div>
+                                </div>
+                                <div class="form-row">
+                                    <label>Target:</label>
+                                    <div class="input-with-btn">
+                                        <input type="text" id="bluetoolkitTarget" class="input" placeholder="XX:XX:XX:XX:XX:XX">
+                                        <button class="btn btn-sm" onclick="fillFromSurvey('bluetoolkitTarget')">&#8592;</button>
+                                    </div>
+                                </div>
+                                <div class="form-row">
+                                    <label>Mode:</label>
+                                    <select id="bluetoolkitMode" class="input">
+                                        <option value="all">Full Scan (All 43 Exploits)</option>
+                                        <option value="recon">Reconnaissance Only</option>
+                                        <option value="quick">Quick Scan (Critical Only)</option>
+                                        <option value="automotive">Automotive Focus</option>
+                                        <option value="custom">Custom Exploits</option>
+                                    </select>
+                                </div>
+                                <div class="form-row hidden" id="bluetoolkitCustomRow">
+                                    <label>Select Exploits:</label>
+                                    <select id="bluetoolkitExploits" class="input" multiple size="6">
+                                        <optgroup label="Critical - RCE">
+                                            <option value="my_name_is_keyboard">CVE-2023-45866 (HID Injection)</option>
+                                            <option value="cve_2017_0785">CVE-2017-0785 (BlueBorne Info Leak)</option>
+                                            <option value="cve_2018_19860">CVE-2018-19860 (Memory Exec)</option>
+                                            <option value="cve_2017_1000251">CVE-2017-1000251 (Linux RCE)</option>
+                                            <option value="cve_2020_12351">CVE-2020-12351 (BleedingTooth)</option>
+                                        </optgroup>
+                                        <optgroup label="MITM Attacks">
+                                            <option value="knob">KNOB Attack (CVE-2019-9506)</option>
+                                            <option value="bias">BIAS (CVE-2020-10135)</option>
+                                            <option value="nino">NiNo MITM</option>
+                                            <option value="method_confusion">Method Confusion (CVE-2020-10134)</option>
+                                            <option value="cve_2018_5383">CVE-2018-5383 (Crypto Attack)</option>
+                                        </optgroup>
+                                        <optgroup label="DoS - Braktooth">
+                                            <option value="invalid_max_slot">Invalid Max Slot (V13)</option>
+                                            <option value="duplicated_iocap">Duplicated IOCAP (V3)</option>
+                                            <option value="truncated_sco_request">Truncated SCO (V2)</option>
+                                            <option value="feature_resp_flooding">Feature Flooding (V4)</option>
+                                            <option value="lmp_auto_rate_overflow">LMP Auto Rate (V5)</option>
+                                            <option value="au_rand_flooding">AU Rand Flooding (V12)</option>
+                                            <option value="paging_scan_deadlock">Paging Deadlock (V16)</option>
+                                        </optgroup>
+                                        <optgroup label="Info Leaks">
+                                            <option value="cve_2020_12352">CVE-2020-12352 (BadChoice)</option>
+                                            <option value="cve_2017_1000250">CVE-2017-1000250 (BlueBorne)</option>
+                                            <option value="sdp_leak">SDP Information Leak</option>
+                                        </optgroup>
+                                    </select>
+                                </div>
+                                <div class="form-row">
+                                    <label>Hardware:</label>
+                                    <select id="bluetoolkitHardware" class="input">
+                                        <option value="auto">Auto-detect</option>
+                                        <option value="standard">Standard Adapter</option>
+                                        <option value="esp32">ESP-WROVER-KIT (Braktooth)</option>
+                                        <option value="nexus5">Nexus 5 (InternalBlue)</option>
+                                        <option value="cyw920819">CYW920819 (BIAS/BLUR)</option>
+                                    </select>
+                                </div>
+                                <div class="tool-options">
+                                    <label class="toggle">
+                                        <input type="checkbox" id="bluetoolkitCheckpoint">
+                                        <span class="toggle-slider"></span>
+                                        <span class="toggle-label">Resume from Checkpoint</span>
+                                    </label>
+                                    <label class="toggle">
+                                        <input type="checkbox" id="bluetoolkitReport" checked>
+                                        <span class="toggle-slider"></span>
+                                        <span class="toggle-label">Generate Report</span>
+                                    </label>
+                                </div>
+                                <div class="tool-actions">
+                                    <button class="btn btn-danger" onclick="runBlueToolkit()">&#9889; RUN SCAN</button>
+                                    <button class="btn btn-warning" onclick="runBlueToolkitRecon()">&#128269; RECON ONLY</button>
+                                    <button class="btn btn-secondary" onclick="installTool('bluetoolkit')">&#128229; INSTALL</button>
+                                    <button class="btn btn-secondary" onclick="listBlueToolkitExploits()">&#128203; LIST EXPLOITS</button>
+                                </div>
+                                <div class="tool-output hidden" id="bluetoolkitOutput"></div>
+                            </div>
+                        </div>
+
                         <!-- BlueBorne Scanner -->
                         <div class="cyber-tool-card exploit-card">
                             <div class="tool-card-header" onclick="toggleToolCard(this)">
