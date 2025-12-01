@@ -12098,6 +12098,1825 @@ def stop_l2ping_flood():
     return jsonify({'status': 'stopped', 'packets_sent': packets_sent})
 
 
+# ==================== HCITOOL SUITE API ====================
+# Complete hcitool suite for Bluetooth HCI operations
+
+def emit_device_from_hci_output(bd_address, name=None, device_type='classic'):
+    """Helper to emit device update to UI from hcitool discoveries."""
+    if not bd_address or len(bd_address) != 17:
+        return
+
+    bd_address = bd_address.upper()
+
+    # Check if device exists
+    if bd_address in devices:
+        device = devices[bd_address]
+        if name and not device.get('device_name'):
+            device['device_name'] = name
+        device['last_seen'] = datetime.now().isoformat()
+    else:
+        # Create new device entry
+        device = {
+            'bd_address': bd_address,
+            'device_name': name or '',
+            'device_type': device_type,
+            'rssi': None,
+            'manufacturer': get_manufacturer_from_oui(bd_address[:8]),
+            'first_seen': datetime.now().isoformat(),
+            'last_seen': datetime.now().isoformat(),
+            'is_target': bd_address in targets,
+            'packet_count': 1,
+            'emitter_lat': None,
+            'emitter_lon': None,
+            'emitter_accuracy': None
+        }
+        devices[bd_address] = device
+
+    # Emit to frontend
+    socketio.emit('device_update', devices[bd_address])
+    return devices[bd_address]
+
+
+@app.route('/api/hci/dev')
+@login_required
+def hci_dev():
+    """List local Bluetooth devices (hcitool dev)."""
+    try:
+        result = subprocess.run(['hcitool', 'dev'], capture_output=True, text=True, timeout=10)
+        output = result.stdout
+
+        # Parse output
+        adapters = []
+        for line in output.split('\n'):
+            if '\t' in line and ':' in line:
+                parts = line.strip().split('\t')
+                if len(parts) >= 2:
+                    adapters.append({
+                        'interface': parts[0],
+                        'bd_address': parts[1]
+                    })
+
+        return jsonify({
+            'status': 'success',
+            'adapters': adapters,
+            'raw': output
+        })
+    except subprocess.TimeoutExpired:
+        return jsonify({'status': 'error', 'error': 'Command timed out'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/hci/inq', methods=['POST'])
+@login_required
+def hci_inq():
+    """Perform inquiry scan (hcitool inq)."""
+    data = request.json or {}
+    length = data.get('length', 8)  # Inquiry length in 1.28s units
+    flush = data.get('flush', True)
+    interface = data.get('interface', 'hci0')
+
+    try:
+        cmd = ['hcitool', '-i', interface, 'inq', '--length=' + str(length)]
+        if flush:
+            cmd.append('--flush')
+
+        add_log(f"Running HCI inquiry scan for {length * 1.28:.1f}s", "INFO")
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=length * 2 + 10)
+        output = result.stdout
+
+        # Parse output and emit devices
+        found_devices = []
+        for line in output.split('\n'):
+            match = re.match(r'\s*([0-9A-Fa-f:]{17})\s+clock offset:\s*(\S+)\s+class:\s*(\S+)', line)
+            if match:
+                bd_addr = match.group(1).upper()
+                clock_offset = match.group(2)
+                device_class = match.group(3)
+
+                device = emit_device_from_hci_output(bd_addr)
+                found_devices.append({
+                    'bd_address': bd_addr,
+                    'clock_offset': clock_offset,
+                    'device_class': device_class
+                })
+
+        add_log(f"HCI inquiry found {len(found_devices)} devices", "INFO")
+        return jsonify({
+            'status': 'success',
+            'devices_found': len(found_devices),
+            'devices': found_devices,
+            'raw': output
+        })
+    except subprocess.TimeoutExpired:
+        return jsonify({'status': 'error', 'error': 'Inquiry timed out'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/hci/scan', methods=['POST'])
+@login_required
+def hci_scan():
+    """Perform scan with name lookup (hcitool scan)."""
+    data = request.json or {}
+    length = data.get('length', 8)
+    flush = data.get('flush', True)
+    refresh = data.get('refresh', False)
+    interface = data.get('interface', 'hci0')
+
+    try:
+        cmd = ['hcitool', '-i', interface, 'scan', '--length=' + str(length)]
+        if flush:
+            cmd.append('--flush')
+        if refresh:
+            cmd.append('--refresh')
+
+        add_log(f"Running HCI scan with name lookup for {length * 1.28:.1f}s", "INFO")
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=length * 3 + 30)
+        output = result.stdout
+
+        # Parse output and emit devices
+        found_devices = []
+        for line in output.split('\n'):
+            match = re.match(r'\s*([0-9A-Fa-f:]{17})\s+(.+)', line)
+            if match:
+                bd_addr = match.group(1).upper()
+                name = match.group(2).strip()
+
+                device = emit_device_from_hci_output(bd_addr, name)
+                found_devices.append({
+                    'bd_address': bd_addr,
+                    'device_name': name
+                })
+
+        add_log(f"HCI scan found {len(found_devices)} devices", "INFO")
+        return jsonify({
+            'status': 'success',
+            'devices_found': len(found_devices),
+            'devices': found_devices,
+            'raw': output
+        })
+    except subprocess.TimeoutExpired:
+        return jsonify({'status': 'error', 'error': 'Scan timed out'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/hci/name', methods=['POST'])
+@login_required
+def hci_name():
+    """Get remote device name (hcitool name)."""
+    data = request.json or {}
+    bd_address = data.get('bd_address')
+    interface = data.get('interface', 'hci0')
+
+    if not bd_address:
+        return jsonify({'status': 'error', 'error': 'BD address required'})
+
+    try:
+        result = subprocess.run(
+            ['hcitool', '-i', interface, 'name', bd_address],
+            capture_output=True, text=True, timeout=15
+        )
+        name = result.stdout.strip()
+
+        if name:
+            emit_device_from_hci_output(bd_address, name)
+            return jsonify({'status': 'success', 'bd_address': bd_address, 'name': name})
+        else:
+            return jsonify({'status': 'error', 'error': 'Could not get device name'})
+    except subprocess.TimeoutExpired:
+        return jsonify({'status': 'error', 'error': 'Name lookup timed out'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/hci/info', methods=['POST'])
+@login_required
+def hci_info():
+    """Get remote device info (hcitool info)."""
+    data = request.json or {}
+    bd_address = data.get('bd_address')
+    interface = data.get('interface', 'hci0')
+
+    if not bd_address:
+        return jsonify({'status': 'error', 'error': 'BD address required'})
+
+    try:
+        result = subprocess.run(
+            ['hcitool', '-i', interface, 'info', bd_address],
+            capture_output=True, text=True, timeout=20
+        )
+        output = result.stdout
+
+        # Parse the output
+        parsed = parse_device_info_output(output)
+
+        # Update device in our database
+        if bd_address.upper() in devices:
+            device = devices[bd_address.upper()]
+            if parsed.get('parsed', {}).get('device_name'):
+                device['device_name'] = parsed['parsed']['device_name']
+            if parsed.get('parsed', {}).get('bluetooth_version'):
+                device['bluetooth_version'] = parsed['parsed']['bluetooth_version']
+            socketio.emit('device_update', device)
+
+        return jsonify({
+            'status': 'success',
+            'bd_address': bd_address,
+            'info': parsed,
+            'raw': output
+        })
+    except subprocess.TimeoutExpired:
+        return jsonify({'status': 'error', 'error': 'Info request timed out'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/hci/con')
+@login_required
+def hci_con():
+    """Display active connections (hcitool con)."""
+    try:
+        result = subprocess.run(['hcitool', 'con'], capture_output=True, text=True, timeout=10)
+        output = result.stdout
+
+        connections = []
+        for line in output.split('\n'):
+            match = re.search(r'([0-9A-Fa-f:]{17})\s+handle\s+(\d+)\s+state\s+(\d+)\s+lm\s+(\S+)', line)
+            if match:
+                connections.append({
+                    'bd_address': match.group(1).upper(),
+                    'handle': int(match.group(2)),
+                    'state': int(match.group(3)),
+                    'link_mode': match.group(4)
+                })
+
+        return jsonify({
+            'status': 'success',
+            'connections': connections,
+            'raw': output
+        })
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/hci/cc', methods=['POST'])
+@login_required
+def hci_cc():
+    """Create connection (hcitool cc)."""
+    data = request.json or {}
+    bd_address = data.get('bd_address')
+    interface = data.get('interface', 'hci0')
+    pkt_type = data.get('pkt_type')
+    role = data.get('role', 'm')  # m=master, s=slave
+
+    if not bd_address:
+        return jsonify({'status': 'error', 'error': 'BD address required'})
+
+    try:
+        cmd = ['hcitool', '-i', interface, 'cc']
+        if pkt_type:
+            cmd.extend(['--pkt-type', pkt_type])
+        cmd.extend(['--role', role, bd_address])
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+
+        if result.returncode == 0:
+            add_log(f"Connected to {bd_address}", "INFO")
+            return jsonify({'status': 'success', 'bd_address': bd_address})
+        else:
+            return jsonify({'status': 'error', 'error': result.stderr or 'Connection failed'})
+    except subprocess.TimeoutExpired:
+        return jsonify({'status': 'error', 'error': 'Connection timed out'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/hci/dc', methods=['POST'])
+@login_required
+def hci_dc():
+    """Disconnect (hcitool dc)."""
+    data = request.json or {}
+    bd_address = data.get('bd_address')
+    reason = data.get('reason', '0x13')  # User ended connection
+    interface = data.get('interface', 'hci0')
+
+    if not bd_address:
+        return jsonify({'status': 'error', 'error': 'BD address required'})
+
+    try:
+        result = subprocess.run(
+            ['hcitool', '-i', interface, 'dc', bd_address, reason],
+            capture_output=True, text=True, timeout=10
+        )
+
+        add_log(f"Disconnected from {bd_address}", "INFO")
+        return jsonify({'status': 'success', 'bd_address': bd_address})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/hci/rssi', methods=['POST'])
+@login_required
+def hci_rssi():
+    """Get RSSI for connected device (hcitool rssi)."""
+    data = request.json or {}
+    bd_address = data.get('bd_address')
+    interface = data.get('interface', 'hci0')
+
+    if not bd_address:
+        return jsonify({'status': 'error', 'error': 'BD address required'})
+
+    try:
+        result = subprocess.run(
+            ['hcitool', '-i', interface, 'rssi', bd_address],
+            capture_output=True, text=True, timeout=10
+        )
+
+        match = re.search(r'RSSI return value:\s*([-\d]+)', result.stdout)
+        if match:
+            rssi = int(match.group(1))
+
+            # Update device in our database
+            if bd_address.upper() in devices:
+                devices[bd_address.upper()]['rssi'] = rssi
+                socketio.emit('device_update', devices[bd_address.upper()])
+
+            return jsonify({'status': 'success', 'bd_address': bd_address, 'rssi': rssi})
+        else:
+            return jsonify({'status': 'error', 'error': result.stdout or 'Not connected or no RSSI'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/hci/lq', methods=['POST'])
+@login_required
+def hci_lq():
+    """Get link quality (hcitool lq)."""
+    data = request.json or {}
+    bd_address = data.get('bd_address')
+    interface = data.get('interface', 'hci0')
+
+    if not bd_address:
+        return jsonify({'status': 'error', 'error': 'BD address required'})
+
+    try:
+        result = subprocess.run(
+            ['hcitool', '-i', interface, 'lq', bd_address],
+            capture_output=True, text=True, timeout=10
+        )
+
+        match = re.search(r'Link quality:\s*(\d+)', result.stdout)
+        if match:
+            return jsonify({'status': 'success', 'bd_address': bd_address, 'link_quality': int(match.group(1))})
+        else:
+            return jsonify({'status': 'error', 'error': result.stdout or 'Could not get link quality'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/hci/tpl', methods=['POST'])
+@login_required
+def hci_tpl():
+    """Get transmit power level (hcitool tpl)."""
+    data = request.json or {}
+    bd_address = data.get('bd_address')
+    tpl_type = data.get('type', '0')  # 0=current, 1=max
+    interface = data.get('interface', 'hci0')
+
+    if not bd_address:
+        return jsonify({'status': 'error', 'error': 'BD address required'})
+
+    try:
+        result = subprocess.run(
+            ['hcitool', '-i', interface, 'tpl', bd_address, tpl_type],
+            capture_output=True, text=True, timeout=10
+        )
+
+        match = re.search(r'(?:Current|Maximum) transmit power level:\s*([-\d]+)', result.stdout)
+        if match:
+            return jsonify({
+                'status': 'success',
+                'bd_address': bd_address,
+                'tx_power': int(match.group(1)),
+                'type': 'current' if tpl_type == '0' else 'maximum'
+            })
+        else:
+            return jsonify({'status': 'error', 'error': result.stdout or 'Could not get TX power'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/hci/afh', methods=['POST'])
+@login_required
+def hci_afh():
+    """Get AFH channel map (hcitool afh)."""
+    data = request.json or {}
+    bd_address = data.get('bd_address')
+    interface = data.get('interface', 'hci0')
+
+    if not bd_address:
+        return jsonify({'status': 'error', 'error': 'BD address required'})
+
+    try:
+        result = subprocess.run(
+            ['hcitool', '-i', interface, 'afh', bd_address],
+            capture_output=True, text=True, timeout=10
+        )
+
+        return jsonify({
+            'status': 'success',
+            'bd_address': bd_address,
+            'afh_map': result.stdout.strip(),
+            'raw': result.stdout
+        })
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/hci/clock', methods=['POST'])
+@login_required
+def hci_clock():
+    """Read clock (hcitool clock)."""
+    data = request.json or {}
+    bd_address = data.get('bd_address')
+    which = data.get('which', '1')  # 0=local, 1=piconet
+    interface = data.get('interface', 'hci0')
+
+    try:
+        cmd = ['hcitool', '-i', interface, 'clock']
+        if bd_address:
+            cmd.extend([bd_address, which])
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+
+        return jsonify({
+            'status': 'success',
+            'clock_info': result.stdout.strip(),
+            'raw': result.stdout
+        })
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/hci/lescan', methods=['POST'])
+@login_required
+def hci_lescan():
+    """LE scan (hcitool lescan)."""
+    data = request.json or {}
+    duration = data.get('duration', 10)
+    duplicates = data.get('duplicates', False)
+    passive = data.get('passive', False)
+    interface = data.get('interface', 'hci0')
+
+    try:
+        cmd = ['timeout', str(duration), 'hcitool', '-i', interface, 'lescan']
+        if duplicates:
+            cmd.append('--duplicates')
+        if passive:
+            cmd.append('--passive')
+
+        add_log(f"Running LE scan for {duration}s", "INFO")
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=duration + 5)
+        output = result.stdout
+
+        # Parse output
+        found_devices = []
+        seen = set()
+        for line in output.split('\n'):
+            match = re.match(r'([0-9A-Fa-f:]{17})\s*(.*)', line)
+            if match:
+                bd_addr = match.group(1).upper()
+                name = match.group(2).strip() if match.group(2) else ''
+
+                if bd_addr not in seen:
+                    seen.add(bd_addr)
+                    device = emit_device_from_hci_output(bd_addr, name if name and name != '(unknown)' else None, 'ble')
+                    found_devices.append({
+                        'bd_address': bd_addr,
+                        'device_name': name
+                    })
+
+        add_log(f"LE scan found {len(found_devices)} devices", "INFO")
+        return jsonify({
+            'status': 'success',
+            'devices_found': len(found_devices),
+            'devices': found_devices,
+            'raw': output
+        })
+    except subprocess.TimeoutExpired:
+        return jsonify({'status': 'error', 'error': 'LE scan timed out'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/hci/leinfo', methods=['POST'])
+@login_required
+def hci_leinfo():
+    """Get LE device info (hcitool leinfo)."""
+    data = request.json or {}
+    bd_address = data.get('bd_address')
+    interface = data.get('interface', 'hci0')
+
+    if not bd_address:
+        return jsonify({'status': 'error', 'error': 'BD address required'})
+
+    try:
+        result = subprocess.run(
+            ['hcitool', '-i', interface, 'leinfo', bd_address],
+            capture_output=True, text=True, timeout=20
+        )
+
+        return jsonify({
+            'status': 'success',
+            'bd_address': bd_address,
+            'info': result.stdout.strip(),
+            'raw': result.stdout
+        })
+    except subprocess.TimeoutExpired:
+        return jsonify({'status': 'error', 'error': 'LE info timed out'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/hci/lecc', methods=['POST'])
+@login_required
+def hci_lecc():
+    """LE create connection (hcitool lecc)."""
+    data = request.json or {}
+    bd_address = data.get('bd_address')
+    random = data.get('random', False)
+    interface = data.get('interface', 'hci0')
+
+    if not bd_address:
+        return jsonify({'status': 'error', 'error': 'BD address required'})
+
+    try:
+        cmd = ['hcitool', '-i', interface, 'lecc']
+        if random:
+            cmd.append('--random')
+        cmd.append(bd_address)
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+
+        if 'Connection handle' in result.stdout:
+            add_log(f"LE connected to {bd_address}", "INFO")
+            return jsonify({'status': 'success', 'bd_address': bd_address, 'output': result.stdout})
+        else:
+            return jsonify({'status': 'error', 'error': result.stdout or 'LE connection failed'})
+    except subprocess.TimeoutExpired:
+        return jsonify({'status': 'error', 'error': 'LE connection timed out'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/hci/ledc', methods=['POST'])
+@login_required
+def hci_ledc():
+    """LE disconnect (hcitool ledc)."""
+    data = request.json or {}
+    handle = data.get('handle')
+    reason = data.get('reason', '0x13')
+    interface = data.get('interface', 'hci0')
+
+    if not handle:
+        return jsonify({'status': 'error', 'error': 'Connection handle required'})
+
+    try:
+        result = subprocess.run(
+            ['hcitool', '-i', interface, 'ledc', str(handle), reason],
+            capture_output=True, text=True, timeout=10
+        )
+
+        add_log(f"LE disconnected handle {handle}", "INFO")
+        return jsonify({'status': 'success', 'handle': handle})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/hci/cmd', methods=['POST'])
+@login_required
+def hci_cmd():
+    """Send raw HCI command (hcitool cmd)."""
+    data = request.json or {}
+    ogf = data.get('ogf')
+    ocf = data.get('ocf')
+    params = data.get('params', [])
+    interface = data.get('interface', 'hci0')
+
+    if not ogf or not ocf:
+        return jsonify({'status': 'error', 'error': 'OGF and OCF required'})
+
+    try:
+        cmd = ['hcitool', '-i', interface, 'cmd', ogf, ocf] + params
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+
+        add_log(f"HCI command sent: OGF={ogf} OCF={ocf}", "DEBUG")
+        return jsonify({
+            'status': 'success',
+            'command': f"hcitool cmd {ogf} {ocf} {' '.join(params)}",
+            'output': result.stdout.strip(),
+            'raw': result.stdout
+        })
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/hci/lewladd', methods=['POST'])
+@login_required
+def hci_lewladd():
+    """Add device to LE whitelist (hcitool lewladd)."""
+    data = request.json or {}
+    bd_address = data.get('bd_address')
+    random = data.get('random', False)
+    interface = data.get('interface', 'hci0')
+
+    if not bd_address:
+        return jsonify({'status': 'error', 'error': 'BD address required'})
+
+    try:
+        cmd = ['hcitool', '-i', interface, 'lewladd']
+        if random:
+            cmd.append('--random')
+        cmd.append(bd_address)
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+
+        return jsonify({'status': 'success', 'bd_address': bd_address, 'output': result.stdout})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/hci/lewlrm', methods=['POST'])
+@login_required
+def hci_lewlrm():
+    """Remove device from LE whitelist (hcitool lewlrm)."""
+    data = request.json or {}
+    bd_address = data.get('bd_address')
+    interface = data.get('interface', 'hci0')
+
+    if not bd_address:
+        return jsonify({'status': 'error', 'error': 'BD address required'})
+
+    try:
+        result = subprocess.run(
+            ['hcitool', '-i', interface, 'lewlrm', bd_address],
+            capture_output=True, text=True, timeout=10
+        )
+
+        return jsonify({'status': 'success', 'bd_address': bd_address})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/hci/lewlsz')
+@login_required
+def hci_lewlsz():
+    """Get LE whitelist size (hcitool lewlsz)."""
+    try:
+        result = subprocess.run(['hcitool', 'lewlsz'], capture_output=True, text=True, timeout=10)
+
+        match = re.search(r'White list size:\s*(\d+)', result.stdout)
+        if match:
+            return jsonify({'status': 'success', 'whitelist_size': int(match.group(1))})
+        return jsonify({'status': 'success', 'output': result.stdout})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/hci/lewlclr', methods=['POST'])
+@login_required
+def hci_lewlclr():
+    """Clear LE whitelist (hcitool lewlclr)."""
+    data = request.json or {}
+    interface = data.get('interface', 'hci0')
+
+    try:
+        result = subprocess.run(
+            ['hcitool', '-i', interface, 'lewlclr'],
+            capture_output=True, text=True, timeout=10
+        )
+
+        return jsonify({'status': 'success'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/hci/auth', methods=['POST'])
+@login_required
+def hci_auth():
+    """Request authentication (hcitool auth)."""
+    data = request.json or {}
+    bd_address = data.get('bd_address')
+    interface = data.get('interface', 'hci0')
+
+    if not bd_address:
+        return jsonify({'status': 'error', 'error': 'BD address required'})
+
+    try:
+        result = subprocess.run(
+            ['hcitool', '-i', interface, 'auth', bd_address],
+            capture_output=True, text=True, timeout=30
+        )
+
+        return jsonify({
+            'status': 'success',
+            'bd_address': bd_address,
+            'output': result.stdout
+        })
+    except subprocess.TimeoutExpired:
+        return jsonify({'status': 'error', 'error': 'Authentication timed out'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/hci/enc', methods=['POST'])
+@login_required
+def hci_enc():
+    """Request encryption (hcitool enc)."""
+    data = request.json or {}
+    bd_address = data.get('bd_address')
+    encrypt = data.get('encrypt', True)
+    interface = data.get('interface', 'hci0')
+
+    if not bd_address:
+        return jsonify({'status': 'error', 'error': 'BD address required'})
+
+    try:
+        cmd = ['hcitool', '-i', interface, 'enc', bd_address]
+        cmd.append('enable' if encrypt else 'disable')
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+
+        return jsonify({
+            'status': 'success',
+            'bd_address': bd_address,
+            'encryption': 'enabled' if encrypt else 'disabled',
+            'output': result.stdout
+        })
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/hci/key', methods=['POST'])
+@login_required
+def hci_key():
+    """Change connection link key (hcitool key)."""
+    data = request.json or {}
+    bd_address = data.get('bd_address')
+    interface = data.get('interface', 'hci0')
+
+    if not bd_address:
+        return jsonify({'status': 'error', 'error': 'BD address required'})
+
+    try:
+        result = subprocess.run(
+            ['hcitool', '-i', interface, 'key', bd_address],
+            capture_output=True, text=True, timeout=30
+        )
+
+        return jsonify({
+            'status': 'success',
+            'bd_address': bd_address,
+            'output': result.stdout
+        })
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/hci/clkoff', methods=['POST'])
+@login_required
+def hci_clkoff():
+    """Read clock offset (hcitool clkoff)."""
+    data = request.json or {}
+    bd_address = data.get('bd_address')
+    interface = data.get('interface', 'hci0')
+
+    if not bd_address:
+        return jsonify({'status': 'error', 'error': 'BD address required'})
+
+    try:
+        result = subprocess.run(
+            ['hcitool', '-i', interface, 'clkoff', bd_address],
+            capture_output=True, text=True, timeout=10
+        )
+
+        match = re.search(r'Clock offset:\s*(\S+)', result.stdout)
+        if match:
+            return jsonify({
+                'status': 'success',
+                'bd_address': bd_address,
+                'clock_offset': match.group(1)
+            })
+        return jsonify({'status': 'error', 'error': result.stdout or 'Could not get clock offset'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+# ==================== SDPTOOL SUITE API ====================
+# Complete sdptool suite for Service Discovery Protocol
+
+@app.route('/api/sdp/browse', methods=['POST'])
+@login_required
+def sdp_browse_services():
+    """Browse all SDP services (sdptool browse)."""
+    data = request.json or {}
+    bd_address = data.get('bd_address')
+    tree = data.get('tree', False)
+    raw_output = data.get('raw', False)
+    xml = data.get('xml', False)
+
+    try:
+        cmd = ['sdptool', 'browse']
+        if tree:
+            cmd.append('--tree')
+        if raw_output:
+            cmd.append('--raw')
+        if xml:
+            cmd.append('--xml')
+        if bd_address:
+            cmd.append(bd_address)
+
+        add_log(f"SDP browse {'for ' + bd_address if bd_address else 'local'}", "INFO")
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        output = result.stdout
+
+        # Parse services
+        services = []
+        current_service = {}
+        for line in output.split('\n'):
+            if line.startswith('Service Name:'):
+                if current_service:
+                    services.append(current_service)
+                current_service = {'name': line.split(':', 1)[1].strip()}
+            elif line.startswith('Service RecHandle:'):
+                current_service['handle'] = line.split(':', 1)[1].strip()
+            elif line.startswith('Service Class ID List:'):
+                current_service['class_ids'] = []
+            elif '"' in line and current_service.get('class_ids') is not None:
+                match = re.search(r'"([^"]+)"', line)
+                if match:
+                    current_service.setdefault('class_ids', []).append(match.group(1))
+            elif line.startswith('Protocol Descriptor List:'):
+                current_service['protocols'] = []
+            elif 'Channel:' in line:
+                match = re.search(r'Channel:\s*(\d+)', line)
+                if match:
+                    current_service['channel'] = int(match.group(1))
+            elif 'PSM:' in line:
+                match = re.search(r'PSM:\s*(\d+)', line)
+                if match:
+                    current_service['psm'] = int(match.group(1))
+
+        if current_service:
+            services.append(current_service)
+
+        add_log(f"SDP found {len(services)} services", "INFO")
+        return jsonify({
+            'status': 'success',
+            'bd_address': bd_address or 'local',
+            'services': services,
+            'raw': output
+        })
+    except subprocess.TimeoutExpired:
+        return jsonify({'status': 'error', 'error': 'SDP browse timed out'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/sdp/search', methods=['POST'])
+@login_required
+def sdp_search():
+    """Search for specific SDP service (sdptool search)."""
+    data = request.json or {}
+    bd_address = data.get('bd_address')
+    service = data.get('service')  # e.g., SP, DUN, HID, etc.
+
+    if not service:
+        return jsonify({'status': 'error', 'error': 'Service type required'})
+
+    try:
+        cmd = ['sdptool', 'search', service]
+        if bd_address:
+            cmd.append(bd_address)
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+
+        # Parse results
+        found = 'Searching' in result.stdout and 'Found' in result.stdout
+
+        return jsonify({
+            'status': 'success',
+            'bd_address': bd_address or 'local',
+            'service': service,
+            'found': found,
+            'raw': result.stdout
+        })
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/sdp/records', methods=['POST'])
+@login_required
+def sdp_records():
+    """Get all SDP records (sdptool records)."""
+    data = request.json or {}
+    bd_address = data.get('bd_address')
+
+    try:
+        cmd = ['sdptool', 'records']
+        if bd_address:
+            cmd.append(bd_address)
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+
+        return jsonify({
+            'status': 'success',
+            'bd_address': bd_address or 'local',
+            'raw': result.stdout
+        })
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/sdp/get', methods=['POST'])
+@login_required
+def sdp_get():
+    """Get specific SDP record (sdptool get)."""
+    data = request.json or {}
+    bd_address = data.get('bd_address')
+    handle = data.get('handle')
+
+    if not handle:
+        return jsonify({'status': 'error', 'error': 'Record handle required'})
+
+    try:
+        cmd = ['sdptool', 'get']
+        if bd_address:
+            cmd.append(bd_address)
+        cmd.append('--handle=' + str(handle))
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+
+        return jsonify({
+            'status': 'success',
+            'handle': handle,
+            'raw': result.stdout
+        })
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/sdp/add', methods=['POST'])
+@login_required
+def sdp_add():
+    """Add local SDP service (sdptool add)."""
+    data = request.json or {}
+    service = data.get('service')  # e.g., SP, DUN, NAP, GN, PANU, HID, etc.
+    channel = data.get('channel')
+
+    if not service:
+        return jsonify({'status': 'error', 'error': 'Service type required'})
+
+    # Available services
+    available_services = [
+        'DID', 'SP', 'DUN', 'LAN', 'FAX', 'OPUSH', 'FTP', 'HS', 'HF', 'HFAG',
+        'SAP', 'PBAP', 'NAP', 'GN', 'PANU', 'HID', 'KEYB', 'WIIMOTE', 'CIP',
+        'A2SRC', 'A2SNK', 'AVRCT', 'AVRTG', 'UDIUE', 'UDITE', 'SEMCHLA', 'SR1',
+        'SYNCML', 'ACTIVESYNC', 'NOKID', 'NOKIASYNC', 'MPS'
+    ]
+
+    if service.upper() not in available_services:
+        return jsonify({
+            'status': 'error',
+            'error': f'Unknown service. Available: {", ".join(available_services)}'
+        })
+
+    try:
+        cmd = ['sdptool', 'add', service.upper()]
+        if channel:
+            cmd.extend(['--channel=' + str(channel)])
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+
+        if result.returncode == 0:
+            add_log(f"Added SDP service: {service}", "INFO")
+            return jsonify({'status': 'success', 'service': service})
+        else:
+            return jsonify({'status': 'error', 'error': result.stderr or result.stdout})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/sdp/del', methods=['POST'])
+@login_required
+def sdp_del():
+    """Delete local SDP record (sdptool del)."""
+    data = request.json or {}
+    handle = data.get('handle')
+
+    if not handle:
+        return jsonify({'status': 'error', 'error': 'Record handle required'})
+
+    try:
+        result = subprocess.run(
+            ['sdptool', 'del', str(handle)],
+            capture_output=True, text=True, timeout=10
+        )
+
+        if result.returncode == 0:
+            add_log(f"Deleted SDP record: {handle}", "INFO")
+            return jsonify({'status': 'success', 'handle': handle})
+        else:
+            return jsonify({'status': 'error', 'error': result.stderr or result.stdout})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/sdp/setattr', methods=['POST'])
+@login_required
+def sdp_setattr():
+    """Set SDP attribute (sdptool setattr)."""
+    data = request.json or {}
+    handle = data.get('handle')
+    attr_id = data.get('attr_id')
+    value = data.get('value')
+
+    if not all([handle, attr_id, value]):
+        return jsonify({'status': 'error', 'error': 'Handle, attr_id, and value required'})
+
+    try:
+        result = subprocess.run(
+            ['sdptool', 'setattr', str(handle), str(attr_id), str(value)],
+            capture_output=True, text=True, timeout=10
+        )
+
+        return jsonify({
+            'status': 'success' if result.returncode == 0 else 'error',
+            'output': result.stdout,
+            'error': result.stderr if result.returncode != 0 else None
+        })
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/sdp/setseq', methods=['POST'])
+@login_required
+def sdp_setseq():
+    """Set SDP attribute sequence (sdptool setseq)."""
+    data = request.json or {}
+    handle = data.get('handle')
+    attr_id = data.get('attr_id')
+    values = data.get('values', [])
+
+    if not all([handle, attr_id, values]):
+        return jsonify({'status': 'error', 'error': 'Handle, attr_id, and values required'})
+
+    try:
+        cmd = ['sdptool', 'setseq', str(handle), str(attr_id)] + [str(v) for v in values]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+
+        return jsonify({
+            'status': 'success' if result.returncode == 0 else 'error',
+            'output': result.stdout,
+            'error': result.stderr if result.returncode != 0 else None
+        })
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+# Common SDP Service Class UUIDs
+SDP_SERVICE_CLASSES = {
+    'SP': ('Serial Port', '0x1101'),
+    'DUN': ('Dial-up Networking', '0x1103'),
+    'OBEX': ('OBEX Object Push', '0x1105'),
+    'FTP': ('OBEX File Transfer', '0x1106'),
+    'HSP': ('Headset', '0x1108'),
+    'A2DP_SRC': ('A2DP Source', '0x110a'),
+    'A2DP_SNK': ('A2DP Sink', '0x110b'),
+    'AVRCP': ('A/V Remote Control', '0x110e'),
+    'HID': ('Human Interface Device', '0x1124'),
+    'HFP': ('Hands-Free', '0x111e'),
+    'PAN_NAP': ('PAN NAP', '0x1116'),
+    'PAN_GN': ('PAN GN', '0x1117'),
+    'PAN_PANU': ('PAN User', '0x1115'),
+    'PBAP': ('Phone Book Access', '0x1130'),
+    'MAP': ('Message Access', '0x1132'),
+}
+
+
+@app.route('/api/sdp/services')
+@login_required
+def sdp_service_list():
+    """Get list of known SDP service classes."""
+    return jsonify({
+        'status': 'success',
+        'services': SDP_SERVICE_CLASSES
+    })
+
+
+# ==================== ADDITIONAL KALI BLUETOOTH TOOLS ====================
+
+# Add more Kali tools to CYBER_TOOLS
+ADDITIONAL_KALI_TOOLS = {
+    'bluesnarfer': {'cmd': 'bluesnarfer', 'install': 'apt-get install -y bluesnarfer'},
+    'btscanner': {'cmd': 'btscanner', 'install': 'apt-get install -y btscanner'},
+    'blueranger': {'cmd': 'blueranger', 'install': 'apt-get install -y blueranger'},
+    'bluelog': {'cmd': 'bluelog', 'install': 'apt-get install -y bluelog'},
+    'obexftp': {'cmd': 'obexftp', 'install': 'apt-get install -y obexftp'},
+    'ussp_push': {'cmd': 'ussp-push', 'install': 'apt-get install -y ussp-push'},
+    'hciconfig': {'cmd': 'hciconfig', 'install': 'apt-get install -y bluez'},
+    'hcidump': {'cmd': 'hcidump', 'install': 'apt-get install -y bluez-hcidump'},
+    'gatttool': {'cmd': 'gatttool', 'install': 'apt-get install -y bluez'},
+    'bettercap': {'cmd': 'bettercap', 'install': 'apt-get install -y bettercap'},
+    'nrfconnect': {'cmd': None, 'install': 'pip3 install pc-ble-driver-py'},
+}
+
+# Merge with existing CYBER_TOOLS
+CYBER_TOOLS.update(ADDITIONAL_KALI_TOOLS)
+
+
+@app.route('/api/kali/bluesnarfer', methods=['POST'])
+@login_required
+def run_bluesnarfer():
+    """Run Bluesnarfer for phonebook/SMS extraction."""
+    data = request.json or {}
+    bd_address = data.get('bd_address')
+    channel = data.get('channel', 10)
+    action = data.get('action', 'pb')  # pb=phonebook, rc=received calls, etc.
+
+    if not bd_address:
+        return jsonify({'status': 'error', 'error': 'BD address required'})
+
+    action_map = {
+        'pb': '-r',           # Read phonebook
+        'rc': '-s RC',        # Received calls
+        'dc': '-s DC',        # Dialed calls
+        'mc': '-s MC',        # Missed calls
+        'info': '-i',         # Device info
+        'sms': '-S',          # Read SMS (not always supported)
+    }
+
+    try:
+        cmd = ['bluesnarfer', '-b', bd_address, '-C', str(channel)]
+        if action in action_map:
+            cmd.extend(action_map[action].split())
+
+        add_log(f"Running Bluesnarfer {action} on {bd_address}", "INFO")
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+
+        return jsonify({
+            'status': 'success',
+            'bd_address': bd_address,
+            'action': action,
+            'output': result.stdout,
+            'raw': result.stdout + result.stderr
+        })
+    except FileNotFoundError:
+        return jsonify({'status': 'error', 'error': 'bluesnarfer not installed. apt install bluesnarfer'})
+    except subprocess.TimeoutExpired:
+        return jsonify({'status': 'error', 'error': 'Bluesnarfer timed out'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/kali/blueranger', methods=['POST'])
+@login_required
+def run_blueranger():
+    """Run BlueRanger for distance tracking."""
+    data = request.json or {}
+    bd_address = data.get('bd_address')
+    interface = data.get('interface', 'hci0')
+
+    if not bd_address:
+        return jsonify({'status': 'error', 'error': 'BD address required'})
+
+    try:
+        # BlueRanger is typically interactive, run a quick check
+        cmd = ['blueranger', interface, bd_address]
+        add_log(f"Running BlueRanger on {bd_address}", "INFO")
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+
+        return jsonify({
+            'status': 'success',
+            'bd_address': bd_address,
+            'output': result.stdout,
+            'raw': result.stdout + result.stderr
+        })
+    except FileNotFoundError:
+        return jsonify({'status': 'error', 'error': 'blueranger not installed. apt install blueranger'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/kali/btscanner/start', methods=['POST'])
+@login_required
+def start_btscanner():
+    """Start btscanner in background."""
+    global cyber_tool_processes
+    data = request.json or {}
+    interface = data.get('interface', 'hci0')
+
+    if 'btscanner' in cyber_tool_processes:
+        return jsonify({'status': 'error', 'error': 'btscanner already running'})
+
+    try:
+        # btscanner is ncurses-based, run with script to capture output
+        proc = subprocess.Popen(
+            ['btscanner', '-i', interface],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        cyber_tool_processes['btscanner'] = proc
+
+        add_log("Started btscanner", "INFO")
+        return jsonify({'status': 'started'})
+    except FileNotFoundError:
+        return jsonify({'status': 'error', 'error': 'btscanner not installed. apt install btscanner'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/kali/btscanner/stop', methods=['POST'])
+@login_required
+def stop_btscanner():
+    """Stop btscanner."""
+    global cyber_tool_processes
+    if 'btscanner' in cyber_tool_processes:
+        cyber_tool_processes['btscanner'].terminate()
+        del cyber_tool_processes['btscanner']
+        add_log("Stopped btscanner", "INFO")
+    return jsonify({'status': 'stopped'})
+
+
+@app.route('/api/kali/bluelog/start', methods=['POST'])
+@login_required
+def start_bluelog():
+    """Start Bluelog for passive device logging."""
+    global cyber_tool_processes
+    data = request.json or {}
+    interface = data.get('interface', 'hci0')
+    logfile = data.get('logfile', '/tmp/bluelog.log')
+    daemon = data.get('daemon', True)
+
+    if 'bluelog' in cyber_tool_processes:
+        return jsonify({'status': 'error', 'error': 'bluelog already running'})
+
+    try:
+        cmd = ['bluelog', '-i', interface, '-o', logfile]
+        if daemon:
+            cmd.append('-d')
+
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        cyber_tool_processes['bluelog'] = {'process': proc, 'logfile': logfile}
+
+        add_log(f"Started bluelog logging to {logfile}", "INFO")
+        return jsonify({'status': 'started', 'logfile': logfile})
+    except FileNotFoundError:
+        return jsonify({'status': 'error', 'error': 'bluelog not installed. apt install bluelog'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/kali/bluelog/stop', methods=['POST'])
+@login_required
+def stop_bluelog():
+    """Stop Bluelog and get results."""
+    global cyber_tool_processes
+    results = ''
+
+    if 'bluelog' in cyber_tool_processes:
+        proc_info = cyber_tool_processes['bluelog']
+        proc_info['process'].terminate()
+
+        # Read logfile
+        try:
+            with open(proc_info['logfile'], 'r') as f:
+                results = f.read()
+        except:
+            pass
+
+        del cyber_tool_processes['bluelog']
+        add_log("Stopped bluelog", "INFO")
+
+    return jsonify({'status': 'stopped', 'results': results})
+
+
+@app.route('/api/kali/obexftp/browse', methods=['POST'])
+@login_required
+def obexftp_browse():
+    """Browse OBEX FTP directory."""
+    data = request.json or {}
+    bd_address = data.get('bd_address')
+    channel = data.get('channel', 4)
+    path = data.get('path', '/')
+
+    if not bd_address:
+        return jsonify({'status': 'error', 'error': 'BD address required'})
+
+    try:
+        result = subprocess.run(
+            ['obexftp', '-b', bd_address, '-B', str(channel), '-l', path],
+            capture_output=True, text=True, timeout=60
+        )
+
+        return jsonify({
+            'status': 'success',
+            'bd_address': bd_address,
+            'path': path,
+            'listing': result.stdout,
+            'raw': result.stdout
+        })
+    except FileNotFoundError:
+        return jsonify({'status': 'error', 'error': 'obexftp not installed. apt install obexftp'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/kali/obexftp/get', methods=['POST'])
+@login_required
+def obexftp_get():
+    """Download file via OBEX FTP."""
+    data = request.json or {}
+    bd_address = data.get('bd_address')
+    channel = data.get('channel', 4)
+    remote_path = data.get('remote_path')
+
+    if not bd_address or not remote_path:
+        return jsonify({'status': 'error', 'error': 'BD address and remote path required'})
+
+    try:
+        local_path = f'/tmp/obex_{int(time.time())}_{os.path.basename(remote_path)}'
+        result = subprocess.run(
+            ['obexftp', '-b', bd_address, '-B', str(channel), '-g', remote_path, '-c', '/tmp'],
+            capture_output=True, text=True, timeout=120
+        )
+
+        return jsonify({
+            'status': 'success',
+            'bd_address': bd_address,
+            'remote_path': remote_path,
+            'local_path': local_path,
+            'output': result.stdout
+        })
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/kali/obexpush', methods=['POST'])
+@login_required
+def obex_push():
+    """Push file via OBEX OPP."""
+    data = request.json or {}
+    bd_address = data.get('bd_address')
+    channel = data.get('channel', 9)
+
+    if not bd_address:
+        return jsonify({'status': 'error', 'error': 'BD address required'})
+
+    if 'file' not in request.files:
+        return jsonify({'status': 'error', 'error': 'File required'})
+
+    try:
+        file = request.files['file']
+        temp_path = f'/tmp/obex_push_{int(time.time())}'
+        file.save(temp_path)
+
+        result = subprocess.run(
+            ['ussp-push', f'{bd_address}@{channel}', temp_path, file.filename],
+            capture_output=True, text=True, timeout=120
+        )
+
+        os.remove(temp_path)
+
+        if result.returncode == 0:
+            return jsonify({'status': 'success', 'message': 'File sent successfully'})
+        else:
+            return jsonify({'status': 'error', 'error': result.stderr or 'Push failed'})
+    except FileNotFoundError:
+        return jsonify({'status': 'error', 'error': 'ussp-push not installed. apt install ussp-push'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/kali/hciconfig', methods=['POST'])
+@login_required
+def run_hciconfig():
+    """Run hciconfig commands."""
+    data = request.json or {}
+    interface = data.get('interface', 'hci0')
+    command = data.get('command', '')
+
+    # Whitelist allowed commands
+    allowed_commands = [
+        '', 'up', 'down', 'reset', 'rstat', 'auth', 'noauth', 'encrypt', 'noencrypt',
+        'piscan', 'noscan', 'iscan', 'pscan', 'ptype', 'class', 'voice', 'iac',
+        'inqtpl', 'inqmode', 'inqdata', 'inqtype', 'pageparms', 'pageto', 'name',
+        'lm', 'lp', 'leadv', 'noleadv', 'lestates', 'version', 'revision', 'features',
+        'commands', 'block', 'unblock', 'lerandaddr'
+    ]
+
+    cmd_parts = command.split()
+    if cmd_parts and cmd_parts[0] not in allowed_commands:
+        return jsonify({'status': 'error', 'error': f'Command not allowed. Allowed: {", ".join(allowed_commands)}'})
+
+    try:
+        cmd = ['hciconfig', interface] + cmd_parts
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+
+        return jsonify({
+            'status': 'success',
+            'interface': interface,
+            'command': command,
+            'output': result.stdout,
+            'raw': result.stdout + result.stderr
+        })
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/kali/hcidump/start', methods=['POST'])
+@login_required
+def start_hcidump():
+    """Start hcidump for HCI packet capture."""
+    global cyber_tool_processes
+    data = request.json or {}
+    interface = data.get('interface', 'hci0')
+    raw_mode = data.get('raw', False)
+    ascii_mode = data.get('ascii', False)
+
+    if 'hcidump' in cyber_tool_processes:
+        return jsonify({'status': 'error', 'error': 'hcidump already running'})
+
+    try:
+        cmd = ['hcidump', '-i', interface]
+        if raw_mode:
+            cmd.append('-R')
+        if ascii_mode:
+            cmd.append('-a')
+
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        cyber_tool_processes['hcidump'] = {'process': proc, 'output': []}
+
+        add_log(f"Started hcidump on {interface}", "INFO")
+        return jsonify({'status': 'started'})
+    except FileNotFoundError:
+        return jsonify({'status': 'error', 'error': 'hcidump not installed. apt install bluez-hcidump'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/kali/hcidump/stop', methods=['POST'])
+@login_required
+def stop_hcidump():
+    """Stop hcidump and get output."""
+    global cyber_tool_processes
+    output = ''
+
+    if 'hcidump' in cyber_tool_processes:
+        proc_info = cyber_tool_processes['hcidump']
+        proc_info['process'].terminate()
+
+        try:
+            output, _ = proc_info['process'].communicate(timeout=2)
+        except:
+            pass
+
+        del cyber_tool_processes['hcidump']
+        add_log("Stopped hcidump", "INFO")
+
+    return jsonify({'status': 'stopped', 'output': output})
+
+
+@app.route('/api/kali/gatttool/discover', methods=['POST'])
+@login_required
+def gatttool_discover():
+    """Discover GATT services using gatttool."""
+    data = request.json or {}
+    bd_address = data.get('bd_address')
+    interface = data.get('interface', 'hci0')
+    random_addr = data.get('random', False)
+
+    if not bd_address:
+        return jsonify({'status': 'error', 'error': 'BD address required'})
+
+    try:
+        cmd = ['gatttool', '-i', interface, '-b', bd_address]
+        if random_addr:
+            cmd.append('-t')
+            cmd.append('random')
+        cmd.extend(['--primary'])
+
+        add_log(f"Discovering GATT services on {bd_address}", "INFO")
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+
+        # Parse services
+        services = []
+        for line in result.stdout.split('\n'):
+            match = re.search(r'attr handle:\s*(\S+),\s*end grp handle:\s*(\S+)\s*uuid:\s*(\S+)', line)
+            if match:
+                services.append({
+                    'start_handle': match.group(1),
+                    'end_handle': match.group(2),
+                    'uuid': match.group(3)
+                })
+
+        # Also update device as BLE type
+        emit_device_from_hci_output(bd_address, device_type='ble')
+
+        return jsonify({
+            'status': 'success',
+            'bd_address': bd_address,
+            'services': services,
+            'raw': result.stdout
+        })
+    except subprocess.TimeoutExpired:
+        return jsonify({'status': 'error', 'error': 'GATT discovery timed out'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/kali/gatttool/char', methods=['POST'])
+@login_required
+def gatttool_characteristics():
+    """List GATT characteristics."""
+    data = request.json or {}
+    bd_address = data.get('bd_address')
+    interface = data.get('interface', 'hci0')
+    start_handle = data.get('start_handle', '0x0001')
+    end_handle = data.get('end_handle', '0xffff')
+
+    if not bd_address:
+        return jsonify({'status': 'error', 'error': 'BD address required'})
+
+    try:
+        cmd = ['gatttool', '-i', interface, '-b', bd_address,
+               '--characteristics', '-s', start_handle, '-e', end_handle]
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+
+        # Parse characteristics
+        chars = []
+        for line in result.stdout.split('\n'):
+            match = re.search(r'handle:\s*(\S+),\s*char properties:\s*(\S+),\s*char value handle:\s*(\S+),\s*uuid:\s*(\S+)', line)
+            if match:
+                chars.append({
+                    'handle': match.group(1),
+                    'properties': match.group(2),
+                    'value_handle': match.group(3),
+                    'uuid': match.group(4)
+                })
+
+        return jsonify({
+            'status': 'success',
+            'bd_address': bd_address,
+            'characteristics': chars,
+            'raw': result.stdout
+        })
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/kali/gatttool/read', methods=['POST'])
+@login_required
+def gatttool_read():
+    """Read GATT characteristic value."""
+    data = request.json or {}
+    bd_address = data.get('bd_address')
+    handle = data.get('handle')
+    interface = data.get('interface', 'hci0')
+
+    if not bd_address or not handle:
+        return jsonify({'status': 'error', 'error': 'BD address and handle required'})
+
+    try:
+        result = subprocess.run(
+            ['gatttool', '-i', interface, '-b', bd_address, '--char-read', '-a', handle],
+            capture_output=True, text=True, timeout=15
+        )
+
+        # Parse value
+        match = re.search(r'Characteristic value/descriptor:\s*(.+)', result.stdout)
+        value = match.group(1).strip() if match else result.stdout.strip()
+
+        return jsonify({
+            'status': 'success',
+            'bd_address': bd_address,
+            'handle': handle,
+            'value': value,
+            'raw': result.stdout
+        })
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/kali/gatttool/write', methods=['POST'])
+@login_required
+def gatttool_write():
+    """Write GATT characteristic value."""
+    data = request.json or {}
+    bd_address = data.get('bd_address')
+    handle = data.get('handle')
+    value = data.get('value')
+    interface = data.get('interface', 'hci0')
+    write_req = data.get('write_req', False)  # True for write request, False for write command
+
+    if not bd_address or not handle or not value:
+        return jsonify({'status': 'error', 'error': 'BD address, handle, and value required'})
+
+    try:
+        cmd = ['gatttool', '-i', interface, '-b', bd_address]
+        if write_req:
+            cmd.extend(['--char-write-req', '-a', handle, '-n', value])
+        else:
+            cmd.extend(['--char-write', '-a', handle, '-n', value])
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+
+        return jsonify({
+            'status': 'success',
+            'bd_address': bd_address,
+            'handle': handle,
+            'value_written': value,
+            'raw': result.stdout
+        })
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/kali/bettercap/start', methods=['POST'])
+@login_required
+def start_bettercap_ble():
+    """Start Bettercap BLE scanning module."""
+    global cyber_tool_processes
+    data = request.json or {}
+
+    if 'bettercap' in cyber_tool_processes:
+        return jsonify({'status': 'error', 'error': 'bettercap already running'})
+
+    try:
+        # Start bettercap with BLE recon
+        proc = subprocess.Popen(
+            ['bettercap', '-eval', 'ble.recon on'],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        cyber_tool_processes['bettercap'] = proc
+
+        add_log("Started bettercap BLE recon", "INFO")
+        return jsonify({'status': 'started'})
+    except FileNotFoundError:
+        return jsonify({'status': 'error', 'error': 'bettercap not installed. apt install bettercap'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/kali/bettercap/stop', methods=['POST'])
+@login_required
+def stop_bettercap():
+    """Stop Bettercap."""
+    global cyber_tool_processes
+
+    if 'bettercap' in cyber_tool_processes:
+        cyber_tool_processes['bettercap'].terminate()
+        del cyber_tool_processes['bettercap']
+        add_log("Stopped bettercap", "INFO")
+
+    return jsonify({'status': 'stopped'})
+
+
+# ==================== RFCOMM TOOLS ====================
+
+@app.route('/api/rfcomm/bind', methods=['POST'])
+@login_required
+def rfcomm_bind():
+    """Bind RFCOMM channel to device."""
+    data = request.json or {}
+    dev_num = data.get('dev', 0)
+    bd_address = data.get('bd_address')
+    channel = data.get('channel', 1)
+
+    if not bd_address:
+        return jsonify({'status': 'error', 'error': 'BD address required'})
+
+    try:
+        result = subprocess.run(
+            ['rfcomm', 'bind', str(dev_num), bd_address, str(channel)],
+            capture_output=True, text=True, timeout=10
+        )
+
+        if result.returncode == 0:
+            add_log(f"Bound RFCOMM{dev_num} to {bd_address} channel {channel}", "INFO")
+            return jsonify({
+                'status': 'success',
+                'device': f'/dev/rfcomm{dev_num}',
+                'bd_address': bd_address,
+                'channel': channel
+            })
+        else:
+            return jsonify({'status': 'error', 'error': result.stderr or 'Bind failed'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/rfcomm/release', methods=['POST'])
+@login_required
+def rfcomm_release():
+    """Release RFCOMM device."""
+    data = request.json or {}
+    dev_num = data.get('dev', 0)
+
+    try:
+        result = subprocess.run(
+            ['rfcomm', 'release', str(dev_num)],
+            capture_output=True, text=True, timeout=10
+        )
+
+        add_log(f"Released RFCOMM{dev_num}", "INFO")
+        return jsonify({'status': 'success', 'device': f'/dev/rfcomm{dev_num}'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/rfcomm/show')
+@login_required
+def rfcomm_show():
+    """Show RFCOMM connections."""
+    try:
+        result = subprocess.run(['rfcomm', 'show'], capture_output=True, text=True, timeout=10)
+
+        # Parse connections
+        connections = []
+        for line in result.stdout.split('\n'):
+            match = re.search(r'rfcomm(\d+):\s*([0-9A-Fa-f:]{17})\s*channel\s*(\d+)\s*(\w+)', line)
+            if match:
+                connections.append({
+                    'device': f'/dev/rfcomm{match.group(1)}',
+                    'bd_address': match.group(2).upper(),
+                    'channel': int(match.group(3)),
+                    'state': match.group(4)
+                })
+
+        return jsonify({
+            'status': 'success',
+            'connections': connections,
+            'raw': result.stdout
+        })
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+# ==================== L2CAP TOOLS ====================
+
+@app.route('/api/l2ping', methods=['POST'])
+@login_required
+def l2ping_single():
+    """Single L2CAP ping."""
+    data = request.json or {}
+    bd_address = data.get('bd_address')
+    count = data.get('count', 1)
+    size = data.get('size', 44)
+    interface = data.get('interface', 'hci0')
+
+    if not bd_address:
+        return jsonify({'status': 'error', 'error': 'BD address required'})
+
+    try:
+        result = subprocess.run(
+            ['l2ping', '-i', interface, '-c', str(count), '-s', str(size), bd_address],
+            capture_output=True, text=True, timeout=count * 5 + 10
+        )
+
+        # Parse results
+        success = 'bytes from' in result.stdout
+        latencies = []
+        for line in result.stdout.split('\n'):
+            match = re.search(r'time=(\d+\.?\d*)', line)
+            if match:
+                latencies.append(float(match.group(1)))
+
+        # Update device as reachable
+        if success:
+            emit_device_from_hci_output(bd_address)
+
+        return jsonify({
+            'status': 'success',
+            'bd_address': bd_address,
+            'reachable': success,
+            'packets_sent': count,
+            'packets_received': len(latencies),
+            'latencies': latencies,
+            'avg_latency': sum(latencies) / len(latencies) if latencies else None,
+            'raw': result.stdout
+        })
+    except subprocess.TimeoutExpired:
+        return jsonify({'status': 'error', 'error': 'L2ping timed out - device may be unreachable'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
 # ==================== MAIN ====================
 
 def run_app():
