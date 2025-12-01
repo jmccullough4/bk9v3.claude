@@ -5836,3 +5836,642 @@ body.resizing-vertical * {
     stroke: var(--accent-warning);
     stroke-width: 3px;
 }
+
+/* ==================== CYBER TOOLS ARSENAL ==================== */
+
+/* Cyber Tools Navigation */
+.cyber-nav {
+    display: flex;
+    gap: 4px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border-color);
+    margin-bottom: 15px;
+    flex-wrap: wrap;
+}
+
+.cyber-nav-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    padding: 8px 12px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    min-width: 70px;
+}
+
+.cyber-nav-btn:hover {
+    background: rgba(0, 212, 255, 0.1);
+    border-color: var(--accent-primary);
+    color: var(--text-primary);
+}
+
+.cyber-nav-btn.active {
+    background: linear-gradient(135deg, rgba(0, 212, 255, 0.2), rgba(0, 153, 204, 0.2));
+    border-color: var(--accent-primary);
+    color: var(--accent-primary);
+    box-shadow: 0 0 10px rgba(0, 212, 255, 0.3);
+}
+
+.cyber-nav-icon {
+    font-size: 18px;
+}
+
+.cyber-nav-label {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* Cyber Status Banner */
+.cyber-status-banner {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 12px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    margin-bottom: 15px;
+}
+
+.cyber-status-banner .status-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+}
+
+.cyber-status-banner .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--text-muted);
+}
+
+.cyber-status-banner .status-dot.ready {
+    background: var(--accent-success);
+    box-shadow: 0 0 6px var(--accent-success);
+}
+
+.cyber-status-banner .status-dot.warning {
+    background: var(--accent-warning);
+    box-shadow: 0 0 6px var(--accent-warning);
+}
+
+.cyber-status-banner .status-dot.error {
+    background: var(--accent-danger);
+    box-shadow: 0 0 6px var(--accent-danger);
+}
+
+/* Cyber Categories */
+.cyber-category {
+    display: none;
+}
+
+.cyber-category.active {
+    display: block;
+}
+
+.cyber-category-header {
+    margin-bottom: 15px;
+}
+
+.cyber-category-header h3 {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--accent-primary);
+    margin-bottom: 5px;
+}
+
+.cyber-category-header p {
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+/* Cyber Tool Cards */
+.cyber-tool-card {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    margin-bottom: 12px;
+    overflow: hidden;
+    transition: all 0.2s ease;
+}
+
+.cyber-tool-card:hover {
+    border-color: var(--border-highlight);
+}
+
+.cyber-tool-card.exploit-card {
+    border-left: 3px solid var(--accent-danger);
+}
+
+.cyber-tool-card.exploit-card:hover {
+    border-color: rgba(255, 59, 48, 0.5);
+    box-shadow: 0 0 15px rgba(255, 59, 48, 0.1);
+}
+
+.tool-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 15px;
+    cursor: pointer;
+    background: linear-gradient(135deg, transparent, rgba(0, 212, 255, 0.02));
+    transition: background 0.2s ease;
+}
+
+.tool-card-header:hover {
+    background: linear-gradient(135deg, rgba(0, 212, 255, 0.05), rgba(0, 212, 255, 0.02));
+}
+
+.tool-info {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.tool-icon {
+    font-size: 20px;
+    width: 28px;
+    text-align: center;
+}
+
+.tool-name {
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--text-primary);
+}
+
+.tool-badge {
+    font-size: 9px;
+    font-weight: 600;
+    text-transform: uppercase;
+    padding: 2px 8px;
+    background: rgba(0, 212, 255, 0.15);
+    border: 1px solid rgba(0, 212, 255, 0.3);
+    border-radius: 10px;
+    color: var(--accent-primary);
+    letter-spacing: 0.5px;
+}
+
+.tool-badge.critical {
+    background: rgba(255, 59, 48, 0.15);
+    border-color: rgba(255, 59, 48, 0.3);
+    color: var(--accent-danger);
+}
+
+.tool-status {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-muted);
+    padding: 2px 8px;
+    background: var(--bg-secondary);
+    border-radius: 4px;
+}
+
+.tool-status.installed {
+    color: var(--accent-success);
+    background: rgba(48, 209, 88, 0.1);
+}
+
+.tool-status.missing {
+    color: var(--accent-danger);
+    background: rgba(255, 59, 48, 0.1);
+}
+
+.tool-status.running {
+    color: var(--accent-warning);
+    background: rgba(255, 176, 0, 0.1);
+    animation: pulse 1.5s infinite;
+}
+
+.tool-expand {
+    color: var(--text-muted);
+    font-size: 12px;
+    transition: transform 0.2s ease;
+}
+
+.tool-card-header.expanded .tool-expand {
+    transform: rotate(180deg);
+}
+
+.tool-card-body {
+    display: none;
+    padding: 15px;
+    border-top: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+}
+
+.cyber-tool-card.expanded .tool-card-body {
+    display: block;
+}
+
+.tool-desc {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: 12px;
+    line-height: 1.5;
+}
+
+.tool-options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.tool-requirements {
+    font-size: 11px;
+    padding: 8px 12px;
+    background: rgba(255, 176, 0, 0.1);
+    border: 1px solid rgba(255, 176, 0, 0.2);
+    border-radius: 4px;
+    margin-bottom: 12px;
+}
+
+.tool-requirements .req-label {
+    color: var(--accent-warning);
+    font-weight: 600;
+}
+
+.tool-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 12px;
+}
+
+.tool-output {
+    margin-top: 12px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+.tool-output-content {
+    padding: 10px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-secondary);
+    white-space: pre-wrap;
+    line-height: 1.4;
+}
+
+/* Vulnerability Info Box */
+.vuln-info {
+    margin-bottom: 12px;
+    padding: 10px;
+    background: rgba(255, 59, 48, 0.05);
+    border: 1px solid rgba(255, 59, 48, 0.2);
+    border-radius: 4px;
+}
+
+.vuln-item {
+    font-size: 11px;
+    padding: 4px 0;
+    color: var(--text-secondary);
+    display: flex;
+    gap: 8px;
+}
+
+.vuln-id {
+    font-family: var(--font-mono);
+    font-weight: 600;
+    color: var(--accent-danger);
+    min-width: 110px;
+}
+
+/* Spectrum Display */
+.spectrum-display {
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 10px;
+    margin-bottom: 12px;
+}
+
+#spectrumCanvas {
+    width: 100%;
+    height: 150px;
+    background: linear-gradient(180deg,
+        rgba(0, 212, 255, 0.1) 0%,
+        rgba(0, 0, 0, 0) 100%
+    );
+    border-radius: 4px;
+}
+
+/* Cyber Warning */
+.cyber-warning {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 10px 12px;
+    background: rgba(255, 176, 0, 0.1);
+    border: 1px solid rgba(255, 176, 0, 0.3);
+    border-radius: 4px;
+    margin: 10px 0;
+    font-size: 11px;
+    color: var(--accent-warning);
+}
+
+.cyber-warning .warning-icon {
+    font-size: 14px;
+}
+
+/* Authorization Warning Footer */
+.cyber-auth-warning {
+    margin-top: 20px;
+    padding: 15px;
+    background: linear-gradient(135deg, rgba(255, 59, 48, 0.1), rgba(255, 59, 48, 0.05));
+    border: 1px solid rgba(255, 59, 48, 0.3);
+    border-radius: 8px;
+    text-align: center;
+}
+
+.cyber-auth-warning .warning-icon {
+    font-size: 24px;
+    color: var(--accent-danger);
+}
+
+.cyber-auth-warning strong {
+    display: block;
+    color: var(--accent-danger);
+    font-size: 14px;
+    margin: 8px 0;
+    letter-spacing: 1px;
+}
+
+.cyber-auth-warning p {
+    font-size: 11px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+    max-width: 600px;
+    margin: 0 auto;
+}
+
+/* Input with Button */
+.input-with-btn {
+    display: flex;
+    gap: 6px;
+}
+
+.input-with-btn .input {
+    flex: 1;
+}
+
+.input-with-btn .btn-sm {
+    padding: 6px 10px;
+    min-width: auto;
+}
+
+/* Form Rows in Cyber Tools */
+.cyber-tool-card .form-row {
+    margin-bottom: 10px;
+}
+
+.cyber-tool-card .form-row label {
+    display: block;
+    font-size: 11px;
+    color: var(--text-secondary);
+    margin-bottom: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.cyber-tool-card .input {
+    width: 100%;
+    padding: 8px 10px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 12px;
+}
+
+.cyber-tool-card .input:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 8px rgba(0, 212, 255, 0.2);
+}
+
+.cyber-tool-card .textarea {
+    min-height: 80px;
+    resize: vertical;
+}
+
+.cyber-tool-card select.input {
+    cursor: pointer;
+}
+
+/* Cyber Tool Status Info */
+.cyber-tool-status {
+    display: flex;
+    gap: 20px;
+    padding: 10px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    margin-bottom: 12px;
+}
+
+.cyber-tool-status .status-row {
+    display: flex;
+    gap: 8px;
+    font-size: 11px;
+}
+
+.cyber-tool-status .status-label {
+    color: var(--text-muted);
+}
+
+.cyber-tool-status .status-value {
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+}
+
+/* Pulse Animation for Running Tools */
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
+
+@keyframes glow-pulse {
+    0%, 100% {
+        box-shadow: 0 0 5px rgba(0, 212, 255, 0.3);
+    }
+    50% {
+        box-shadow: 0 0 15px rgba(0, 212, 255, 0.6);
+    }
+}
+
+.cyber-tool-card.running {
+    border-color: var(--accent-primary);
+    animation: glow-pulse 2s infinite;
+}
+
+/* Tool Card Collapse Animation */
+.tool-card-body {
+    animation: slideDown 0.2s ease-out;
+}
+
+@keyframes slideDown {
+    from {
+        opacity: 0;
+        transform: translateY(-10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* Scrollbar for Tool Output */
+.tool-output::-webkit-scrollbar {
+    width: 6px;
+}
+
+.tool-output::-webkit-scrollbar-track {
+    background: var(--bg-primary);
+}
+
+.tool-output::-webkit-scrollbar-thumb {
+    background: var(--border-color);
+    border-radius: 3px;
+}
+
+.tool-output::-webkit-scrollbar-thumb:hover {
+    background: var(--accent-primary);
+}
+
+/* Tool Output Lines */
+.tool-output-line {
+    padding: 2px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.tool-output-line.success {
+    color: var(--accent-success);
+}
+
+.tool-output-line.error {
+    color: var(--accent-danger);
+}
+
+.tool-output-line.warning {
+    color: var(--accent-warning);
+}
+
+.tool-output-line.info {
+    color: var(--accent-primary);
+}
+
+/* Featured Tool - BlueToolkit */
+.cyber-tool-card.featured-tool {
+    border: 2px solid var(--accent-primary);
+    background: linear-gradient(135deg, rgba(0, 212, 255, 0.05), rgba(0, 153, 204, 0.02));
+    box-shadow: 0 0 20px rgba(0, 212, 255, 0.15);
+}
+
+.cyber-tool-card.featured-tool .tool-card-header {
+    background: linear-gradient(135deg, rgba(0, 212, 255, 0.1), rgba(0, 153, 204, 0.05));
+}
+
+.bluetoolkit-stats {
+    display: flex;
+    gap: 20px;
+    padding: 15px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    margin-bottom: 15px;
+    justify-content: center;
+}
+
+.bluetoolkit-stats .stat-item {
+    text-align: center;
+    padding: 0 15px;
+    border-right: 1px solid var(--border-color);
+}
+
+.bluetoolkit-stats .stat-item:last-child {
+    border-right: none;
+}
+
+.bluetoolkit-stats .stat-num {
+    display: block;
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--accent-primary);
+    font-family: var(--font-mono);
+}
+
+.bluetoolkit-stats .stat-label {
+    display: block;
+    font-size: 10px;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-top: 4px;
+}
+
+/* Multiple select styling */
+select[multiple].input {
+    height: auto;
+    padding: 5px;
+}
+
+select[multiple].input option {
+    padding: 4px 8px;
+    margin: 1px 0;
+    border-radius: 3px;
+}
+
+select[multiple].input option:checked {
+    background: var(--accent-primary);
+    color: var(--bg-primary);
+}
+
+select[multiple].input optgroup {
+    font-weight: 600;
+    color: var(--accent-warning);
+    padding: 8px 0 4px 0;
+}
+
+/* Mobile Responsive */
+@media (max-width: 768px) {
+    .cyber-nav {
+        justify-content: center;
+    }
+
+    .cyber-nav-btn {
+        padding: 6px 8px;
+        min-width: 55px;
+    }
+
+    .cyber-nav-icon {
+        font-size: 16px;
+    }
+
+    .cyber-nav-label {
+        font-size: 9px;
+    }
+
+    .tool-info {
+        flex-wrap: wrap;
+    }
+
+    .tool-badge {
+        font-size: 8px;
+    }
+}

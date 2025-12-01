@@ -10829,6 +10829,1158 @@ def linkkey_extract():
         })
 
 
+# ==================== CYBER TOOLS ARSENAL API ====================
+
+# Define known cyber tools and their installation paths
+CYBER_TOOLS = {
+    'bluetoolkit': {'cmd': 'bluekit', 'install': 'git clone https://github.com/sgxgsx/BlueToolkit --recurse-submodules && sudo ./BlueToolkit/install.sh'},
+    'blue_hydra': {'cmd': 'blue_hydra', 'install': 'git clone https://github.com/ZeroChaos-/blue_hydra.git'},
+    'blesuite': {'cmd': 'blesuite', 'install': 'pip3 install blesuite'},
+    'bleah': {'cmd': 'bleah', 'install': 'pip3 install bleah'},
+    'btlejack': {'cmd': 'btlejack', 'install': 'pip3 install btlejack'},
+    'crackle': {'cmd': 'crackle', 'install': 'apt install crackle'},
+    'ubertooth': {'cmd': 'ubertooth-btle', 'install': 'apt install ubertooth'},
+    'blueborne': {'cmd': None, 'install': 'git clone https://github.com/ArmisLabs/blueborne-scanner.git'},
+    'btlejuice': {'cmd': 'btlejuice', 'install': 'npm install -g btlejuice'},
+    'gattacker': {'cmd': None, 'install': 'git clone https://github.com/securing/gattacker.git'},
+    'btproxy': {'cmd': 'btproxy', 'install': 'pip3 install btproxy'},
+    'internalblue': {'cmd': 'internalblue', 'install': 'pip3 install internalblue'},
+    'frankenstein': {'cmd': None, 'install': 'git clone https://github.com/InternalBlue/frankenstein.git'},
+    'polypyus': {'cmd': 'polypyus', 'install': 'pip3 install polypyus'},
+    'bdaddr': {'cmd': 'bdaddr', 'install': 'apt install bluez-utils'},
+    'spooftooph': {'cmd': 'spooftooph', 'install': 'apt install spooftooph'},
+    'redfang': {'cmd': 'redfang', 'install': 'apt install redfang'},
+    'uberducky': {'cmd': None, 'install': 'git clone https://github.com/mikeryan/uberducky.git'},
+}
+
+# Track running cyber tool processes
+cyber_tool_processes = {}
+
+
+@app.route('/api/cyber/tools/status')
+@login_required
+def cyber_tools_status():
+    """Check installation status of cyber tools."""
+    tools_status = {}
+    installed_count = 0
+
+    for tool_name, tool_info in CYBER_TOOLS.items():
+        if tool_info['cmd']:
+            # Check if command exists
+            result = subprocess.run(['which', tool_info['cmd']], capture_output=True)
+            installed = result.returncode == 0
+        else:
+            # For tools without commands, check common paths
+            installed = os.path.exists(f'/opt/{tool_name}') or os.path.exists(f'/usr/share/{tool_name}')
+
+        tools_status[tool_name] = installed
+        if installed:
+            installed_count += 1
+
+    status = 'ready' if installed_count == len(CYBER_TOOLS) else 'partial' if installed_count > 0 else 'none'
+
+    return jsonify({
+        'status': status,
+        'tools': tools_status,
+        'installed_count': installed_count,
+        'total_count': len(CYBER_TOOLS)
+    })
+
+
+@app.route('/api/cyber/tools/install', methods=['POST'])
+@login_required
+def install_cyber_tool():
+    """Install a cyber tool."""
+    data = request.json
+    tool_name = data.get('tool')
+
+    if tool_name not in CYBER_TOOLS:
+        return jsonify({'status': 'error', 'error': f'Unknown tool: {tool_name}'})
+
+    tool_info = CYBER_TOOLS[tool_name]
+    install_cmd = tool_info['install']
+
+    add_log(f"Installing cyber tool: {tool_name}", "INFO")
+
+    try:
+        # Run installation command
+        result = subprocess.run(install_cmd.split(), capture_output=True, text=True, timeout=300)
+        if result.returncode == 0:
+            add_log(f"Successfully installed {tool_name}", "INFO")
+            return jsonify({'status': 'success'})
+        else:
+            add_log(f"Failed to install {tool_name}: {result.stderr}", "ERROR")
+            return jsonify({'status': 'error', 'error': result.stderr})
+    except Exception as e:
+        add_log(f"Install error for {tool_name}: {e}", "ERROR")
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+# ==================== RECON TOOLS API ====================
+
+@app.route('/api/cyber/recon/blue_hydra/start', methods=['POST'])
+@login_required
+def start_blue_hydra():
+    """Start Blue Hydra discovery."""
+    global cyber_tool_processes
+    data = request.json
+    use_ubertooth = data.get('ubertooth', True)
+    passive = data.get('passive', False)
+
+    if 'blue_hydra' in cyber_tool_processes:
+        return jsonify({'status': 'error', 'error': 'Blue Hydra already running'})
+
+    cmd = ['blue_hydra']
+    if not use_ubertooth:
+        cmd.append('--bt-only')
+    if passive:
+        cmd.append('--passive')
+
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        cyber_tool_processes['blue_hydra'] = proc
+        add_log("Started Blue Hydra", "INFO")
+        return jsonify({'status': 'started'})
+    except FileNotFoundError:
+        return jsonify({'status': 'error', 'error': 'Blue Hydra not installed'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/cyber/recon/blue_hydra/stop', methods=['POST'])
+@login_required
+def stop_blue_hydra():
+    """Stop Blue Hydra."""
+    global cyber_tool_processes
+    if 'blue_hydra' in cyber_tool_processes:
+        cyber_tool_processes['blue_hydra'].terminate()
+        del cyber_tool_processes['blue_hydra']
+        add_log("Stopped Blue Hydra", "INFO")
+    return jsonify({'status': 'stopped'})
+
+
+@app.route('/api/cyber/recon/blesuite/run', methods=['POST'])
+@login_required
+def run_blesuite():
+    """Run BLESuite scan."""
+    data = request.json
+    target = data.get('target')
+    scan_type = data.get('scan_type', 'enum')
+
+    try:
+        cmd = ['blesuite']
+        if scan_type == 'enum':
+            cmd.extend(['-e', target])
+        elif scan_type == 'read':
+            cmd.extend(['-r', target])
+        elif scan_type == 'fuzz':
+            cmd.extend(['-f', target])
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        return jsonify({'status': 'success', 'output': result.stdout})
+    except FileNotFoundError:
+        return jsonify({'status': 'error', 'error': 'BLESuite not installed'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/cyber/recon/bleah/run', methods=['POST'])
+@login_required
+def run_bleah():
+    """Run Bleah BLE scan."""
+    data = request.json
+    target = data.get('target', '')
+    enumerate = data.get('enumerate', True)
+    force = data.get('force', False)
+
+    try:
+        cmd = ['bleah', '-t', '0']  # No timeout
+        if target:
+            cmd.extend(['-b', target])
+        if enumerate:
+            cmd.append('-e')
+        if force:
+            cmd.append('-f')
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        return jsonify({'status': 'success', 'output': result.stdout})
+    except FileNotFoundError:
+        return jsonify({'status': 'error', 'error': 'Bleah not installed'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/cyber/recon/redfang/run', methods=['POST'])
+@login_required
+def run_redfang():
+    """Run Redfang hidden device scan."""
+    data = request.json
+    oui = data.get('oui', '').replace(':', '')
+    range_size = data.get('range', 16)
+
+    if len(oui) < 6:
+        return jsonify({'status': 'error', 'error': 'OUI must be at least 6 hex characters'})
+
+    # Redfang-style brute force using l2ping
+    found = []
+    oui = oui[:6].upper()
+
+    try:
+        for i in range(min(range_size, 256)):
+            test_addr = f"{oui[:2]}:{oui[2:4]}:{oui[4:6]}:{i:02X}:00:00"
+            result = subprocess.run(
+                ['l2ping', '-c', '1', '-t', '1', test_addr],
+                capture_output=True, text=True, timeout=3
+            )
+            if 'bytes from' in result.stdout:
+                found.append(test_addr)
+                add_log(f"Redfang found: {test_addr}", "INFO")
+
+        return jsonify({'status': 'success', 'found': found})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e), 'found': found})
+
+
+@app.route('/api/cyber/recon/spooftooph/run', methods=['POST'])
+@login_required
+def run_spooftooph():
+    """Clone a Bluetooth device profile."""
+    data = request.json
+    source = data.get('source')
+    interface = data.get('interface', 'hci0')
+
+    try:
+        # Get source device info
+        info_result = subprocess.run(
+            ['hcitool', '-i', interface, 'info', source],
+            capture_output=True, text=True, timeout=15
+        )
+
+        # Parse name and class
+        name = "Unknown"
+        for line in info_result.stdout.split('\n'):
+            if 'Device Name:' in line:
+                name = line.split(':')[1].strip()
+
+        # Use spooftooph or bdaddr to clone
+        try:
+            result = subprocess.run(
+                ['spooftooph', '-i', interface, '-a', source],
+                capture_output=True, text=True, timeout=30
+            )
+            success = result.returncode == 0
+        except FileNotFoundError:
+            # Fallback to bdaddr
+            result = subprocess.run(
+                ['bdaddr', '-i', interface, source],
+                capture_output=True, text=True, timeout=10
+            )
+            success = result.returncode == 0
+
+        if success:
+            return jsonify({
+                'status': 'success',
+                'cloned_name': name,
+                'new_address': source
+            })
+        else:
+            return jsonify({'status': 'error', 'error': result.stderr or 'Clone failed'})
+
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+# ==================== SNIFFING TOOLS API ====================
+
+spectrum_data = []
+spectrum_running = False
+
+
+@app.route('/api/cyber/sniff/spectrum/start', methods=['POST'])
+@login_required
+def start_spectrum():
+    """Start Ubertooth spectrum analyzer."""
+    global cyber_tool_processes, spectrum_running
+
+    try:
+        proc = subprocess.Popen(
+            ['ubertooth-specan', '-q'],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        cyber_tool_processes['spectrum'] = proc
+        spectrum_running = True
+        add_log("Started spectrum analyzer", "INFO")
+        return jsonify({'status': 'started'})
+    except FileNotFoundError:
+        return jsonify({'status': 'error', 'error': 'Ubertooth not installed'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/cyber/sniff/spectrum/stop', methods=['POST'])
+@login_required
+def stop_spectrum():
+    """Stop spectrum analyzer."""
+    global cyber_tool_processes, spectrum_running
+    if 'spectrum' in cyber_tool_processes:
+        cyber_tool_processes['spectrum'].terminate()
+        del cyber_tool_processes['spectrum']
+    spectrum_running = False
+    return jsonify({'status': 'stopped'})
+
+
+@app.route('/api/cyber/sniff/spectrum/data')
+@login_required
+def get_spectrum_data():
+    """Get current spectrum data."""
+    # Generate simulated spectrum data for demo (real impl would read from ubertooth)
+    import random
+    spectrum = [random.randint(0, 100) for _ in range(79)]  # 79 BT channels
+    return jsonify({'spectrum': spectrum})
+
+
+@app.route('/api/cyber/sniff/ubertooth_btle/start', methods=['POST'])
+@login_required
+def start_ubertooth_btle():
+    """Start Ubertooth BTLE sniffer."""
+    global cyber_tool_processes
+    data = request.json
+    mode = data.get('mode', 'follow')
+    target = data.get('target', '')
+    output_format = data.get('output_format', 'pcap')
+
+    cmd = ['ubertooth-btle']
+    if mode == 'follow':
+        cmd.append('-f')
+    elif mode == 'promiscuous':
+        cmd.append('-p')
+
+    if target:
+        cmd.extend(['-t', target])
+
+    pcap_file = f'/tmp/btle_capture_{int(time.time())}.pcap'
+    if output_format == 'pcap':
+        cmd.extend(['-c', pcap_file])
+
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        cyber_tool_processes['ubertooth_btle'] = {'proc': proc, 'pcap': pcap_file}
+        add_log("Started Ubertooth BTLE capture", "INFO")
+        return jsonify({'status': 'started', 'pcap_file': pcap_file})
+    except FileNotFoundError:
+        return jsonify({'status': 'error', 'error': 'Ubertooth not installed'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/cyber/sniff/ubertooth_btle/stop', methods=['POST'])
+@login_required
+def stop_ubertooth_btle():
+    """Stop Ubertooth BTLE sniffer."""
+    global cyber_tool_processes
+    pcap_file = None
+    if 'ubertooth_btle' in cyber_tool_processes:
+        cyber_tool_processes['ubertooth_btle']['proc'].terminate()
+        pcap_file = cyber_tool_processes['ubertooth_btle'].get('pcap')
+        del cyber_tool_processes['ubertooth_btle']
+        add_log("Stopped Ubertooth BTLE capture", "INFO")
+    return jsonify({'status': 'stopped', 'pcap_file': pcap_file})
+
+
+@app.route('/api/cyber/sniff/btlejack/run', methods=['POST'])
+@login_required
+def run_btlejack():
+    """Run BTLEJack."""
+    data = request.json
+    mode = data.get('mode', 'sniff')
+    access_address = data.get('access_address', '')
+
+    cmd = ['btlejack']
+    if mode == 'sniff':
+        cmd.append('-s')
+    elif mode == 'jam':
+        cmd.append('-j')
+    elif mode == 'hijack':
+        cmd.append('-h')
+
+    if access_address:
+        cmd.extend(['-a', access_address])
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        return jsonify({'status': 'success', 'output': result.stdout})
+    except FileNotFoundError:
+        return jsonify({'status': 'error', 'error': 'BTLEJack not installed'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/cyber/sniff/crackle/run', methods=['POST'])
+@login_required
+def run_crackle():
+    """Run Crackle to crack BLE encryption."""
+    if 'pcap' not in request.files:
+        return jsonify({'status': 'error', 'error': 'No PCAP file uploaded'})
+
+    pcap_file = request.files['pcap']
+    decrypt = request.form.get('decrypt', 'true') == 'true'
+
+    # Save uploaded file
+    tmp_pcap = f'/tmp/crackle_input_{int(time.time())}.pcap'
+    pcap_file.save(tmp_pcap)
+
+    cmd = ['crackle', '-i', tmp_pcap]
+    if decrypt:
+        output_pcap = f'/tmp/crackle_decrypted_{int(time.time())}.pcap'
+        cmd.extend(['-o', output_pcap])
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+
+        # Parse LTK from output
+        ltk = None
+        for line in result.stdout.split('\n'):
+            if 'LTK' in line or 'ltk' in line.lower():
+                ltk = line.split(':')[-1].strip() if ':' in line else line.strip()
+
+        response = {'status': 'success'}
+        if ltk:
+            response['ltk'] = ltk
+        if decrypt and os.path.exists(output_pcap):
+            response['decrypted_file'] = output_pcap
+
+        return jsonify(response)
+    except FileNotFoundError:
+        return jsonify({'status': 'error', 'error': 'Crackle not installed'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+    finally:
+        if os.path.exists(tmp_pcap):
+            os.remove(tmp_pcap)
+
+
+# ==================== EXPLOIT TOOLS API ====================
+
+# BlueToolkit exploits list
+BLUETOOLKIT_EXPLOITS = [
+    {'name': 'my_name_is_keyboard', 'category': 'Critical', 'type': 'RCE', 'verification': 'Semi-automated'},
+    {'name': 'cve_2017_0785', 'category': 'Critical', 'type': 'Memory leak', 'verification': 'Automated'},
+    {'name': 'cve_2018_19860', 'category': 'Critical', 'type': 'Memory execution', 'verification': 'Automated'},
+    {'name': 'cve_2017_1000251', 'category': 'Critical', 'type': 'RCE/DoS', 'verification': 'Automated'},
+    {'name': 'cve_2020_12351', 'category': 'Critical', 'type': 'RCE/DoS', 'verification': 'Automated'},
+    {'name': 'cve_2020_24490', 'category': 'Critical', 'type': 'DoS', 'verification': 'Automated'},
+    {'name': 'cve_2017_1000250', 'category': 'Critical', 'type': 'Info leak', 'verification': 'Automated'},
+    {'name': 'cve_2020_12352', 'category': 'Critical', 'type': 'Info leak', 'verification': 'Automated'},
+    {'name': 'knob', 'category': 'MitM', 'type': 'MitM', 'verification': 'Semi-automated'},
+    {'name': 'bias', 'category': 'MitM', 'type': 'MitM', 'verification': 'Automated'},
+    {'name': 'nino', 'category': 'MitM', 'type': 'MitM', 'verification': 'Semi-automated'},
+    {'name': 'method_confusion', 'category': 'MitM', 'type': 'MitM', 'verification': 'Automated'},
+    {'name': 'cve_2018_5383', 'category': 'MitM', 'type': 'MitM', 'verification': 'Automated'},
+    {'name': 'legacy_pairing', 'category': 'MitM', 'type': 'MitM', 'verification': 'Automated'},
+    {'name': 'invalid_max_slot', 'category': 'DoS', 'type': 'DoS', 'verification': 'Automated'},
+    {'name': 'duplicated_iocap', 'category': 'DoS', 'type': 'DoS', 'verification': 'Automated'},
+    {'name': 'truncated_sco_request', 'category': 'DoS', 'type': 'DoS', 'verification': 'Automated'},
+    {'name': 'feature_resp_flooding', 'category': 'DoS', 'type': 'DoS', 'verification': 'Automated'},
+    {'name': 'lmp_auto_rate_overflow', 'category': 'DoS', 'type': 'DoS', 'verification': 'Automated'},
+    {'name': 'lmp_overflow_2dh1', 'category': 'DoS', 'type': 'DoS', 'verification': 'Automated'},
+    {'name': 'lmp_overflow_dm1', 'category': 'DoS', 'type': 'DoS', 'verification': 'Automated'},
+    {'name': 'truncated_lmp_accepted', 'category': 'DoS', 'type': 'DoS', 'verification': 'Automated'},
+    {'name': 'invalid_setup_complete', 'category': 'DoS', 'type': 'DoS', 'verification': 'Automated'},
+    {'name': 'host_conn_flooding', 'category': 'DoS', 'type': 'DoS', 'verification': 'Automated'},
+    {'name': 'same_host_connection', 'category': 'DoS', 'type': 'DoS', 'verification': 'Automated'},
+    {'name': 'au_rand_flooding', 'category': 'DoS', 'type': 'DoS', 'verification': 'Automated'},
+    {'name': 'max_slot_length_overflow', 'category': 'DoS', 'type': 'DoS', 'verification': 'Automated'},
+    {'name': 'invalid_timing_accuracy', 'category': 'DoS', 'type': 'DoS', 'verification': 'Automated'},
+    {'name': 'paging_scan_deadlock', 'category': 'DoS', 'type': 'DoS', 'verification': 'Automated'},
+    {'name': 'feature_req_ping_pong', 'category': 'DoS', 'type': 'DoS', 'verification': 'Automated'},
+    {'name': 'sdp_unknown_element', 'category': 'DoS', 'type': 'DoS', 'verification': 'Automated'},
+    {'name': 'sdp_oversized_element', 'category': 'DoS', 'type': 'DoS', 'verification': 'Automated'},
+    {'name': 'lmp_invalid_transport', 'category': 'DoS', 'type': 'DoS', 'verification': 'Automated'},
+    {'name': 'sc_not_supported', 'category': 'Chaining', 'type': 'Info', 'verification': 'Automated'},
+    {'name': 'always_pairable', 'category': 'Chaining', 'type': 'Chaining', 'verification': 'Manual'},
+]
+
+
+@app.route('/api/cyber/exploit/bluetoolkit/run', methods=['POST'])
+@login_required
+def run_bluetoolkit():
+    """Run BlueToolkit vulnerability scan."""
+    data = request.json
+    target = data.get('target')
+    mode = data.get('mode', 'all')
+    hardware = data.get('hardware', 'auto')
+    checkpoint = data.get('checkpoint', False)
+    report = data.get('report', True)
+    exploits = data.get('exploits', [])
+
+    add_log(f"BlueToolkit scan: {target} (mode: {mode})", "INFO")
+
+    cmd = ['bluekit', '-t', target]
+
+    if mode == 'recon':
+        cmd.append('-r')
+    elif mode == 'quick':
+        # Only critical exploits
+        cmd.extend(['-e', 'my_name_is_keyboard', 'cve_2017_0785', 'cve_2020_12351', 'knob'])
+    elif mode == 'automotive':
+        # Automotive-focused exploits
+        cmd.extend(['-e', 'nino', 'knob', 'bias', 'invalid_max_slot', 'au_rand_flooding'])
+    elif mode == 'custom' and exploits:
+        cmd.extend(['-e'] + exploits)
+
+    if checkpoint:
+        cmd.append('-ch')
+
+    if report:
+        cmd.append('-re')
+
+    if hardware != 'auto':
+        cmd.extend(['-hh', hardware])
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+
+        # Parse output for vulnerabilities
+        vulnerabilities = []
+        for line in result.stdout.split('\n'):
+            if 'VULNERABLE' in line.upper() or 'FOUND' in line.upper():
+                vulnerabilities.append({
+                    'name': line.strip(),
+                    'severity': 'Critical' if 'RCE' in line or 'CVE-2017' in line else 'Medium',
+                    'description': line.strip()
+                })
+
+        report_file = None
+        if report:
+            report_file = f'/tmp/bluetoolkit_report_{target.replace(":", "")}_{int(time.time())}.json'
+
+        return jsonify({
+            'status': 'success',
+            'vulnerabilities': vulnerabilities,
+            'output': result.stdout,
+            'report_file': report_file if report else None
+        })
+
+    except FileNotFoundError:
+        return jsonify({
+            'status': 'error',
+            'error': 'BlueToolkit not installed. Run: git clone https://github.com/sgxgsx/BlueToolkit && sudo ./BlueToolkit/install.sh'
+        })
+    except subprocess.TimeoutExpired:
+        return jsonify({'status': 'error', 'error': 'Scan timed out after 10 minutes'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/cyber/exploit/bluetoolkit/recon', methods=['POST'])
+@login_required
+def bluetoolkit_recon():
+    """Run BlueToolkit reconnaissance."""
+    data = request.json
+    target = data.get('target')
+
+    add_log(f"BlueToolkit recon: {target}", "INFO")
+
+    try:
+        # Run bluekit recon
+        result = subprocess.run(
+            ['bluekit', '-t', target, '-r'],
+            capture_output=True, text=True, timeout=120
+        )
+
+        # Also get basic info using hcitool
+        info = {}
+        try:
+            hci_result = subprocess.run(
+                ['hcitool', 'info', target],
+                capture_output=True, text=True, timeout=15
+            )
+            for line in hci_result.stdout.split('\n'):
+                if 'Device Name:' in line:
+                    info['device_name'] = line.split(':')[1].strip()
+                elif 'LMP Version:' in line:
+                    info['bt_version'] = line.split(':')[1].strip()
+                elif 'Manufacturer:' in line:
+                    info['manufacturer'] = line.split(':')[1].strip()
+        except:
+            pass
+
+        # Get services
+        services = []
+        try:
+            sdp_result = subprocess.run(
+                ['sdptool', 'browse', target],
+                capture_output=True, text=True, timeout=30
+            )
+            for line in sdp_result.stdout.split('\n'):
+                if 'Service Name:' in line:
+                    services.append(line.split(':')[1].strip())
+        except:
+            pass
+
+        # Check for SC support
+        sc_supported = False
+        if 'Secure Connections' in result.stdout or 'SC supported' in result.stdout:
+            sc_supported = True
+
+        return jsonify({
+            'status': 'success',
+            'device_name': info.get('device_name', 'Unknown'),
+            'bt_version': info.get('bt_version', 'Unknown'),
+            'manufacturer': info.get('manufacturer', 'Unknown'),
+            'services': services,
+            'sc_supported': sc_supported,
+            'raw_output': result.stdout
+        })
+
+    except FileNotFoundError:
+        # Fallback to basic hcitool
+        try:
+            info_result = subprocess.run(
+                ['hcitool', 'info', target],
+                capture_output=True, text=True, timeout=15
+            )
+            info = {}
+            for line in info_result.stdout.split('\n'):
+                if 'Device Name:' in line:
+                    info['device_name'] = line.split(':')[1].strip()
+                elif 'LMP Version:' in line:
+                    info['bt_version'] = line.split(':')[1].strip()
+
+            return jsonify({
+                'status': 'success',
+                'device_name': info.get('device_name', 'Unknown'),
+                'bt_version': info.get('bt_version', 'Unknown'),
+                'services': [],
+                'sc_supported': None
+            })
+        except Exception as e:
+            return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/cyber/exploit/bluetoolkit/list')
+@login_required
+def list_bluetoolkit_exploits():
+    """List available BlueToolkit exploits."""
+    return jsonify({
+        'status': 'success',
+        'exploits': BLUETOOLKIT_EXPLOITS
+    })
+
+
+@app.route('/api/cyber/exploit/blueborne/scan', methods=['POST'])
+@login_required
+def blueborne_scan():
+    """Scan for BlueBorne vulnerabilities."""
+    data = request.json
+    target = data.get('target')
+
+    add_log(f"BlueBorne scan: {target}", "INFO")
+
+    vulnerabilities = []
+    device_info = "Unknown"
+
+    try:
+        # Get device info first
+        info_result = subprocess.run(
+            ['hcitool', 'info', target],
+            capture_output=True, text=True, timeout=15
+        )
+        if 'Device Name:' in info_result.stdout:
+            for line in info_result.stdout.split('\n'):
+                if 'Device Name:' in line:
+                    device_info = line.split(':')[1].strip()
+
+        # Check for CVE-2017-0785 (Android Info Leak)
+        try:
+            result = subprocess.run(
+                ['sdptool', 'browse', target],
+                capture_output=True, text=True, timeout=15
+            )
+            # Basic check - if SDP responds, device might be vulnerable
+            if result.returncode == 0 and 'BNEP' in result.stdout:
+                vulnerabilities.append({
+                    'cve': 'CVE-2017-0785',
+                    'description': 'Android Information Disclosure (SDP probe indicates BNEP service)'
+                })
+        except:
+            pass
+
+        # Check for L2CAP vulnerabilities
+        try:
+            l2_result = subprocess.run(
+                ['l2ping', '-c', '1', target],
+                capture_output=True, text=True, timeout=10
+            )
+            if l2_result.returncode == 0:
+                # Device responds to L2CAP - check for potential vulnerabilities
+                pass  # Real implementation would do deeper probing
+        except:
+            pass
+
+        return jsonify({
+            'status': 'success',
+            'vulnerabilities': vulnerabilities,
+            'device_info': device_info
+        })
+
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/cyber/exploit/knob/run', methods=['POST'])
+@login_required
+def run_knob_attack():
+    """Run KNOB attack (CVE-2019-9506)."""
+    data = request.json
+    target = data.get('target')
+    entropy_bytes = data.get('entropy_bytes', 1)
+
+    add_log(f"KNOB attack requested on {target} with {entropy_bytes}-byte entropy", "WARNING")
+
+    # Note: KNOB attack requires firmware-level support
+    # This is a placeholder that would require InternalBlue or similar
+    return jsonify({
+        'status': 'error',
+        'error': 'KNOB attack requires InternalBlue with compatible firmware. Setup Broadcom firmware patching first.'
+    })
+
+
+@app.route('/api/cyber/exploit/bias/run', methods=['POST'])
+@login_required
+def run_bias_attack():
+    """Run BIAS attack (CVE-2020-10135)."""
+    data = request.json
+    target = data.get('target')
+    impersonate = data.get('impersonate')
+
+    add_log(f"BIAS attack requested: impersonate {impersonate} to {target}", "WARNING")
+
+    # Note: BIAS attack requires firmware-level support
+    return jsonify({
+        'status': 'error',
+        'error': 'BIAS attack requires InternalBlue with compatible firmware patches.'
+    })
+
+
+@app.route('/api/cyber/exploit/sdp_leak/run', methods=['POST'])
+@login_required
+def run_sdp_leak():
+    """Extract SDP information from target."""
+    data = request.json
+    target = data.get('target')
+
+    try:
+        result = subprocess.run(
+            ['sdptool', 'browse', target],
+            capture_output=True, text=True, timeout=30
+        )
+
+        services = []
+        current_service = {}
+        for line in result.stdout.split('\n'):
+            if 'Service Name:' in line:
+                if current_service:
+                    services.append(current_service)
+                current_service = {'name': line.split(':')[1].strip()}
+            elif 'Service RecHandle:' in line:
+                current_service['uuid'] = line.split(':')[1].strip()
+
+        if current_service:
+            services.append(current_service)
+
+        return jsonify({
+            'status': 'success',
+            'services': services,
+            'device_info': target
+        })
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+# ==================== MITM TOOLS API ====================
+
+@app.route('/api/cyber/mitm/btlejuice/start', methods=['POST'])
+@login_required
+def start_btlejuice():
+    """Start BTLEJuice proxy."""
+    global cyber_tool_processes
+    data = request.json
+    target = data.get('target')
+    interface = data.get('interface', 'hci0')
+
+    try:
+        # Start BTLEJuice core
+        proc = subprocess.Popen(
+            ['btlejuice', '-i', interface, '-t', target],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        )
+        cyber_tool_processes['btlejuice'] = proc
+        add_log(f"Started BTLEJuice proxy for {target}", "INFO")
+        return jsonify({'status': 'started', 'port': 8080})
+    except FileNotFoundError:
+        return jsonify({'status': 'error', 'error': 'BTLEJuice not installed'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/cyber/mitm/btlejuice/stop', methods=['POST'])
+@login_required
+def stop_btlejuice():
+    """Stop BTLEJuice proxy."""
+    global cyber_tool_processes
+    if 'btlejuice' in cyber_tool_processes:
+        cyber_tool_processes['btlejuice'].terminate()
+        del cyber_tool_processes['btlejuice']
+    return jsonify({'status': 'stopped'})
+
+
+@app.route('/api/cyber/mitm/gattacker/run', methods=['POST'])
+@login_required
+def run_gattacker():
+    """Run GATTacker clone attack."""
+    data = request.json
+    target = data.get('target')
+    relay = data.get('relay', True)
+    log_traffic = data.get('log', True)
+
+    add_log(f"GATTacker: Cloning {target}", "INFO")
+
+    # GATTacker requires Node.js and is complex to automate
+    return jsonify({
+        'status': 'error',
+        'error': 'GATTacker requires manual setup. Run: cd /opt/gattacker && node ws-slave.js'
+    })
+
+
+@app.route('/api/cyber/mitm/btproxy/run', methods=['POST'])
+@login_required
+def run_btproxy():
+    """Run BT Proxy for Classic Bluetooth MITM."""
+    data = request.json
+    master = data.get('master')
+    slave = data.get('slave')
+
+    try:
+        cmd = ['btproxy', '-m', master, '-s', slave]
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        cyber_tool_processes['btproxy'] = proc
+        add_log(f"Started BT Proxy between {master} and {slave}", "INFO")
+        return jsonify({'status': 'success'})
+    except FileNotFoundError:
+        return jsonify({'status': 'error', 'error': 'btproxy not installed'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/cyber/mitm/ble_replay/run', methods=['POST'])
+@login_required
+def run_ble_replay():
+    """Replay captured BLE traffic."""
+    if 'capture' not in request.files:
+        return jsonify({'status': 'error', 'error': 'No capture file uploaded'})
+
+    capture = request.files['capture']
+    target = request.form.get('target', '')
+
+    # Save file
+    tmp_file = f'/tmp/ble_replay_{int(time.time())}'
+    capture.save(tmp_file)
+
+    # BLE replay would use gatttool or similar
+    return jsonify({
+        'status': 'error',
+        'error': 'BLE replay requires compatible capture format. Use BTLEJuice for interactive replay.'
+    })
+
+
+# ==================== INJECTION TOOLS API ====================
+
+@app.route('/api/cyber/inject/uberducky/run', methods=['POST'])
+@login_required
+def run_uberducky():
+    """Run Uberducky HID injection with Ubertooth."""
+    data = request.json
+    target = data.get('target')
+    script = data.get('script')
+
+    add_log(f"Uberducky injection to {target}", "INFO")
+
+    # Uberducky requires Ubertooth firmware modification
+    return jsonify({
+        'status': 'error',
+        'error': 'Uberducky requires Ubertooth with custom HID firmware. Use standard HID injection instead.'
+    })
+
+
+# ==================== FIRMWARE TOOLS API ====================
+
+@app.route('/api/cyber/firmware/internalblue/run', methods=['POST'])
+@login_required
+def run_internalblue():
+    """Run InternalBlue firmware tool."""
+    data = request.json
+    device = data.get('device', 'hci')
+    action = data.get('action', 'info')
+
+    cmd = ['python3', '-m', 'internalblue.cli']
+
+    if device == 'adb':
+        cmd.append('--adb')
+    elif device == 'ios':
+        cmd.append('--ios')
+    elif device == 'macos':
+        cmd.append('--macos')
+
+    try:
+        # Run info command
+        result = subprocess.run(cmd + ['info'], capture_output=True, text=True, timeout=30)
+        return jsonify({'status': 'success', 'output': result.stdout})
+    except FileNotFoundError:
+        return jsonify({'status': 'error', 'error': 'InternalBlue not installed. pip3 install internalblue'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/cyber/firmware/frankenstein/run', methods=['POST'])
+@login_required
+def run_frankenstein():
+    """Run Frankenstein firmware emulator."""
+    if 'firmware' not in request.files:
+        return jsonify({'status': 'error', 'error': 'No firmware file uploaded'})
+
+    mode = request.form.get('mode', 'emulate')
+
+    return jsonify({
+        'status': 'error',
+        'error': 'Frankenstein requires manual setup. See: https://github.com/seemoo-lab/frankenstein'
+    })
+
+
+@app.route('/api/cyber/firmware/polypyus/run', methods=['POST'])
+@login_required
+def run_polypyus():
+    """Run Polypyus binary analysis."""
+    if 'reference' not in request.files or 'target' not in request.files:
+        return jsonify({'status': 'error', 'error': 'Both reference and target binaries required'})
+
+    return jsonify({
+        'status': 'error',
+        'error': 'Polypyus requires GUI. Run: polypyus'
+    })
+
+
+# ==================== UTILITY TOOLS API ====================
+
+@app.route('/api/cyber/utils/bluefog/start', methods=['POST'])
+@login_required
+def start_bluefog():
+    """Start Bluefog device flooding."""
+    data = request.json
+    count = data.get('count', 10)
+    device_class = data.get('device_class', 'random')
+
+    add_log(f"Starting Bluefog with {count} devices", "INFO")
+
+    # Bluefog creates fake BT devices - requires special adapter support
+    # Using hciconfig class changes as alternative
+    return jsonify({
+        'status': 'error',
+        'error': 'Bluefog requires multiple adapters or special firmware. Use bdaddr for single device spoofing.'
+    })
+
+
+@app.route('/api/cyber/utils/bluefog/stop', methods=['POST'])
+@login_required
+def stop_bluefog():
+    """Stop Bluefog."""
+    return jsonify({'status': 'stopped'})
+
+
+@app.route('/api/cyber/utils/beacon/start', methods=['POST'])
+@login_required
+def start_beacon():
+    """Start BLE beacon broadcast."""
+    global cyber_tool_processes
+    data = request.json
+    beacon_type = data.get('type', 'ibeacon')
+    uuid = data.get('uuid', 'E2C56DB5-DFFB-48D2-B060-D0F5A71096E0')
+    url = data.get('url', '')
+    tx_power = data.get('tx_power', 'medium')
+
+    try:
+        # Use hcitool to create beacon
+        if beacon_type == 'ibeacon':
+            # iBeacon advertising data
+            uuid_bytes = uuid.replace('-', '')
+            cmd = f'hcitool -i hci0 cmd 0x08 0x0008 1e 02 01 1a 1a ff 4c 00 02 15 {uuid_bytes[:8]} {uuid_bytes[8:16]} {uuid_bytes[16:24]} {uuid_bytes[24:32]} 00 01 00 02 c5 00'
+        elif beacon_type == 'eddystone_url':
+            # Simplified Eddystone URL
+            cmd = 'hcitool -i hci0 cmd 0x08 0x0008 1f 02 01 06 03 03 aa fe 17 16 aa fe 10 f8 03 67 6f 6f 67 6c 65 07'
+        else:
+            cmd = 'hcitool -i hci0 cmd 0x08 0x0008 1e 02 01 1a 1a ff 4c 00 02 15 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 01 00 02 c5 00'
+
+        # Enable advertising
+        subprocess.run(['hciconfig', 'hci0', 'leadv', '3'], capture_output=True)
+        result = subprocess.run(cmd.split(), capture_output=True, text=True)
+
+        if result.returncode == 0:
+            cyber_tool_processes['beacon'] = True
+            add_log(f"Started {beacon_type} beacon", "INFO")
+            return jsonify({'status': 'started'})
+        else:
+            return jsonify({'status': 'error', 'error': result.stderr})
+
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/cyber/utils/beacon/stop', methods=['POST'])
+@login_required
+def stop_beacon():
+    """Stop beacon broadcast."""
+    global cyber_tool_processes
+    try:
+        subprocess.run(['hciconfig', 'hci0', 'noleadv'], capture_output=True)
+        if 'beacon' in cyber_tool_processes:
+            del cyber_tool_processes['beacon']
+        add_log("Stopped beacon", "INFO")
+    except:
+        pass
+    return jsonify({'status': 'stopped'})
+
+
+@app.route('/api/cyber/utils/bluepot/start', methods=['POST'])
+@login_required
+def start_bluepot():
+    """Start Bluetooth honeypot."""
+    data = request.json
+    emulate_sdp = data.get('emulate_sdp', True)
+    emulate_obex = data.get('emulate_obex', True)
+    emulate_hid = data.get('emulate_hid', False)
+
+    add_log("Starting Bluetooth honeypot", "INFO")
+
+    # Simple honeypot using sdptool to register services
+    try:
+        if emulate_sdp:
+            # Register some common services
+            subprocess.run(['sdptool', 'add', 'SP'], capture_output=True)
+        if emulate_obex:
+            subprocess.run(['sdptool', 'add', 'OPUSH'], capture_output=True)
+
+        # Make discoverable
+        subprocess.run(['hciconfig', 'hci0', 'piscan'], capture_output=True)
+
+        return jsonify({'status': 'started'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/cyber/utils/bluepot/stop', methods=['POST'])
+@login_required
+def stop_bluepot():
+    """Stop Bluetooth honeypot."""
+    try:
+        subprocess.run(['hciconfig', 'hci0', 'noscan'], capture_output=True)
+        add_log("Stopped Bluetooth honeypot", "INFO")
+    except:
+        pass
+    return jsonify({'status': 'stopped', 'attacks_logged': 0})
+
+
+@app.route('/api/cyber/utils/bdaddr/change', methods=['POST'])
+@login_required
+def change_bdaddr():
+    """Change Bluetooth adapter address."""
+    data = request.json
+    interface = data.get('interface', 'hci0')
+    new_address = data.get('new_address')
+
+    try:
+        # Bring interface down
+        subprocess.run(['hciconfig', interface, 'down'], capture_output=True)
+
+        # Change address
+        result = subprocess.run(
+            ['bdaddr', '-i', interface, new_address],
+            capture_output=True, text=True
+        )
+
+        # Bring interface back up
+        subprocess.run(['hciconfig', interface, 'up'], capture_output=True)
+
+        if result.returncode == 0 or 'Address changed' in result.stdout:
+            add_log(f"Changed {interface} address to {new_address}", "INFO")
+            return jsonify({'status': 'success'})
+        else:
+            return jsonify({'status': 'error', 'error': result.stderr or 'Address change failed'})
+
+    except FileNotFoundError:
+        return jsonify({'status': 'error', 'error': 'bdaddr not found. Install: apt install bluez-utils'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/cyber/utils/bdaddr/reset', methods=['POST'])
+@login_required
+def reset_bdaddr():
+    """Reset Bluetooth adapter to original address."""
+    data = request.json
+    interface = data.get('interface', 'hci0')
+
+    try:
+        # Reset by reloading driver
+        subprocess.run(['hciconfig', interface, 'reset'], capture_output=True)
+
+        # Get current address
+        result = subprocess.run(['hciconfig', interface], capture_output=True, text=True)
+        original = "Unknown"
+        for line in result.stdout.split('\n'):
+            if 'BD Address:' in line:
+                original = line.split('BD Address:')[1].split()[0].strip()
+
+        return jsonify({'status': 'success', 'original_address': original})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+l2ping_process = None
+
+
+@app.route('/api/cyber/utils/l2ping/flood', methods=['POST'])
+@login_required
+def start_l2ping_flood():
+    """Start L2ping flood test."""
+    global l2ping_process, cyber_tool_processes
+    data = request.json
+    target = data.get('target')
+    size = data.get('size', 44)
+    count = data.get('count', 100)
+
+    try:
+        cmd = ['l2ping', '-c', str(count), '-s', str(size), '-f', target]
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        cyber_tool_processes['l2ping'] = proc
+        add_log(f"Started L2ping flood to {target}", "WARNING")
+        return jsonify({'status': 'started'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)})
+
+
+@app.route('/api/cyber/utils/l2ping/stop', methods=['POST'])
+@login_required
+def stop_l2ping_flood():
+    """Stop L2ping flood."""
+    global cyber_tool_processes
+    packets_sent = 0
+    if 'l2ping' in cyber_tool_processes:
+        cyber_tool_processes['l2ping'].terminate()
+        del cyber_tool_processes['l2ping']
+    return jsonify({'status': 'stopped', 'packets_sent': packets_sent})
+
+
 # ==================== MAIN ====================
 
 def run_app():
