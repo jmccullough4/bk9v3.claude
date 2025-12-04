@@ -1801,15 +1801,13 @@ def scan_classic_bluetooth(interface='hci0'):
 
     # Fallback to bluetoothctl if btmgmt methods fail
     devices_found = []
-    device_rssi = {}
     seen_addresses = set()
 
     try:
         add_log(f"Fallback: bluetoothctl scan on {interface}", "INFO")
 
-        # Select the controller and power on
-        subprocess.run(['bluetoothctl', 'select', interface], capture_output=True, timeout=5)
-        subprocess.run(['bluetoothctl', 'power', 'on'], capture_output=True, timeout=5)
+    try:
+        add_log(f"Starting btmgmt scan on {interface} (Classic + LE)", "INFO")
 
         # Run scan using timeout command
         proc = subprocess.Popen(
@@ -1821,18 +1819,32 @@ def scan_classic_bluetooth(interface='hci0'):
         )
 
         try:
-            for line in iter(proc.stdout.readline, ''):
-                if not line:
-                    break
-                line = line.strip()
-                if not line:
-                    continue
+            result = subprocess.run(
+                ['btmgmt', '--index', hci_index, 'find'],
+                capture_output=True,
+                text=True,
+                timeout=15
+            )
 
-                # Parse [NEW] Device XX:XX:XX:XX:XX:XX Name
-                new_match = re.search(r'\[NEW\]\s+Device\s+([0-9A-Fa-f:]{17})\s*(.*)', line)
-                if new_match:
-                    bd_addr = new_match.group(1).upper()
-                    name = new_match.group(2).strip() or 'Unknown'
+            # Parse btmgmt find output
+            # Format: "hci0 dev_found: AA:BB:CC:DD:EE:FF type BR/EDR rssi -XX flags 0x0000 name DeviceName ..."
+            for line in result.stdout.split('\n'):
+                # Match device found lines
+                match = re.search(r'dev_found:\s*([0-9A-Fa-f:]{17})\s+type\s+(\S+)(?:\s+rssi\s+(-?\d+))?(?:.*?name\s+(.+?)(?:\s+eir_len|$))?', line, re.IGNORECASE)
+                if match:
+                    bd_addr = match.group(1).upper()
+                    dev_type_str = match.group(2).lower()
+                    rssi = int(match.group(3)) if match.group(3) else None
+                    name = match.group(4).strip() if match.group(4) else 'Unknown'
+
+                    # Determine device type from btmgmt output
+                    if 'br/edr' in dev_type_str:
+                        dev_type = 'classic'
+                    elif 'le' in dev_type_str:
+                        dev_type = 'ble'
+                    else:
+                        dev_type = 'unknown'
+
                     if bd_addr not in seen_addresses:
                         seen_addresses.add(bd_addr)
                         devices_found.append({
@@ -1840,7 +1852,7 @@ def scan_classic_bluetooth(interface='hci0'):
                             'device_name': name,
                             'device_type': 'unknown',
                             'manufacturer': get_manufacturer(bd_addr),
-                            'rssi': device_rssi.get(bd_addr)
+                            'rssi': rssi
                         })
 
                 # Parse RSSI changes
@@ -1863,11 +1875,10 @@ def scan_classic_bluetooth(interface='hci0'):
                         if dev['bd_address'] == bd_addr and name:
                             dev['device_name'] = name
 
-        except Exception as read_err:
-            add_log(f"Error reading scan output: {read_err}", "WARNING")
-        finally:
-            proc.terminate()
-            proc.wait()
+        except subprocess.TimeoutExpired:
+            add_log("BLE scan timeout", "WARNING")
+        except Exception as e:
+            add_log(f"BLE scan error: {e}", "WARNING")
 
         # Determine device types
         for dev in devices_found:
@@ -1876,9 +1887,6 @@ def scan_classic_bluetooth(interface='hci0'):
         add_log(f"Fallback scan found {len(devices_found)} devices", "INFO")
         return devices_found
 
-    except subprocess.TimeoutExpired:
-        add_log("Scan timeout", "WARNING")
-        return devices_found
     except Exception as e:
         add_log(f"Scan error: {str(e)}", "ERROR")
         return devices_found
