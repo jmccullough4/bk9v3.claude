@@ -6584,6 +6584,23 @@ select[multiple].input optgroup {
     border: 1px solid rgba(255, 0, 0, 0.3);
 }
 
+.sdr-status-badge.demo,
+.sdr-status-badge.demo-ready {
+    background: rgba(255, 165, 0, 0.2);
+    color: #ffa500;
+    border: 1px solid rgba(255, 165, 0, 0.3);
+    animation: pulse-orange 1.5s ease-in-out infinite;
+}
+
+.sdr-status-badge.demo-ready {
+    animation: none;
+}
+
+@keyframes pulse-orange {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
+
 .sdr-card-body {
     margin-bottom: 10px;
 }

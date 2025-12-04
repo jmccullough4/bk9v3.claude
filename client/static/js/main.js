@@ -10327,19 +10327,26 @@ function checkSdrStatus() {
             const serialEl = document.getElementById('hackrfSerial');
             const firmwareEl = document.getElementById('hackrfFirmware');
 
-            if (data.available) {
-                badge.textContent = data.scanning ? 'SCANNING' : 'READY';
-                badge.className = 'sdr-status-badge ' + (data.scanning ? 'scanning' : 'ready');
+            if (data.scanning) {
+                badge.textContent = data.demo_mode ? 'DEMO MODE' : 'SCANNING';
+                badge.className = 'sdr-status-badge ' + (data.demo_mode ? 'demo' : 'scanning');
+                document.getElementById('btnHackrfStart').disabled = true;
+                document.getElementById('btnHackrfStop').disabled = false;
+                document.getElementById('spectrumOverlay').classList.add('hidden');
+            } else if (data.available) {
+                badge.textContent = 'READY';
+                badge.className = 'sdr-status-badge ready';
                 serialEl.textContent = data.serial || '--';
                 firmwareEl.textContent = data.firmware || '--';
-
-                document.getElementById('btnHackrfStart').disabled = data.scanning;
-                document.getElementById('btnHackrfStop').disabled = !data.scanning;
+                document.getElementById('btnHackrfStart').disabled = false;
+                document.getElementById('btnHackrfStop').disabled = true;
             } else {
-                badge.textContent = 'NOT FOUND';
-                badge.className = 'sdr-status-badge offline';
-                serialEl.textContent = data.error || '--';
+                badge.textContent = 'DEMO READY';
+                badge.className = 'sdr-status-badge demo-ready';
+                serialEl.textContent = 'No hardware - Demo available';
                 firmwareEl.textContent = '--';
+                document.getElementById('btnHackrfStart').disabled = false;
+                document.getElementById('btnHackrfStop').disabled = true;
             }
         })
         .catch(() => {
@@ -10379,16 +10386,28 @@ function checkSdrStatus() {
  * Start HackRF continuous scanning
  */
 function startHackrfScan() {
-    fetch('/api/hackrf/scan/start', { method: 'POST' })
+    fetch('/api/hackrf/scan/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+    })
         .then(r => r.json())
         .then(data => {
             if (data.status === 'started' || data.status === 'already_running') {
                 document.getElementById('btnHackrfStart').disabled = true;
                 document.getElementById('btnHackrfStop').disabled = false;
-                document.getElementById('hackrfStatusBadge').textContent = 'SCANNING';
-                document.getElementById('hackrfStatusBadge').className = 'sdr-status-badge scanning';
+
+                const badge = document.getElementById('hackrfStatusBadge');
+                if (data.demo_mode) {
+                    badge.textContent = 'DEMO MODE';
+                    badge.className = 'sdr-status-badge demo';
+                    addLogEntry('HackRF spectrum scanning started (DEMO MODE)', 'WARNING');
+                } else {
+                    badge.textContent = 'SCANNING';
+                    badge.className = 'sdr-status-badge scanning';
+                    addLogEntry('HackRF spectrum scanning started', 'INFO');
+                }
                 document.getElementById('spectrumOverlay').classList.add('hidden');
-                addLogEntry('HackRF spectrum scanning started', 'INFO');
             } else if (data.error) {
                 addLogEntry(`HackRF error: ${data.error}`, 'ERROR');
             }

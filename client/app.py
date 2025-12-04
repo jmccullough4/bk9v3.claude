@@ -9511,16 +9511,19 @@ hackrf_scanning = False
 hackrf_thread = None
 hackrf_spectrum_data = {}  # freq_mhz -> power_db
 hackrf_piconet_detections = []  # List of detected piconets from spectrum analysis
+hackrf_demo_mode = False  # Demo mode when no hardware available
 
 
 def check_hackrf_info():
     """Get detailed HackRF device information."""
+    global _hackrf_available
     try:
         result = subprocess.run(
             ['hackrf_info'],
             capture_output=True, text=True, timeout=5
         )
         if result.returncode == 0:
+            _hackrf_available = True  # Update cache
             info = {
                 'available': True,
                 'raw_info': result.stdout.strip()
@@ -9534,13 +9537,44 @@ def check_hackrf_info():
                 elif 'Board ID' in line:
                     info['board_id'] = line.split(':')[-1].strip()
             return info
-        return {'available': False, 'error': 'Device not found'}
+        _hackrf_available = False
+        return {'available': False, 'error': 'Device not found', 'demo_available': True}
     except FileNotFoundError:
-        return {'available': False, 'error': 'hackrf_info not installed'}
+        _hackrf_available = False
+        return {'available': False, 'error': 'hackrf_info not installed', 'demo_available': True}
     except subprocess.TimeoutExpired:
-        return {'available': False, 'error': 'Device not responding'}
+        _hackrf_available = False
+        return {'available': False, 'error': 'Device not responding', 'demo_available': True}
     except Exception as e:
-        return {'available': False, 'error': str(e)}
+        _hackrf_available = False
+        return {'available': False, 'error': str(e), 'demo_available': True}
+
+
+def generate_demo_spectrum():
+    """Generate simulated spectrum data for demo mode."""
+    import random
+    spectrum = {}
+
+    # Base noise floor around -80 to -70 dB
+    for freq in range(2402, 2481):
+        spectrum[freq] = -75 + random.uniform(-5, 5)
+
+    # Add some simulated Bluetooth activity (random channels with higher power)
+    # Simulate a piconet hopping across several channels
+    active_channels = random.sample(range(2402, 2481), random.randint(8, 20))
+    for freq in active_channels:
+        spectrum[freq] = -50 + random.uniform(-10, 10)
+
+    # Add WiFi interference at channels 1, 6, 11 (2412, 2437, 2462 MHz)
+    for wifi_center in [2412, 2437, 2462]:
+        for offset in range(-10, 11):
+            freq = wifi_center + offset
+            if 2402 <= freq <= 2480:
+                # WiFi has strong signal near center, weaker at edges
+                wifi_power = -40 - abs(offset) * 2 + random.uniform(-3, 3)
+                spectrum[freq] = max(spectrum.get(freq, -100), wifi_power)
+
+    return spectrum
 
 
 def analyze_spectrum_for_piconets(spectrum_data):
@@ -9616,47 +9650,52 @@ def analyze_spectrum_for_piconets(spectrum_data):
 
 def hackrf_continuous_sweep():
     """Background thread for continuous HackRF spectrum sweeping."""
-    global hackrf_scanning, hackrf_spectrum_data, hackrf_piconet_detections
+    global hackrf_scanning, hackrf_spectrum_data, hackrf_piconet_detections, hackrf_demo_mode
 
-    add_log("HackRF continuous spectrum sweep starting", "INFO")
+    add_log(f"HackRF spectrum sweep starting (demo_mode={hackrf_demo_mode})", "INFO")
 
     while hackrf_scanning:
         try:
-            # Run a quick sweep
-            proc = subprocess.Popen(
-                ['hackrf_sweep', '-f', '2400:2485', '-w', '1000000', '-1'],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
-            )
+            if hackrf_demo_mode:
+                # Generate simulated spectrum data
+                channel_power = generate_demo_spectrum()
+                time.sleep(0.5)  # Simulate sweep time
+            else:
+                # Run actual HackRF sweep
+                proc = subprocess.Popen(
+                    ['hackrf_sweep', '-f', '2400:2485', '-w', '1000000', '-1'],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True
+                )
 
-            channel_power = {}
-            try:
-                for _ in range(100):  # Read up to 100 lines per sweep
-                    if not hackrf_scanning:
-                        break
-                    line = proc.stdout.readline()
-                    if not line:
-                        break
-
-                    parts = line.strip().split(', ')
-                    if len(parts) >= 6:
-                        try:
-                            freq_low = int(float(parts[1]))
-                            freq_high = int(float(parts[2]))
-                            powers = [float(p) for p in parts[5:] if p]
-                            if powers:
-                                center_freq_mhz = (freq_low + freq_high) // 2 // 1000000
-                                max_power = max(powers)
-                                channel_power[center_freq_mhz] = max_power
-                        except (ValueError, IndexError):
-                            continue
-            finally:
-                proc.terminate()
+                channel_power = {}
                 try:
-                    proc.wait(timeout=1)
-                except:
-                    proc.kill()
+                    for _ in range(100):  # Read up to 100 lines per sweep
+                        if not hackrf_scanning:
+                            break
+                        line = proc.stdout.readline()
+                        if not line:
+                            break
+
+                        parts = line.strip().split(', ')
+                        if len(parts) >= 6:
+                            try:
+                                freq_low = int(float(parts[1]))
+                                freq_high = int(float(parts[2]))
+                                powers = [float(p) for p in parts[5:] if p]
+                                if powers:
+                                    center_freq_mhz = (freq_low + freq_high) // 2 // 1000000
+                                    max_power = max(powers)
+                                    channel_power[center_freq_mhz] = max_power
+                            except (ValueError, IndexError):
+                                continue
+                finally:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=1)
+                    except:
+                        proc.kill()
 
             if channel_power:
                 hackrf_spectrum_data = channel_power
@@ -9667,16 +9706,20 @@ def hackrf_continuous_sweep():
                 socketio.emit('hackrf_spectrum', {
                     'spectrum': list(channel_power.items()),
                     'piconets': hackrf_piconet_detections,
+                    'demo_mode': hackrf_demo_mode,
                     'timestamp': datetime.now().isoformat()
                 })
 
             time.sleep(1)  # Brief pause between sweeps
 
+        except FileNotFoundError:
+            add_log("hackrf_sweep not found - switching to demo mode", "WARNING")
+            hackrf_demo_mode = True
         except Exception as e:
             add_log(f"HackRF sweep error: {e}", "ERROR")
             time.sleep(2)
 
-    add_log("HackRF continuous spectrum sweep stopped", "INFO")
+    add_log("HackRF spectrum sweep stopped", "INFO")
 
 
 @app.route('/api/hackrf/status')
@@ -9685,6 +9728,7 @@ def hackrf_status():
     """Get HackRF status and device information."""
     info = check_hackrf_info()
     info['scanning'] = hackrf_scanning
+    info['demo_mode'] = hackrf_demo_mode
     info['spectrum_samples'] = len(hackrf_spectrum_data)
     info['piconets_detected'] = len(hackrf_piconet_detections)
     return jsonify(info)
@@ -9711,21 +9755,38 @@ def hackrf_single_sweep():
 @app.route('/api/hackrf/scan/start', methods=['POST'])
 @login_required
 def hackrf_start_continuous():
-    """Start continuous HackRF spectrum scanning."""
-    global hackrf_scanning, hackrf_thread
+    """Start continuous HackRF spectrum scanning.
+
+    Accepts JSON body with optional 'demo' parameter to run in demo mode.
+    Demo mode generates simulated spectrum data for UI testing.
+    """
+    global hackrf_scanning, hackrf_thread, hackrf_demo_mode
 
     if hackrf_scanning:
-        return jsonify({'status': 'already_running'})
+        return jsonify({'status': 'already_running', 'demo_mode': hackrf_demo_mode})
 
+    # Check if demo mode requested
+    demo_requested = False
+    if request.json:
+        demo_requested = request.json.get('demo', False)
+
+    # If HackRF not available, auto-enable demo mode
     if not check_hackrf_available():
-        return jsonify({'error': 'HackRF not available'}), 400
+        if demo_requested or True:  # Always allow demo mode fallback
+            hackrf_demo_mode = True
+            add_log("HackRF not available - starting in demo mode", "WARNING")
+        else:
+            return jsonify({'error': 'HackRF not available', 'demo_available': True}), 400
+    else:
+        hackrf_demo_mode = demo_requested
 
     hackrf_scanning = True
     hackrf_thread = threading.Thread(target=hackrf_continuous_sweep, daemon=True)
     hackrf_thread.start()
 
-    add_log("HackRF continuous scanning started", "INFO")
-    return jsonify({'status': 'started'})
+    mode_str = "demo mode" if hackrf_demo_mode else "live mode"
+    add_log(f"HackRF spectrum scanning started ({mode_str})", "INFO")
+    return jsonify({'status': 'started', 'demo_mode': hackrf_demo_mode})
 
 
 @app.route('/api/hackrf/scan/stop', methods=['POST'])
