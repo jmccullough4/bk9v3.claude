@@ -46,6 +46,12 @@ services:
       - /var/run/netbird.sock:/var/run/netbird.sock
       - /etc/netbird:/etc/netbird:ro
 
+      # Mount the source code for live updates (development/updates)
+      # This enables the update feature from within Docker
+      - ./client:/app/client:rw
+      - ./scripts:/app/scripts:ro
+      - ./.git:/app/.git:ro
+
     # Environment variables
     environment:
       - FLASK_ENV=production
@@ -54,6 +60,9 @@ services:
       # Configuration overrides (optional)
       - BLUEK9_DEMO_MODE=false
       - BLUEK9_SCAN_MODE=balanced
+      # Enable Docker-aware updates
+      - BLUEK9_DOCKER_MODE=true
+      - BLUEK9_INSTALL_DIR=/app
 
     # Healthcheck
     healthcheck:

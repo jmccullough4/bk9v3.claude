@@ -10289,6 +10289,387 @@ function stopL2ping() {
         });
 }
 
+// ==================== SDR/SPECTRUM FUNCTIONS ====================
+
+let sdrSpectrumCanvas = null;
+let sdrSpectrumCtx = null;
+let sdrSpectrumData = {};
+let sdrPiconets = [];
+
+/**
+ * Initialize SDR/Spectrum tab
+ */
+function initSdrTab() {
+    sdrSpectrumCanvas = document.getElementById('sdrSpectrumCanvas');
+    if (sdrSpectrumCanvas) {
+        sdrSpectrumCtx = sdrSpectrumCanvas.getContext('2d');
+    }
+
+    // Check hardware status
+    checkSdrStatus();
+
+    // Listen for spectrum updates
+    if (socket) {
+        socket.on('hackrf_spectrum', handleHackrfSpectrum);
+        socket.on('ubertooth_update', handleUbertoothUpdate);
+    }
+}
+
+/**
+ * Check SDR hardware status
+ */
+function checkSdrStatus() {
+    // Check HackRF
+    fetch('/api/hackrf/status')
+        .then(r => r.json())
+        .then(data => {
+            const badge = document.getElementById('hackrfStatusBadge');
+            const serialEl = document.getElementById('hackrfSerial');
+            const firmwareEl = document.getElementById('hackrfFirmware');
+
+            if (data.available) {
+                badge.textContent = data.scanning ? 'SCANNING' : 'READY';
+                badge.className = 'sdr-status-badge ' + (data.scanning ? 'scanning' : 'ready');
+                serialEl.textContent = data.serial || '--';
+                firmwareEl.textContent = data.firmware || '--';
+
+                document.getElementById('btnHackrfStart').disabled = data.scanning;
+                document.getElementById('btnHackrfStop').disabled = !data.scanning;
+            } else {
+                badge.textContent = 'NOT FOUND';
+                badge.className = 'sdr-status-badge offline';
+                serialEl.textContent = data.error || '--';
+                firmwareEl.textContent = '--';
+            }
+        })
+        .catch(() => {
+            document.getElementById('hackrfStatusBadge').textContent = 'ERROR';
+            document.getElementById('hackrfStatusBadge').className = 'sdr-status-badge error';
+        });
+
+    // Check Ubertooth
+    fetch('/api/ubertooth/status')
+        .then(r => r.json())
+        .then(data => {
+            const badge = document.getElementById('ubertoothStatusBadge');
+            const deviceEl = document.getElementById('ubertoothDevice');
+            const piconetsEl = document.getElementById('ubertoothPiconets');
+
+            if (data.available) {
+                badge.textContent = data.running ? 'SCANNING' : 'READY';
+                badge.className = 'sdr-status-badge ' + (data.running ? 'scanning' : 'ready');
+                deviceEl.textContent = data.firmware || 'Ubertooth One';
+                piconetsEl.textContent = data.piconets_detected || 0;
+
+                document.getElementById('btnUbertoothStart').disabled = data.running;
+                document.getElementById('btnUbertoothStop').disabled = !data.running;
+            } else {
+                badge.textContent = 'NOT FOUND';
+                badge.className = 'sdr-status-badge offline';
+                deviceEl.textContent = data.error || '--';
+            }
+        })
+        .catch(() => {
+            document.getElementById('ubertoothStatusBadge').textContent = 'ERROR';
+            document.getElementById('ubertoothStatusBadge').className = 'sdr-status-badge error';
+        });
+}
+
+/**
+ * Start HackRF continuous scanning
+ */
+function startHackrfScan() {
+    fetch('/api/hackrf/scan/start', { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+            if (data.status === 'started' || data.status === 'already_running') {
+                document.getElementById('btnHackrfStart').disabled = true;
+                document.getElementById('btnHackrfStop').disabled = false;
+                document.getElementById('hackrfStatusBadge').textContent = 'SCANNING';
+                document.getElementById('hackrfStatusBadge').className = 'sdr-status-badge scanning';
+                document.getElementById('spectrumOverlay').classList.add('hidden');
+                addLogEntry('HackRF spectrum scanning started', 'INFO');
+            } else if (data.error) {
+                addLogEntry(`HackRF error: ${data.error}`, 'ERROR');
+            }
+        })
+        .catch(e => addLogEntry(`HackRF start error: ${e}`, 'ERROR'));
+}
+
+/**
+ * Stop HackRF scanning
+ */
+function stopHackrfScan() {
+    fetch('/api/hackrf/scan/stop', { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+            document.getElementById('btnHackrfStart').disabled = false;
+            document.getElementById('btnHackrfStop').disabled = true;
+            document.getElementById('hackrfStatusBadge').textContent = 'READY';
+            document.getElementById('hackrfStatusBadge').className = 'sdr-status-badge ready';
+            addLogEntry('HackRF spectrum scanning stopped', 'INFO');
+        });
+}
+
+/**
+ * Start Ubertooth piconet scanning
+ */
+function startUbertoothPiconet() {
+    fetch('/api/ubertooth/start', { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+            if (data.status === 'started') {
+                document.getElementById('btnUbertoothStart').disabled = true;
+                document.getElementById('btnUbertoothStop').disabled = false;
+                document.getElementById('ubertoothStatusBadge').textContent = 'SCANNING';
+                document.getElementById('ubertoothStatusBadge').className = 'sdr-status-badge scanning';
+                addLogEntry('Ubertooth piconet scanning started', 'INFO');
+            } else {
+                addLogEntry(`Ubertooth: ${data.message}`, 'WARNING');
+            }
+        })
+        .catch(e => addLogEntry(`Ubertooth start error: ${e}`, 'ERROR'));
+}
+
+/**
+ * Stop Ubertooth scanning
+ */
+function stopUbertoothPiconet() {
+    fetch('/api/ubertooth/stop', { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+            document.getElementById('btnUbertoothStart').disabled = false;
+            document.getElementById('btnUbertoothStop').disabled = true;
+            document.getElementById('ubertoothStatusBadge').textContent = 'READY';
+            document.getElementById('ubertoothStatusBadge').className = 'sdr-status-badge ready';
+            addLogEntry('Ubertooth piconet scanning stopped', 'INFO');
+        });
+}
+
+/**
+ * Handle HackRF spectrum data updates
+ */
+function handleHackrfSpectrum(data) {
+    if (!data || !data.spectrum) return;
+
+    // Store spectrum data
+    sdrSpectrumData = {};
+    data.spectrum.forEach(([freq, power]) => {
+        sdrSpectrumData[freq] = power;
+    });
+
+    // Update visualization
+    drawSpectrum();
+
+    // Update stats
+    const activeChannels = Object.values(sdrSpectrumData).filter(p => p > -60).length;
+    const peakPower = Math.max(...Object.values(sdrSpectrumData));
+
+    document.getElementById('sdrActiveChannels').textContent = activeChannels;
+    document.getElementById('sdrPeakPower').textContent = `${peakPower.toFixed(1)} dB`;
+    document.getElementById('sdrLastUpdate').textContent = new Date().toLocaleTimeString();
+
+    // Update piconets from spectrum
+    if (data.piconets && data.piconets.length > 0) {
+        document.getElementById('spectrumPiconetsSection').classList.remove('hidden');
+        updateSpectrumPiconets(data.piconets);
+    }
+}
+
+/**
+ * Handle Ubertooth piconet updates
+ */
+function handleUbertoothUpdate(data) {
+    updatePiconetsTable(data);
+
+    const piconetCount = document.getElementById('ubertoothPiconets');
+    if (piconetCount) {
+        // Fetch updated count
+        fetch('/api/ubertooth/data')
+            .then(r => r.json())
+            .then(d => {
+                piconetCount.textContent = d.piconets ? d.piconets.length : 0;
+            });
+    }
+}
+
+/**
+ * Draw spectrum visualization
+ */
+function drawSpectrum() {
+    if (!sdrSpectrumCtx || !sdrSpectrumCanvas) return;
+
+    const ctx = sdrSpectrumCtx;
+    const width = sdrSpectrumCanvas.width;
+    const height = sdrSpectrumCanvas.height;
+
+    // Clear canvas
+    ctx.fillStyle = '#0a0a0a';
+    ctx.fillRect(0, 0, width, height);
+
+    // Draw grid
+    ctx.strokeStyle = '#1a1a1a';
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 80; i += 10) {
+        const x = (i / 79) * width;
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, height);
+        ctx.stroke();
+    }
+
+    // Draw spectrum bars
+    const freqStart = 2402;
+    const freqEnd = 2480;
+    const numChannels = freqEnd - freqStart;
+    const barWidth = width / numChannels;
+
+    // WiFi channel overlaps (channels 1, 6, 11)
+    const wifiChannels = [10, 35, 60]; // Relative to 2402 MHz
+
+    for (let ch = 0; ch < numChannels; ch++) {
+        const freq = freqStart + ch;
+        const power = sdrSpectrumData[freq] || -100;
+
+        // Normalize power (-100 to 0 dB range)
+        const normalizedPower = Math.max(0, Math.min(1, (power + 100) / 60));
+        const barHeight = normalizedPower * height;
+
+        const x = ch * barWidth;
+        const y = height - barHeight;
+
+        // Color based on power and WiFi overlap
+        if (wifiChannels.includes(ch)) {
+            ctx.fillStyle = `rgba(255, 100, 100, ${0.3 + normalizedPower * 0.7})`;
+        } else {
+            ctx.fillStyle = `rgba(0, 255, 255, ${0.3 + normalizedPower * 0.7})`;
+        }
+
+        ctx.fillRect(x, y, barWidth - 1, barHeight);
+    }
+
+    // Draw frequency labels
+    ctx.fillStyle = '#666';
+    ctx.font = '10px monospace';
+    ctx.fillText('2402 MHz', 5, height - 5);
+    ctx.fillText('2441 MHz', width/2 - 25, height - 5);
+    ctx.fillText('2480 MHz', width - 55, height - 5);
+}
+
+/**
+ * Update piconets table with Ubertooth data
+ */
+function updatePiconetsTable(piconetData) {
+    const tbody = document.getElementById('piconetsTableBody');
+    if (!tbody) return;
+
+    // Check if this LAP already exists
+    let existingRow = tbody.querySelector(`tr[data-lap="${piconetData.lap}"]`);
+
+    if (existingRow) {
+        // Update existing row
+        existingRow.querySelector('.col-uap').textContent = piconetData.uap || '??';
+        existingRow.querySelector('.col-bdaddr').textContent = piconetData.bd_partial || '--';
+        existingRow.querySelector('.col-channels').textContent =
+            piconetData.channels ? piconetData.channels.slice(0, 5).join(', ') + (piconetData.channels.length > 5 ? '...' : '') : '--';
+        existingRow.querySelector('.col-packets').textContent = piconetData.packet_count || 0;
+    } else {
+        // Remove placeholder
+        const placeholder = tbody.querySelector('.placeholder-row');
+        if (placeholder) placeholder.remove();
+
+        // Create new row
+        const row = document.createElement('tr');
+        row.dataset.lap = piconetData.lap;
+        row.innerHTML = `
+            <td class="col-lap"><code>${piconetData.lap}</code></td>
+            <td class="col-uap"><code>${piconetData.uap || '??'}</code></td>
+            <td class="col-bdaddr"><code>${piconetData.bd_partial || '--'}</code></td>
+            <td class="col-channels">${piconetData.channels ? piconetData.channels.slice(0, 5).join(', ') : '--'}</td>
+            <td class="col-packets">${piconetData.packet_count || 0}</td>
+            <td class="col-matched">--</td>
+            <td class="col-first-seen">${piconetData.first_seen ? new Date(piconetData.first_seen).toLocaleTimeString() : '--'}</td>
+        `;
+        tbody.appendChild(row);
+    }
+}
+
+/**
+ * Update spectrum-detected piconets display
+ */
+function updateSpectrumPiconets(piconets) {
+    const container = document.getElementById('spectrumPiconetsList');
+    if (!container) return;
+
+    container.innerHTML = piconets.map(p => `
+        <div class="spectrum-piconet-card">
+            <div class="piconet-header">
+                <span class="piconet-id">${p.id}</span>
+                <span class="piconet-confidence ${p.confidence}">${p.confidence.toUpperCase()}</span>
+            </div>
+            <div class="piconet-details">
+                <div class="detail-row">
+                    <span>Active Channels:</span>
+                    <span>${p.active_channels}</span>
+                </div>
+                <div class="detail-row">
+                    <span>Avg Power:</span>
+                    <span>${p.average_power} dB</span>
+                </div>
+                <div class="detail-row">
+                    <span>Strongest Channel:</span>
+                    <span>Ch ${p.strongest_channel?.channel || '--'} (${p.strongest_channel?.power?.toFixed(1) || '--'} dB)</span>
+                </div>
+                ${p.wifi_interference ? '<div class="detail-row warning"><span>WiFi Overlap:</span><span>Possible interference</span></div>' : ''}
+            </div>
+        </div>
+    `).join('');
+}
+
+/**
+ * Clear piconet data
+ */
+function clearPiconetData() {
+    fetch('/api/ubertooth/clear', { method: 'POST' })
+        .then(() => {
+            const tbody = document.getElementById('piconetsTableBody');
+            if (tbody) {
+                tbody.innerHTML = '<tr class="placeholder-row"><td colspan="7">Start Ubertooth to detect piconets...</td></tr>';
+            }
+            document.getElementById('ubertoothPiconets').textContent = '0';
+            addLogEntry('Piconet data cleared', 'INFO');
+        });
+}
+
+/**
+ * Refresh combined spectrum data
+ */
+function refreshCombinedSpectrum() {
+    fetch('/api/spectrum/combined')
+        .then(r => r.json())
+        .then(data => {
+            // Update HackRF spectrum
+            if (data.hackrf && data.hackrf.spectrum) {
+                sdrSpectrumData = {};
+                data.hackrf.spectrum.forEach(([freq, power]) => {
+                    sdrSpectrumData[freq] = power;
+                });
+                drawSpectrum();
+            }
+
+            // Update Ubertooth piconets
+            if (data.ubertooth && data.ubertooth.piconets) {
+                const tbody = document.getElementById('piconetsTableBody');
+                if (tbody && data.ubertooth.piconets.length > 0) {
+                    tbody.innerHTML = '';
+                    data.ubertooth.piconets.forEach(p => {
+                        updatePiconetsTable(p);
+                    });
+                }
+            }
+        });
+}
+
 // Check HID tool status when cyber tools tab is opened
 document.addEventListener('DOMContentLoaded', () => {
     // Add event listener for when cyber tab is shown
@@ -10297,6 +10678,9 @@ document.addEventListener('DOMContentLoaded', () => {
         origShowToolsTab.call(this, tabName);
         if (tabName === 'cyber') {
             checkCyberToolsStatus();
+        }
+        if (tabName === 'sdr') {
+            initSdrTab();
         }
     };
 
