@@ -1894,24 +1894,28 @@ def scan_ble_devices(interface='hci0'):
 
 
 # ==================== BLUETOOTH SCANNING ====================
-# Using bluetoothctl for Docker compatibility - scans Classic AND BLE simultaneously
+# Using multiple methods for maximum device detection
 
 # Simplified scan modes - each with distinct behavior
 SCAN_MODES = {
     'passive': {
         'name': 'Passive',
-        'description': 'Monitor only - no transmissions (stealth)',
+        'description': 'Passive BLE scan + btmon (no active probing)',
         'duration': 10,
         'use_btmon': True,
+        'use_hcitool_classic': False,
+        'use_hcitool_ble_passive': True,  # Receive BLE ads without sending SCAN_REQ
         'use_bluetoothctl': False,
         'use_hackrf': False,
     },
     'active': {
         'name': 'Active',
-        'description': 'bluetoothctl scan on all interfaces + btmon RSSI',
+        'description': 'hcitool Classic + bluetoothctl BLE on all interfaces',
         'duration': 10,
         'use_btmon': True,
-        'use_bluetoothctl': True,
+        'use_hcitool_classic': True,  # For Classic device discovery
+        'use_hcitool_ble_passive': False,
+        'use_bluetoothctl': True,      # For BLE device discovery
         'use_hackrf': False,
     },
     'full': {
@@ -1919,6 +1923,8 @@ SCAN_MODES = {
         'description': 'All methods including HackRF spectrum sweep',
         'duration': 12,
         'use_btmon': True,
+        'use_hcitool_classic': True,
+        'use_hcitool_ble_passive': False,
         'use_bluetoothctl': True,
         'use_hackrf': True,
     },
@@ -2010,10 +2016,15 @@ def scan_hcitool_classic(interface='hci0', duration=8):
         return devices_found
 
 
-def scan_hcitool_ble(interface='hci0', duration=8):
+def scan_hcitool_ble(interface='hci0', duration=8, passive=False):
     """
     Scan for BLE devices using hcitool lescan.
     Works reliably in Docker containers.
+
+    Args:
+        interface: HCI interface to use
+        duration: Scan duration in seconds
+        passive: If True, use --passive flag (receive-only, no scan requests)
 
     Returns list of discovered devices with device_type='ble'.
     """
@@ -2022,18 +2033,23 @@ def scan_hcitool_ble(interface='hci0', duration=8):
 
     devices_found = []
     seen_addresses = set()
+    mode_str = "passive" if passive else "active"
 
     try:
-        add_log(f"Starting hcitool BLE scan on {interface} (duration: {duration}s)", "INFO")
+        add_log(f"Starting hcitool BLE {mode_str} scan on {interface} (duration: {duration}s)", "INFO")
 
         # Ensure interface is up and LE enabled
         subprocess.run(['hciconfig', interface, 'up'], capture_output=True, timeout=3)
         subprocess.run(['hciconfig', interface, 'leadv', '0'], capture_output=True, timeout=2)
 
+        # Build command - use --passive for true passive mode (no SCAN_REQ sent)
+        cmd = ['hcitool', '-i', interface, 'lescan']
+        if passive:
+            cmd.append('--passive')
+
         # Run hcitool lescan with timeout - it runs indefinitely otherwise
-        # Use --duplicates to see all advertisements but we'll dedupe
         proc = subprocess.Popen(
-            ['hcitool', '-i', interface, 'lescan'],
+            cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True
@@ -2496,12 +2512,13 @@ def scan_combined(interface='hci0', mode='active'):
 
     Modes:
         - passive: btmon only (stealth - no RF transmissions)
-        - active: bluetoothctl scan on all interfaces + btmon for RSSI
+        - active: hcitool Classic + bluetoothctl BLE on all interfaces
         - full: all methods + HackRF spectrum sweep
 
     Returns deduplicated list of discovered devices with vendor detection.
     """
     global current_scan_mode
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
     mode_config = SCAN_MODES.get(mode, SCAN_MODES['active'])
     current_scan_mode = mode
@@ -2512,7 +2529,31 @@ def scan_combined(interface='hci0', mode='active'):
 
     all_devices = []
     seen_addresses = set()
-    hackrf_activity = []
+
+    def merge_device(dev, seen, devices):
+        """Merge a device into the devices list."""
+        if dev['bd_address'] not in seen:
+            seen.add(dev['bd_address'])
+            dev['packet_count'] = 1  # Initialize packet count
+            devices.append(dev)
+            return True
+        else:
+            # Merge with existing device data
+            for existing in devices:
+                if existing['bd_address'] == dev['bd_address']:
+                    existing['packet_count'] = existing.get('packet_count', 0) + 1
+                    if dev['device_name'] != 'Unknown':
+                        existing['device_name'] = dev['device_name']
+                    if dev.get('rssi') is not None:
+                        existing['rssi'] = dev['rssi']
+                    if dev.get('vendor'):
+                        existing['vendor'] = dev['vendor']
+                    if dev.get('company_id'):
+                        existing['company_id'] = dev['company_id']
+                    if dev.get('device_type') and dev['device_type'] != 'unknown':
+                        existing['device_type'] = dev['device_type']
+                    break
+            return False
 
     # 1. HackRF spectrum sweep (if enabled and available)
     if mode_config.get('use_hackrf') and check_hackrf_available():
@@ -2520,42 +2561,51 @@ def scan_combined(interface='hci0', mode='active'):
         if hackrf_activity:
             add_log(f"HackRF detected {len(hackrf_activity)} active Bluetooth channels", "INFO")
 
-    # 2. Passive btmon monitoring (runs concurrently with bluetoothctl in active mode)
-    btmon_devices = []
-    if mode_config['use_btmon']:
-        # In active mode, run btmon for the full duration to capture RSSI
-        # In passive mode, btmon is the only scan method
-        btmon_duration = mode_config['duration'] if not mode_config['use_bluetoothctl'] else mode_config['duration']
-        btmon_devices = scan_btmon_passive(btmon_duration)
+    # 2. Passive mode OR Active mode - both use parallel scanning
+    futures = []
 
-        for dev in btmon_devices:
-            if dev['bd_address'] not in seen_addresses:
-                seen_addresses.add(dev['bd_address'])
-                all_devices.append(dev)
+    # Determine which scanning methods to use
+    use_passive_ble = mode_config.get('use_hcitool_ble_passive', False)
+    use_active_classic = mode_config.get('use_hcitool_classic', False)
+    use_bluetoothctl = mode_config.get('use_bluetoothctl', False)
+    use_btmon = mode_config.get('use_btmon', False)
 
-    # 3. bluetoothctl scan on all interfaces (Classic + BLE simultaneously)
-    if mode_config['use_bluetoothctl']:
-        bctl_devices = scan_bluetoothctl_all(all_interfaces, duration=mode_config['duration'])
+    if use_passive_ble or use_active_classic or use_bluetoothctl or use_btmon:
+        with ThreadPoolExecutor(max_workers=len(all_interfaces) * 2 + 2) as executor:
+            # Start btmon in background for RSSI capture
+            if use_btmon:
+                futures.append(('btmon', executor.submit(scan_btmon_passive, mode_config['duration'])))
 
-        for dev in bctl_devices:
-            if dev['bd_address'] not in seen_addresses:
-                seen_addresses.add(dev['bd_address'])
-                all_devices.append(dev)
-            else:
-                # Merge with existing device data
-                for existing in all_devices:
-                    if existing['bd_address'] == dev['bd_address']:
-                        if dev['device_name'] != 'Unknown':
-                            existing['device_name'] = dev['device_name']
-                        if dev.get('rssi') is not None:
-                            existing['rssi'] = dev['rssi']
-                        if dev.get('vendor'):
-                            existing['vendor'] = dev['vendor']
-                        if dev.get('company_id'):
-                            existing['company_id'] = dev['company_id']
-                        if dev['device_type'] != 'unknown':
-                            existing['device_type'] = dev['device_type']
-                        break
+            # Passive BLE scan (receives advertisements without sending SCAN_REQ)
+            if use_passive_ble:
+                for iface in all_interfaces:
+                    futures.append((f'lescan_passive_{iface}', executor.submit(
+                        scan_hcitool_ble, iface, mode_config['duration'], True  # passive=True
+                    )))
+
+            # Active Classic scan (sends inquiry)
+            if use_active_classic:
+                for iface in all_interfaces:
+                    futures.append((f'hcitool_{iface}', executor.submit(
+                        scan_hcitool_classic, iface, mode_config['duration']
+                    )))
+
+            # Active BLE via bluetoothctl (sends SCAN_REQ)
+            if use_bluetoothctl:
+                futures.append(('bluetoothctl', executor.submit(
+                    scan_bluetoothctl_all, all_interfaces, mode_config['duration']
+                )))
+
+            # Collect results
+            for name, future in futures:
+                try:
+                    devices = future.result(timeout=mode_config['duration'] + 15)
+                    if devices:
+                        for dev in devices:
+                            merge_device(dev, seen_addresses, all_devices)
+                        add_log(f"{name}: found {len(devices)} devices", "DEBUG")
+                except Exception as e:
+                    add_log(f"{name} scan error: {e}", "WARNING")
 
     # Final device type determination for unknowns
     for dev in all_devices:
@@ -3076,6 +3126,33 @@ def stop_btmon():
                 pass
         btmon_process = None
         add_log("btmon RSSI monitor stopped", "INFO")
+
+
+def cleanup_stuck_processes():
+    """Kill any lingering Bluetooth scan processes to prevent hangs."""
+    killed = 0
+    # These processes may hang if not properly terminated
+    bt_processes = ['hcitool', 'hcidump', 'btmon', 'bluetoothctl', 'l2ping', 'lescan']
+
+    for proc_name in bt_processes:
+        try:
+            # Use pkill with timeout to avoid hanging
+            result = subprocess.run(
+                ['pkill', '-9', '-f', proc_name],
+                capture_output=True,
+                timeout=2
+            )
+            if result.returncode == 0:
+                killed += 1
+        except subprocess.TimeoutExpired:
+            pass
+        except Exception:
+            pass
+
+    if killed > 0:
+        add_log(f"Cleaned up {killed} stuck Bluetooth processes", "DEBUG")
+
+    return killed
 
 
 def get_btmon_rssi(bd_address):
@@ -7562,6 +7639,9 @@ def stop_scan():
         stop_target_survey()
         stopped.append('target_survey')
 
+    # Clean up any stuck processes to prevent hangs
+    cleanup_stuck_processes()
+
     add_log(f"Scan stop requested. Stopped: {', '.join(stopped) if stopped else 'none active'}", "INFO")
     return jsonify({'status': 'stopped', 'stopped': stopped})
 
@@ -9082,6 +9162,85 @@ def disable_radio_route(interface):
     radio_type = request.json.get('type', 'bluetooth')
     success = disable_radio(interface, radio_type)
     return jsonify({'status': 'disabled' if success else 'failed'})
+
+
+@app.route('/api/bluetooth/reset', methods=['POST'])
+@login_required
+def reset_bluetooth():
+    """
+    Reset Bluetooth subsystem - kills stuck processes and restarts interfaces.
+    Use when scanning hangs or Bluetooth becomes unresponsive.
+    """
+    global scanning_active, btmon_process
+
+    add_log("Bluetooth reset requested", "WARNING")
+
+    results = {
+        'stopped_scan': False,
+        'killed_processes': 0,
+        'reset_interfaces': [],
+        'success': True
+    }
+
+    try:
+        # 1. Stop any active scanning
+        if scanning_active:
+            scanning_active = False
+            results['stopped_scan'] = True
+            add_log("Stopped active scanning", "INFO")
+
+        # 2. Kill btmon if running
+        if btmon_process:
+            try:
+                btmon_process.terminate()
+                btmon_process.wait(timeout=2)
+            except:
+                try:
+                    btmon_process.kill()
+                except:
+                    pass
+            btmon_process = None
+            results['killed_processes'] += 1
+
+        # 3. Kill any stuck Bluetooth processes
+        bt_processes = ['hcitool', 'hcidump', 'btmon', 'bluetoothctl', 'l2ping']
+        for proc_name in bt_processes:
+            try:
+                result = subprocess.run(['pkill', '-9', proc_name], capture_output=True)
+                if result.returncode == 0:
+                    results['killed_processes'] += 1
+            except:
+                pass
+
+        # 4. Reset each HCI interface
+        try:
+            hci_result = subprocess.run(['hciconfig', '-a'], capture_output=True, text=True, timeout=5)
+            for match in re.finditer(r'^(hci\d+):', hci_result.stdout, re.MULTILINE):
+                iface = match.group(1)
+                try:
+                    # Reset the interface
+                    subprocess.run(['hciconfig', iface, 'down'], capture_output=True, timeout=3)
+                    time.sleep(0.5)
+                    subprocess.run(['hciconfig', iface, 'up'], capture_output=True, timeout=3)
+                    results['reset_interfaces'].append(iface)
+                    add_log(f"Reset interface {iface}", "INFO")
+                except Exception as e:
+                    add_log(f"Failed to reset {iface}: {e}", "WARNING")
+        except Exception as e:
+            add_log(f"Failed to enumerate HCI interfaces: {e}", "ERROR")
+
+        # 5. Clear btmon caches
+        btmon_rssi_cache.clear()
+        btmon_device_cache.clear()
+
+        add_log(f"Bluetooth reset complete: killed {results['killed_processes']} processes, reset {len(results['reset_interfaces'])} interfaces", "INFO")
+
+    except Exception as e:
+        add_log(f"Bluetooth reset error: {e}", "ERROR")
+        results['success'] = False
+        results['error'] = str(e)
+
+    return jsonify(results)
 
 
 # ==================== UBERTOOTH API ROUTES ====================

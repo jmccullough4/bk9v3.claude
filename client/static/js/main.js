@@ -1359,9 +1359,9 @@ function clearAllDevices() {
 // Scan mode descriptions for UI feedback
 const SCAN_MODE_INFO = {
     // Primary scan modes
-    'active': 'bluetoothctl on all interfaces (Classic + BLE) + btmon RSSI capture',
-    'passive': 'btmon only - no RF transmissions (stealth mode)',
-    'full': 'All methods + HackRF 2.4GHz sweep (detects hidden piconets)',
+    'active': 'hcitool Classic + bluetoothctl BLE on all interfaces + btmon RSSI',
+    'passive': 'Passive BLE (lescan --passive) + btmon - no active probing',
+    'full': 'All methods + HackRF 2.4GHz spectrum sweep',
     // Special modes
     'target_survey': 'Continuous target monitoring - L2PING, SDP, Name, RSSI',
     'hidden_hunt': 'Hidden device hunt - Apple/Garmin/Samsung vendor detection'
@@ -3115,6 +3115,57 @@ function updateRadioListSettings(radios) {
 function refreshRadiosInSettings() {
     loadRadios();
     addLogEntry('Radio list refreshed', 'INFO');
+}
+
+/**
+ * Reset Bluetooth subsystem - kills stuck processes and restarts interfaces
+ */
+function resetBluetooth() {
+    const statusEl = document.getElementById('btResetStatus');
+    if (statusEl) {
+        statusEl.textContent = 'Resetting Bluetooth...';
+        statusEl.className = 'settings-hint mt-10';
+    }
+
+    // Stop scanning first if active
+    if (scanning) {
+        stopScan();
+    }
+
+    fetch('/api/bluetooth/reset', { method: 'POST' })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                const msg = `Reset complete: killed ${data.killed_processes} processes, reset ${data.reset_interfaces.length} interfaces`;
+                addLogEntry(msg, 'WARNING');
+                if (statusEl) {
+                    statusEl.textContent = msg;
+                    statusEl.style.color = '#00ff88';
+                }
+                // Refresh the radio list
+                setTimeout(() => {
+                    loadRadios();
+                    if (statusEl) {
+                        statusEl.textContent = '';
+                    }
+                }, 2000);
+            } else {
+                const msg = `Reset failed: ${data.error || 'Unknown error'}`;
+                addLogEntry(msg, 'ERROR');
+                if (statusEl) {
+                    statusEl.textContent = msg;
+                    statusEl.style.color = '#ff4444';
+                }
+            }
+        })
+        .catch(error => {
+            console.error('Bluetooth reset error:', error);
+            addLogEntry(`Bluetooth reset failed: ${error}`, 'ERROR');
+            if (statusEl) {
+                statusEl.textContent = 'Reset failed - check console';
+                statusEl.style.color = '#ff4444';
+            }
+        });
 }
 
 // ==================== UBERTOOTH FUNCTIONS ====================

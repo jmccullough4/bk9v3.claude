@@ -1745,7 +1745,11 @@
                         <div class="radio-list-settings" id="radioListSettings">
                             <!-- Radios will be populated here -->
                         </div>
-                        <button class="btn btn-secondary mt-10" onclick="refreshRadiosInSettings()">Refresh Radios</button>
+                        <div class="radio-controls mt-10">
+                            <button class="btn btn-secondary" onclick="refreshRadiosInSettings()">Refresh Radios</button>
+                            <button class="btn btn-warning" onclick="resetBluetooth()" title="Kill stuck processes and reset interfaces">Reset Bluetooth</button>
+                        </div>
+                        <p class="settings-hint mt-10" id="btResetStatus"></p>
                     </div>
 
                     <div class="settings-group">
