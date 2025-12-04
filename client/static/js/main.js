@@ -1358,21 +1358,38 @@ function clearAllDevices() {
 
 // Scan mode descriptions for UI feedback
 const SCAN_MODE_INFO = {
-    'quick': 'Standard inquiry - discoverable devices only',
+    // BTMGMT scan modes (new)
+    'balanced': 'BTMGMT standard discovery - Classic + BLE combined',
+    'stealth': 'Passive monitoring only - no RF transmissions (btmon)',
+    'aggressive': 'Maximum detection - btmgmt + bluetoothctl + extended inquiry',
+    'ble_focus': 'BLE-only discovery - optimized for IoT devices',
+    'classic_focus': 'Classic Bluetooth only - phones, headsets, audio',
+    // Special modes
     'target_survey': 'Continuous target monitoring - L2PING, SDP, Name, RSSI (runs until stopped)',
     'hidden_hunt': 'Targeting hidden phones/watches - BLE+Classic+OUI probing',
+    // Legacy modes
+    'quick': 'Standard inquiry - discoverable devices only',
     'stimulate_classic': 'Multi-LAP stimulation for Classic BT devices',
     'stimulate_ble': 'Extended LE scan for BLE devices',
     'aggressive_inquiry': 'Extended inquiry with 7 LAP codes, interlaced scanning',
     'advanced': 'All techniques: HCI optimization, aggressive inquiry, SDP probes, address sweeps'
 };
 
+// BTMGMT scan modes that use the new API
+const BTMGMT_MODES = ['balanced', 'stealth', 'aggressive', 'ble_focus', 'classic_focus'];
+
 function startScan() {
     const modeSelect = document.getElementById('scanModeSelect');
-    const mode = modeSelect ? modeSelect.value : 'quick';
+    const mode = modeSelect ? modeSelect.value : 'balanced';
 
     // Show scan info
     showScanInfo(SCAN_MODE_INFO[mode] || 'Scanning...');
+
+    // Check if this is a BTMGMT scan mode
+    if (BTMGMT_MODES.includes(mode)) {
+        startBtmgmtScan(mode);
+        return;
+    }
 
     switch(mode) {
         case 'quick':
@@ -1397,8 +1414,42 @@ function startScan() {
             startAdvancedScan();
             break;
         default:
-            startQuickScan();
+            startBtmgmtScan('balanced');
     }
+}
+
+function startBtmgmtScan(mode) {
+    // First set the scan mode
+    fetch('/api/scan/modes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: mode })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.error) {
+            addLogEntry('Failed to set scan mode: ' + data.error, 'ERROR');
+            hideScanInfo();
+            return;
+        }
+        addLogEntry(`Scan mode set to: ${data.name}`, 'INFO');
+
+        // Now start the scan
+        return fetch('/api/scan/start', { method: 'POST' });
+    })
+    .then(response => {
+        if (response) return response.json();
+    })
+    .then(data => {
+        if (data) {
+            updateScanStatus(true);
+            addLogEntry(`BTMGMT scan started (${mode})`, 'INFO');
+        }
+    })
+    .catch(error => {
+        addLogEntry('Failed to start BTMGMT scan: ' + error, 'ERROR');
+        hideScanInfo();
+    });
 }
 
 function startQuickScan() {
