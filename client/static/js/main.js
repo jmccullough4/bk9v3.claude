@@ -1358,67 +1358,44 @@ function clearAllDevices() {
 
 // Scan mode descriptions for UI feedback
 const SCAN_MODE_INFO = {
-    // BTMGMT scan modes (new)
-    'balanced': 'BTMGMT standard discovery - Classic + BLE combined',
-    'stealth': 'Passive monitoring only - no RF transmissions (btmon)',
-    'aggressive': 'Maximum detection - btmgmt + bluetoothctl + extended inquiry',
-    'ble_focus': 'BLE-only discovery - optimized for IoT devices',
-    'classic_focus': 'Classic Bluetooth only - phones, headsets, audio',
+    // Primary scan modes
+    'active': 'Active scan - hcitool Classic + BLE discovery',
+    'passive': 'Passive monitoring - no RF transmissions (stealth)',
+    'full': 'Full scan - all methods for maximum detection',
     // Special modes
-    'target_survey': 'Continuous target monitoring - L2PING, SDP, Name, RSSI (runs until stopped)',
-    'hidden_hunt': 'Targeting hidden phones/watches - BLE+Classic+OUI probing',
-    // Legacy modes
-    'quick': 'Standard inquiry - discoverable devices only',
-    'stimulate_classic': 'Multi-LAP stimulation for Classic BT devices',
-    'stimulate_ble': 'Extended LE scan for BLE devices',
-    'aggressive_inquiry': 'Extended inquiry with 7 LAP codes, interlaced scanning',
-    'advanced': 'All techniques: HCI optimization, aggressive inquiry, SDP probes, address sweeps'
+    'target_survey': 'Continuous target monitoring - L2PING, SDP, Name, RSSI',
+    'hidden_hunt': 'Hidden device hunt - phones/watches/trackers'
 };
 
-// BTMGMT scan modes that use the new API
-const BTMGMT_MODES = ['balanced', 'stealth', 'aggressive', 'ble_focus', 'classic_focus'];
+// Standard scan modes that use the scan/modes API
+const STANDARD_MODES = ['active', 'passive', 'full'];
 
 function startScan() {
     const modeSelect = document.getElementById('scanModeSelect');
-    const mode = modeSelect ? modeSelect.value : 'balanced';
+    const mode = modeSelect ? modeSelect.value : 'active';
 
     // Show scan info
     showScanInfo(SCAN_MODE_INFO[mode] || 'Scanning...');
 
-    // Check if this is a BTMGMT scan mode
-    if (BTMGMT_MODES.includes(mode)) {
-        startBtmgmtScan(mode);
+    // Check if this is a standard scan mode
+    if (STANDARD_MODES.includes(mode)) {
+        startModeScan(mode);
         return;
     }
 
     switch(mode) {
-        case 'quick':
-            startQuickScan();
-            break;
         case 'target_survey':
             startTargetSurvey();
             break;
         case 'hidden_hunt':
             startHiddenDeviceHunt();
             break;
-        case 'stimulate_classic':
-            startStimulationScan('classic');
-            break;
-        case 'stimulate_ble':
-            startStimulationScan('ble');
-            break;
-        case 'aggressive_inquiry':
-            startAggressiveInquiry();
-            break;
-        case 'advanced':
-            startAdvancedScan();
-            break;
         default:
-            startBtmgmtScan('balanced');
+            startModeScan('active');
     }
 }
 
-function startBtmgmtScan(mode) {
+function startModeScan(mode) {
     // First set the scan mode
     fetch('/api/scan/modes', {
         method: 'POST',
