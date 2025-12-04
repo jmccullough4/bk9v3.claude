@@ -1775,10 +1775,14 @@ def generate_demo_devices(count=3, scan_type='both'):
 
 def scan_classic_bluetooth(interface='hci0'):
     """
-    Unified Bluetooth scan using btmgmt (Ubuntu 24.04+ compatible).
-    Uses btmgmt find for Classic and btmgmt find -l for BLE.
-    Falls back to hcitool if btmgmt is not available.
+    Unified Bluetooth scan using btmgmt find as the primary method.
+    Falls back to bluetoothctl if btmgmt is unavailable.
+    This scans BOTH Classic and BLE devices simultaneously.
+
+    Uses the current_scan_mode to determine scanning behavior.
     """
+    global current_scan_mode
+
     # DEMO MODE
     if CONFIG.get('DEMO_MODE'):
         add_log(f"[DEMO] BT scan on {interface}", "INFO")
@@ -1787,22 +1791,33 @@ def scan_classic_bluetooth(interface='hci0'):
         add_log(f"[DEMO] Scan found {len(devices_found)} devices", "INFO")
         return devices_found
 
+    # Use the new combined scanning with current mode
+    try:
+        devices_found = scan_combined(interface, current_scan_mode)
+        if devices_found:
+            return devices_found
+    except Exception as e:
+        add_log(f"Combined scan failed: {e}, falling back to bluetoothctl", "WARNING")
+
+    # Fallback to bluetoothctl if btmgmt methods fail
     devices_found = []
     seen_addresses = set()
 
-    # Extract hci index number from interface name (e.g., hci0 -> 0)
-    hci_index = interface.replace('hci', '') if interface.startswith('hci') else '0'
+    try:
+        add_log(f"Fallback: bluetoothctl scan on {interface}", "INFO")
 
     try:
         add_log(f"Starting btmgmt scan on {interface} (Classic + LE)", "INFO")
 
-        # Ensure the adapter is powered on
-        subprocess.run(['btmgmt', '--index', hci_index, 'power', 'on'],
-                      capture_output=True, timeout=5)
+        # Run scan using timeout command
+        proc = subprocess.Popen(
+            ['stdbuf', '-oL', 'timeout', '10', 'bluetoothctl', 'scan', 'on'],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1
+        )
 
-        # Run Classic Bluetooth discovery using btmgmt find
-        # btmgmt find runs inquiry scan for ~10 seconds
-        add_log(f"Running Classic inquiry on {interface}...", "DEBUG")
         try:
             result = subprocess.run(
                 ['btmgmt', '--index', hci_index, 'find'],
@@ -1835,88 +1850,41 @@ def scan_classic_bluetooth(interface='hci0'):
                         devices_found.append({
                             'bd_address': bd_addr,
                             'device_name': name,
-                            'device_type': dev_type,
+                            'device_type': 'unknown',
                             'manufacturer': get_manufacturer(bd_addr),
                             'rssi': rssi
                         })
-                        add_log(f"Found {dev_type} device: {bd_addr} ({name}) RSSI: {rssi}", "DEBUG")
 
-        except subprocess.TimeoutExpired:
-            add_log("Classic scan timeout", "WARNING")
-        except Exception as e:
-            add_log(f"Classic scan error: {e}", "WARNING")
+                # Parse RSSI changes
+                rssi_match = re.search(r'\[CHG\]\s+Device\s+([0-9A-Fa-f:]{17})\s+RSSI:\s*(-?\d+)', line)
+                if rssi_match:
+                    bd_addr = rssi_match.group(1).upper()
+                    rssi = int(rssi_match.group(2))
+                    device_rssi[bd_addr] = rssi
+                    for dev in devices_found:
+                        if dev['bd_address'] == bd_addr:
+                            dev['rssi'] = rssi
+                            break
 
-        # Run BLE scan using btmgmt find -l (LE scan)
-        add_log(f"Running BLE scan on {interface}...", "DEBUG")
-        try:
-            result = subprocess.run(
-                ['btmgmt', '--index', hci_index, 'find', '-l'],
-                capture_output=True,
-                text=True,
-                timeout=12
-            )
-
-            # Parse btmgmt find -l output (same format as find but for LE devices)
-            for line in result.stdout.split('\n'):
-                match = re.search(r'dev_found:\s*([0-9A-Fa-f:]{17})\s+type\s+(\S+)(?:\s+rssi\s+(-?\d+))?(?:.*?name\s+(.+?)(?:\s+eir_len|$))?', line, re.IGNORECASE)
-                if match:
-                    bd_addr = match.group(1).upper()
-                    rssi = int(match.group(3)) if match.group(3) else None
-                    name = match.group(4).strip() if match.group(4) else 'Unknown'
-
-                    if bd_addr not in seen_addresses:
-                        seen_addresses.add(bd_addr)
-                        devices_found.append({
-                            'bd_address': bd_addr,
-                            'device_name': name,
-                            'device_type': 'ble',
-                            'manufacturer': get_manufacturer(bd_addr),
-                            'rssi': rssi
-                        })
-                        add_log(f"Found BLE device: {bd_addr} ({name}) RSSI: {rssi}", "DEBUG")
-                    else:
-                        # Update RSSI if we already have this device
-                        for dev in devices_found:
-                            if dev['bd_address'] == bd_addr and rssi is not None:
-                                dev['rssi'] = rssi
-                                if name != 'Unknown':
-                                    dev['device_name'] = name
+                # Parse name changes
+                name_match = re.search(r'\[CHG\]\s+Device\s+([0-9A-Fa-f:]{17})\s+Name:\s*(.*)', line)
+                if name_match:
+                    bd_addr = name_match.group(1).upper()
+                    name = name_match.group(2).strip()
+                    for dev in devices_found:
+                        if dev['bd_address'] == bd_addr and name:
+                            dev['device_name'] = name
 
         except subprocess.TimeoutExpired:
             add_log("BLE scan timeout", "WARNING")
         except Exception as e:
             add_log(f"BLE scan error: {e}", "WARNING")
 
-        # Fallback: Also try hcitool inq for any missed classic devices
-        try:
-            result = subprocess.run(
-                ['hcitool', '-i', interface, 'inq', '--flush'],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-            # Parse: "XX:XX:XX:XX:XX:XX clock:... class:..."
-            for line in result.stdout.split('\n'):
-                match = re.match(r'\s*([0-9A-Fa-f:]{17})', line.strip())
-                if match:
-                    bd_addr = match.group(1).upper()
-                    if bd_addr not in seen_addresses:
-                        seen_addresses.add(bd_addr)
-                        devices_found.append({
-                            'bd_address': bd_addr,
-                            'device_name': 'Unknown',
-                            'device_type': 'classic',
-                            'manufacturer': get_manufacturer(bd_addr),
-                            'rssi': None
-                        })
-        except Exception:
-            pass  # hcitool inq is optional fallback
+        # Determine device types
+        for dev in devices_found:
+            dev['device_type'] = get_device_type(dev['bd_address'])
 
-        # Count device types
-        classic_count = sum(1 for d in devices_found if d['device_type'] == 'classic')
-        ble_count = sum(1 for d in devices_found if d['device_type'] == 'ble')
-
-        add_log(f"Scan found {len(devices_found)} devices ({classic_count} Classic, {ble_count} BLE)", "INFO")
+        add_log(f"Fallback scan found {len(devices_found)} devices", "INFO")
         return devices_found
 
     except Exception as e:
@@ -1931,6 +1899,411 @@ def scan_ble_devices(interface='hci0'):
     """
     # Unified scan already handles BLE, skip separate BLE scan
     return []
+
+
+# ==================== BTMGMT-BASED SCANNING ====================
+# Modern BlueZ management interface - more reliable on Ubuntu 24.04+
+# Replaces deprecated hcitool/hciconfig for device discovery
+
+# Scan mode configurations
+SCAN_MODES = {
+    'stealth': {
+        'name': 'Stealth',
+        'description': 'Passive monitoring only - no transmissions',
+        'btmgmt_flags': [],
+        'duration': 10,
+        'use_btmon': True,
+        'use_btmgmt': False,
+        'use_bluetoothctl': False,
+    },
+    'balanced': {
+        'name': 'Balanced',
+        'description': 'Standard discovery - btmgmt find',
+        'btmgmt_flags': [],
+        'duration': 10,
+        'use_btmon': True,
+        'use_btmgmt': True,
+        'use_bluetoothctl': False,
+    },
+    'aggressive': {
+        'name': 'Aggressive',
+        'description': 'Maximum detection - all methods combined',
+        'btmgmt_flags': ['-l'],  # Limited discovery
+        'duration': 15,
+        'use_btmon': True,
+        'use_btmgmt': True,
+        'use_bluetoothctl': True,
+    },
+    'ble_focus': {
+        'name': 'BLE Focus',
+        'description': 'BLE-only discovery for IoT devices',
+        'btmgmt_flags': ['-b'],  # BREDR (classic) off, LE only
+        'duration': 12,
+        'use_btmon': True,
+        'use_btmgmt': True,
+        'use_bluetoothctl': False,
+    },
+    'classic_focus': {
+        'name': 'Classic Focus',
+        'description': 'Classic Bluetooth focus for phones/audio',
+        'btmgmt_flags': ['-B'],  # LE off, BREDR only
+        'duration': 12,
+        'use_btmon': True,
+        'use_btmgmt': True,
+        'use_bluetoothctl': False,
+    },
+}
+
+# Current scan mode (can be changed via API)
+current_scan_mode = 'balanced'
+
+
+def get_hci_index(interface='hci0'):
+    """Extract numeric index from hci interface name."""
+    match = re.match(r'hci(\d+)', interface)
+    return match.group(1) if match else '0'
+
+
+def scan_btmgmt_find(interface='hci0', duration=10, flags=None):
+    """
+    Primary scanning method using btmgmt find.
+    Works reliably on Ubuntu 24.04+ without pybluez dependency.
+
+    btmgmt find performs both BR/EDR inquiry and LE scanning simultaneously.
+
+    Flags:
+        -l: Limited discovery (LIAC instead of GIAC)
+        -b: BR/EDR only (no LE)
+        -B: LE only (no BR/EDR)
+
+    Returns list of discovered devices.
+    """
+    if CONFIG.get('DEMO_MODE'):
+        add_log(f"[DEMO] btmgmt find on {interface}", "INFO")
+        time.sleep(1)
+        return generate_demo_devices(random.randint(3, 8), 'mixed')
+
+    devices_found = []
+    seen_addresses = set()
+    hci_index = get_hci_index(interface)
+
+    try:
+        add_log(f"Starting btmgmt find on hci{hci_index} (duration: {duration}s)", "INFO")
+
+        # Build command
+        cmd = ['btmgmt', '-i', f'hci{hci_index}', 'find']
+        if flags:
+            cmd.extend(flags)
+
+        # Run btmgmt find with timeout
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1
+        )
+
+        start_time = time.time()
+
+        # Read output in real-time
+        try:
+            while time.time() - start_time < duration:
+                # Check if process has finished
+                if proc.poll() is not None:
+                    break
+
+                # Use select for non-blocking read on Unix
+                import select
+                ready, _, _ = select.select([proc.stdout], [], [], 0.5)
+                if not ready:
+                    continue
+
+                line = proc.stdout.readline()
+                if not line:
+                    continue
+
+                line = line.strip()
+                if not line:
+                    continue
+
+                # Parse btmgmt find output formats:
+                # "hci0 dev_found: AA:BB:CC:DD:EE:FF type BR/EDR rssi -45 flags 0x0000"
+                # "hci0 dev_found: AA:BB:CC:DD:EE:FF type LE Random rssi -62 flags 0x0000"
+                dev_match = re.search(
+                    r'dev_found:\s*([0-9A-Fa-f:]{17})\s+type\s+(\S+(?:\s+\S+)?)\s+rssi\s+(-?\d+)',
+                    line
+                )
+                if dev_match:
+                    bd_addr = dev_match.group(1).upper()
+                    dev_type_raw = dev_match.group(2)
+                    rssi = int(dev_match.group(3))
+
+                    # Determine device type
+                    if 'LE' in dev_type_raw:
+                        dev_type = 'ble'
+                    else:
+                        dev_type = 'classic'
+
+                    if bd_addr not in seen_addresses:
+                        seen_addresses.add(bd_addr)
+                        devices_found.append({
+                            'bd_address': bd_addr,
+                            'device_name': 'Unknown',  # btmgmt doesn't provide names
+                            'device_type': dev_type,
+                            'manufacturer': get_manufacturer(bd_addr),
+                            'rssi': rssi
+                        })
+                        add_log(f"btmgmt found: {bd_addr} ({dev_type}, RSSI: {rssi})", "DEBUG")
+                    else:
+                        # Update RSSI for existing device
+                        for dev in devices_found:
+                            if dev['bd_address'] == bd_addr:
+                                dev['rssi'] = rssi
+                                break
+
+                # Also parse name responses
+                # "hci0 type 1 name AA:BB:CC:DD:EE:FF Device Name"
+                name_match = re.search(
+                    r'name\s+([0-9A-Fa-f:]{17})\s+(.*)',
+                    line
+                )
+                if name_match:
+                    bd_addr = name_match.group(1).upper()
+                    name = name_match.group(2).strip()
+                    if name:
+                        for dev in devices_found:
+                            if dev['bd_address'] == bd_addr:
+                                dev['device_name'] = name
+                                break
+
+        except Exception as e:
+            add_log(f"btmgmt read error: {e}", "WARNING")
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(timeout=2)
+            except:
+                proc.kill()
+
+        # Try to get names for devices without names using bluetoothctl
+        for dev in devices_found:
+            if dev['device_name'] == 'Unknown':
+                try:
+                    result = subprocess.run(
+                        ['bluetoothctl', 'info', dev['bd_address']],
+                        capture_output=True, text=True, timeout=2
+                    )
+                    name_match = re.search(r'Name:\s*(.+)', result.stdout)
+                    if name_match:
+                        dev['device_name'] = name_match.group(1).strip()
+                except:
+                    pass
+
+        classic_count = sum(1 for d in devices_found if d['device_type'] == 'classic')
+        ble_count = sum(1 for d in devices_found if d['device_type'] == 'ble')
+        add_log(f"btmgmt find complete: {len(devices_found)} devices ({classic_count} Classic, {ble_count} BLE)", "INFO")
+
+        return devices_found
+
+    except FileNotFoundError:
+        add_log("btmgmt not found - falling back to bluetoothctl", "WARNING")
+        return []
+    except Exception as e:
+        add_log(f"btmgmt find error: {str(e)}", "ERROR")
+        return devices_found
+
+
+def scan_btmon_passive(duration=10):
+    """
+    Passive scanning using btmon.
+    Monitors HCI traffic without transmitting - true stealth mode.
+    Captures devices from ongoing Bluetooth activity in the area.
+
+    Returns list of discovered devices from HCI traffic analysis.
+    """
+    if CONFIG.get('DEMO_MODE'):
+        return []
+
+    devices_found = []
+    seen_addresses = set()
+
+    try:
+        add_log(f"Starting btmon passive scan (duration: {duration}s)", "INFO")
+
+        # Run btmon with timestamps
+        proc = subprocess.Popen(
+            ['btmon', '-T'],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1
+        )
+
+        start_time = time.time()
+
+        try:
+            import select
+            while time.time() - start_time < duration:
+                if proc.poll() is not None:
+                    break
+
+                ready, _, _ = select.select([proc.stdout], [], [], 0.5)
+                if not ready:
+                    continue
+
+                line = proc.stdout.readline()
+                if not line:
+                    continue
+
+                line = line.strip()
+
+                # Parse various btmon output patterns
+                # Address in HCI events
+                addr_match = re.search(r'Address:\s*([0-9A-Fa-f:]{17})\s*\((\w+)\)', line)
+                if addr_match:
+                    bd_addr = addr_match.group(1).upper()
+                    addr_type = addr_match.group(2)  # Public, Random, etc.
+
+                    if bd_addr not in seen_addresses and bd_addr != '00:00:00:00:00:00':
+                        seen_addresses.add(bd_addr)
+                        dev_type = 'ble' if 'Random' in addr_type or 'LE' in line else 'classic'
+                        devices_found.append({
+                            'bd_address': bd_addr,
+                            'device_name': 'Unknown',
+                            'device_type': dev_type,
+                            'manufacturer': get_manufacturer(bd_addr),
+                            'rssi': None
+                        })
+                        add_log(f"btmon passive found: {bd_addr} ({dev_type})", "DEBUG")
+
+                # RSSI in advertisements
+                rssi_match = re.search(r'RSSI:\s*(-?\d+)\s*dBm', line)
+                if rssi_match:
+                    rssi = int(rssi_match.group(1))
+                    # Apply to last found device
+                    if devices_found and devices_found[-1]['rssi'] is None:
+                        devices_found[-1]['rssi'] = rssi
+
+        except Exception as e:
+            add_log(f"btmon read error: {e}", "WARNING")
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(timeout=2)
+            except:
+                proc.kill()
+
+        add_log(f"btmon passive scan complete: {len(devices_found)} devices", "INFO")
+        return devices_found
+
+    except FileNotFoundError:
+        add_log("btmon not found", "WARNING")
+        return []
+    except Exception as e:
+        add_log(f"btmon passive error: {str(e)}", "ERROR")
+        return []
+
+
+def scan_combined(interface='hci0', mode='balanced'):
+    """
+    Combined scanning using multiple techniques based on scan mode.
+
+    Modes:
+        - stealth: btmon only (passive, no transmissions)
+        - balanced: btmgmt find (standard discovery)
+        - aggressive: btmgmt + bluetoothctl + extended inquiry
+        - ble_focus: BLE-only discovery
+        - classic_focus: Classic Bluetooth only
+
+    Returns deduplicated list of all discovered devices.
+    """
+    global current_scan_mode
+
+    mode_config = SCAN_MODES.get(mode, SCAN_MODES['balanced'])
+    current_scan_mode = mode
+
+    add_log(f"Combined scan starting - mode: {mode_config['name']}", "INFO")
+
+    all_devices = []
+    seen_addresses = set()
+
+    # 1. Passive btmon monitoring (always first if enabled)
+    if mode_config['use_btmon']:
+        btmon_duration = max(3, mode_config['duration'] // 3)
+        btmon_devices = scan_btmon_passive(btmon_duration)
+        for dev in btmon_devices:
+            if dev['bd_address'] not in seen_addresses:
+                seen_addresses.add(dev['bd_address'])
+                all_devices.append(dev)
+
+    # 2. btmgmt find (primary active scan)
+    if mode_config['use_btmgmt']:
+        btmgmt_devices = scan_btmgmt_find(
+            interface=interface,
+            duration=mode_config['duration'],
+            flags=mode_config['btmgmt_flags']
+        )
+        for dev in btmgmt_devices:
+            if dev['bd_address'] not in seen_addresses:
+                seen_addresses.add(dev['bd_address'])
+                all_devices.append(dev)
+            else:
+                # Merge data - update existing device with better info
+                for existing in all_devices:
+                    if existing['bd_address'] == dev['bd_address']:
+                        if dev['device_name'] != 'Unknown':
+                            existing['device_name'] = dev['device_name']
+                        if dev['rssi'] is not None:
+                            existing['rssi'] = dev['rssi']
+                        break
+
+    # 3. Bluetoothctl for additional coverage (aggressive mode)
+    if mode_config['use_bluetoothctl']:
+        try:
+            # Clear and rescan with bluetoothctl
+            subprocess.run(['bluetoothctl', 'select', interface], capture_output=True, timeout=2)
+            subprocess.run(['bluetoothctl', 'power', 'on'], capture_output=True, timeout=2)
+
+            proc = subprocess.Popen(
+                ['timeout', '8', 'bluetoothctl', 'scan', 'on'],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True
+            )
+
+            for line in iter(proc.stdout.readline, ''):
+                if not line:
+                    break
+                new_match = re.search(r'\[NEW\]\s+Device\s+([0-9A-Fa-f:]{17})\s*(.*)', line.strip())
+                if new_match:
+                    bd_addr = new_match.group(1).upper()
+                    name = new_match.group(2).strip() or 'Unknown'
+                    if bd_addr not in seen_addresses:
+                        seen_addresses.add(bd_addr)
+                        all_devices.append({
+                            'bd_address': bd_addr,
+                            'device_name': name,
+                            'device_type': 'unknown',
+                            'manufacturer': get_manufacturer(bd_addr),
+                            'rssi': None
+                        })
+
+            proc.terminate()
+            proc.wait(timeout=2)
+        except Exception as e:
+            add_log(f"bluetoothctl scan error: {e}", "WARNING")
+
+    # Determine device types for any unknown devices
+    for dev in all_devices:
+        if dev['device_type'] == 'unknown':
+            dev['device_type'] = get_device_type(dev['bd_address'])
+
+    classic_count = sum(1 for d in all_devices if d['device_type'] == 'classic')
+    ble_count = sum(1 for d in all_devices if d['device_type'] == 'ble')
+    add_log(f"Combined scan complete: {len(all_devices)} devices ({classic_count} Classic, {ble_count} BLE)", "INFO")
+
+    return all_devices
 
 
 def get_device_rssi(bd_address, interface='hci0'):
@@ -6731,6 +7104,47 @@ def stop_scan():
 
     add_log(f"Scan stop requested. Stopped: {', '.join(stopped) if stopped else 'none active'}", "INFO")
     return jsonify({'status': 'stopped', 'stopped': stopped})
+
+
+@app.route('/api/scan/modes', methods=['GET'])
+@login_required
+def get_scan_modes():
+    """Get available scan modes and current mode."""
+    global current_scan_mode
+    return jsonify({
+        'current_mode': current_scan_mode,
+        'modes': {
+            name: {
+                'name': config['name'],
+                'description': config['description'],
+                'duration': config['duration']
+            }
+            for name, config in SCAN_MODES.items()
+        }
+    })
+
+
+@app.route('/api/scan/modes', methods=['POST'])
+@login_required
+def set_scan_mode():
+    """Set the current scan mode."""
+    global current_scan_mode
+    data = request.json or {}
+    mode = data.get('mode', 'balanced')
+
+    if mode not in SCAN_MODES:
+        return jsonify({'error': f'Unknown mode: {mode}. Available: {list(SCAN_MODES.keys())}'}), 400
+
+    current_scan_mode = mode
+    mode_config = SCAN_MODES[mode]
+    add_log(f"Scan mode changed to: {mode_config['name']}", "INFO")
+
+    return jsonify({
+        'status': 'success',
+        'mode': mode,
+        'name': mode_config['name'],
+        'description': mode_config['description']
+    })
 
 
 @app.route('/api/scan/stimulate', methods=['POST'])

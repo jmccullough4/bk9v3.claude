@@ -1,58 +1,63 @@
 # BlueK9 Client - Docker Compose Configuration
-# Bluetooth Surveillance System
-
-version: '3.8'
+# Bluetooth Surveillance System - Plugin Architecture
+# Designed to run as a container plugin alongside other web applications
 
 services:
-  bluek9-client:
+  bluek9:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: bluek9-client
+    image: bluek9:latest
+    container_name: bluek9
     hostname: bluek9
     restart: unless-stopped
 
-    # Network mode host for Bluetooth and GPS access
-    network_mode: host
+    # Network configuration - use bridge for plugin isolation
+    # Switch to host mode if Bluetooth doesn't work with bridge
+    networks:
+      - bluek9-net
 
-    # Privileged mode for hardware access
+    # Port mapping for web UI
+    ports:
+      - "5000:5000"
+
+    # Privileged mode required for Bluetooth hardware access
     privileged: true
 
     # Required capabilities for Bluetooth and networking
     cap_add:
-      - NET_ADMIN
-      - NET_RAW
-      - SYS_ADMIN
+      - NET_ADMIN      # Network interface control
+      - NET_RAW        # Raw socket access for BLE
+      - SYS_ADMIN      # System administration for device access
 
     # Volume mounts
     volumes:
-      # Persist database and logs
-      - ./data:/app/client/data
-      - ./logs:/app/logs
+      # Persistent data
+      - bluek9-data:/app/data
+      - bluek9-logs:/app/logs
 
-      # Access to Bluetooth devices
-      - /var/run/dbus:/var/run/dbus
+      # D-Bus socket for BlueZ communication (required)
+      - /var/run/dbus:/var/run/dbus:ro
+      - /run/dbus/system_bus_socket:/run/dbus/system_bus_socket
+
+      # USB device access for Bluetooth adapters
       - /dev/bus/usb:/dev/bus/usb
 
-      # Access to GPS devices
-      - /dev:/dev
-
-      # D-Bus socket for BlueZ
-      - /run/dbus/system_bus_socket:/run/dbus/system_bus_socket
+      # Serial device access for GPS
+      - /dev/serial:/dev/serial:ro
 
     # Environment variables
     environment:
       - FLASK_ENV=production
       - PYTHONUNBUFFERED=1
       - DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket
+      # Configuration overrides (optional)
+      - BLUEK9_DEMO_MODE=false
+      - BLUEK9_SCAN_MODE=balanced
 
-    # Device access
+    # Device access for Bluetooth adapters
     devices:
       - /dev/bus/usb:/dev/bus/usb
-
-    # Port mapping (when not using host network)
-    # ports:
-    #   - "5000:5000"
 
     # Healthcheck
     healthcheck:
@@ -60,7 +65,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 10s
+      start_period: 15s
 
     # Logging configuration
     logging:
@@ -69,9 +74,45 @@ services:
         max-size: "10m"
         max-file: "3"
 
+    # Labels for container management
+    labels:
+      - "com.bluek9.description=Bluetooth Surveillance System"
+      - "com.bluek9.version=3.3"
+
+  # Alternative configuration using host networking
+  # Uncomment this service and comment out the above if bridge mode doesn't work
+  # bluek9-host:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #   image: bluek9:latest
+  #   container_name: bluek9-host
+  #   hostname: bluek9
+  #   restart: unless-stopped
+  #   network_mode: host
+  #   privileged: true
+  #   volumes:
+  #     - bluek9-data:/app/data
+  #     - bluek9-logs:/app/logs
+  #     - /var/run/dbus:/var/run/dbus:ro
+  #     - /run/dbus/system_bus_socket:/run/dbus/system_bus_socket
+  #     - /dev:/dev
+  #   environment:
+  #     - FLASK_ENV=production
+  #     - PYTHONUNBUFFERED=1
+  #     - DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket
+
+# Networks
+networks:
+  bluek9-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+
 # Volumes for persistent data
 volumes:
-  bluek9_data:
+  bluek9-data:
     driver: local
-  bluek9_logs:
+  bluek9-logs:
     driver: local
