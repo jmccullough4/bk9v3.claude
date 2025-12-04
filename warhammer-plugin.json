@@ -1,0 +1,51 @@
+{
+  "id": "wh-plugin-bluek9",
+  "name": "BlueK9",
+  "description": "Tactical Bluetooth Surveillance System",
+  "version": "3.3",
+  "image": "bluek9:latest",
+  "build": {
+    "context": ".",
+    "dockerfile": "Dockerfile"
+  },
+  "network": "host",
+  "restart_policy": "unless-stopped",
+  "privileged": true,
+  "ports": [],
+  "env": {
+    "FLASK_ENV": "production",
+    "PYTHONUNBUFFERED": "1",
+    "DBUS_SYSTEM_BUS_ADDRESS": "unix:path=/run/dbus/system_bus_socket",
+    "BLUEK9_DOCKER_MODE": "true",
+    "BLUEK9_INSTALL_DIR": "/app"
+  },
+  "volumes": [
+    "/var/run/dbus:/var/run/dbus",
+    "/run/dbus/system_bus_socket:/run/dbus/system_bus_socket",
+    "/dev:/dev",
+    "/var/lib/bluetooth:/var/lib/bluetooth",
+    "/etc/bluetooth:/etc/bluetooth:ro",
+    "/usr/bin/netbird:/usr/bin/netbird:ro",
+    "/var/run/netbird.sock:/var/run/netbird.sock",
+    "/etc/netbird:/etc/netbird:ro"
+  ],
+  "cap_add": [
+    "NET_ADMIN",
+    "NET_RAW",
+    "SYS_ADMIN"
+  ],
+  "web_port": 5000,
+  "web_path": "/",
+  "health_check": {
+    "endpoint": "/login",
+    "interval": 30,
+    "timeout": 10
+  },
+  "category": "surveillance",
+  "tags": ["bluetooth", "ble", "security", "surveillance", "hackrf", "ubertooth"],
+  "author": "BlueK9 Team",
+  "repository": "https://github.com/jmccullough4/bk9v3.claude",
+  "documentation": "https://github.com/jmccullough4/bk9v3.claude/blob/main/README.md",
+  "icon": "bluetooth",
+  "accent_color": "#00ffff"
+}

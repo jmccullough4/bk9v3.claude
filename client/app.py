@@ -20,7 +20,9 @@ from flask_socketio import SocketIO, emit
 import struct
 
 # Dynamically determine install directory (parent of client/)
-INSTALL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# In Docker mode, use environment variable if set
+INSTALL_DIR = os.environ.get('BLUEK9_INSTALL_DIR', os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+DOCKER_MODE = os.environ.get('BLUEK9_DOCKER_MODE', 'false').lower() == 'true'
 
 # Configuration
 CONFIG = {
@@ -7306,10 +7308,14 @@ def apply_updates():
 
 
 def do_system_restart():
-    """Execute the actual system restart using flag-based approach with start.sh loop."""
+    """Execute the actual system restart.
+
+    In Docker mode: Exit the process, Docker will auto-restart the container.
+    In native mode: Use flag-based approach with start.sh loop.
+    """
     global scanning_active, warhammer_running
 
-    add_log("Initiating system restart...", "INFO")
+    add_log(f"Initiating system restart (Docker mode: {DOCKER_MODE})...", "INFO")
 
     # Stop any active scanning
     scanning_active = False
@@ -7321,20 +7327,26 @@ def do_system_restart():
     for bd_addr in list(active_geo_sessions.keys()):
         stop_active_geo(bd_addr)
 
-    # Create restart flag file - start.sh will detect this and restart
-    restart_flag = '/tmp/bluek9_restart'
-    try:
-        with open(restart_flag, 'w') as f:
-            f.write(str(time.time()))
-        add_log("Restart flag created, exiting for restart...", "INFO")
-    except Exception as e:
-        add_log(f"Failed to create restart flag: {e}", "ERROR")
+    if DOCKER_MODE:
+        # In Docker mode, just exit - Docker's restart policy handles restart
+        add_log("Docker mode: exiting for container restart...", "INFO")
+        time.sleep(0.5)
+        os._exit(0)
+    else:
+        # Create restart flag file - start.sh will detect this and restart
+        restart_flag = '/tmp/bluek9_restart'
+        try:
+            with open(restart_flag, 'w') as f:
+                f.write(str(time.time()))
+            add_log("Restart flag created, exiting for restart...", "INFO")
+        except Exception as e:
+            add_log(f"Failed to create restart flag: {e}", "ERROR")
 
-    # Give a moment for the log to be sent
-    time.sleep(0.5)
+        # Give a moment for the log to be sent
+        time.sleep(0.5)
 
-    # Exit the application - start.sh loop will restart it
-    os._exit(0)
+        # Exit the application - start.sh loop will restart it
+        os._exit(0)
 
 
 @app.route('/api/system/restart', methods=['POST'])
@@ -9490,6 +9502,317 @@ def get_piconet_analysis():
             'status': 'error',
             'error': str(e)
         }), 500
+
+
+# ==================== HACKRF SPECTRUM ANALYSIS ====================
+
+# HackRF scanning state
+hackrf_scanning = False
+hackrf_thread = None
+hackrf_spectrum_data = {}  # freq_mhz -> power_db
+hackrf_piconet_detections = []  # List of detected piconets from spectrum analysis
+
+
+def check_hackrf_info():
+    """Get detailed HackRF device information."""
+    try:
+        result = subprocess.run(
+            ['hackrf_info'],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0:
+            info = {
+                'available': True,
+                'raw_info': result.stdout.strip()
+            }
+            # Parse out key info
+            for line in result.stdout.split('\n'):
+                if 'Serial number' in line:
+                    info['serial'] = line.split(':')[-1].strip()
+                elif 'Firmware Version' in line:
+                    info['firmware'] = line.split(':')[-1].strip()
+                elif 'Board ID' in line:
+                    info['board_id'] = line.split(':')[-1].strip()
+            return info
+        return {'available': False, 'error': 'Device not found'}
+    except FileNotFoundError:
+        return {'available': False, 'error': 'hackrf_info not installed'}
+    except subprocess.TimeoutExpired:
+        return {'available': False, 'error': 'Device not responding'}
+    except Exception as e:
+        return {'available': False, 'error': str(e)}
+
+
+def analyze_spectrum_for_piconets(spectrum_data):
+    """
+    Analyze spectrum data to detect potential Bluetooth piconets.
+
+    Bluetooth uses 79 channels (2402-2480 MHz) with FHSS.
+    Active piconets show activity across multiple channels with
+    characteristic hopping patterns.
+
+    Returns list of detected piconets with channel activity patterns.
+    """
+    if not spectrum_data:
+        return []
+
+    piconets = []
+    active_channels = []
+
+    # Bluetooth channel frequencies (2402 + n MHz, where n = 0-78)
+    BT_FREQ_START = 2402
+    BT_FREQ_END = 2480
+    NOISE_FLOOR = -60  # dB threshold for activity
+
+    # Find active channels
+    for freq_mhz, power_db in spectrum_data.items():
+        if BT_FREQ_START <= freq_mhz <= BT_FREQ_END and power_db > NOISE_FLOOR:
+            channel = freq_mhz - BT_FREQ_START
+            active_channels.append({
+                'channel': channel,
+                'frequency': freq_mhz,
+                'power': power_db
+            })
+
+    if not active_channels:
+        return []
+
+    # Group channels that show activity patterns
+    # Piconets typically show activity across 20+ channels due to hopping
+    active_channels.sort(key=lambda x: x['channel'])
+
+    # Calculate channel spread and activity patterns
+    channels = [c['channel'] for c in active_channels]
+    powers = [c['power'] for c in active_channels]
+
+    if len(channels) >= 5:  # Minimum channels for potential piconet
+        avg_power = sum(powers) / len(powers)
+        channel_spread = max(channels) - min(channels)
+
+        # Detect potential piconets based on channel patterns
+        piconet = {
+            'id': f'PICONET-{len(piconets) + 1}',
+            'type': 'spectrum_detected',
+            'active_channels': len(active_channels),
+            'channel_spread': channel_spread,
+            'average_power': round(avg_power, 1),
+            'strongest_channel': max(active_channels, key=lambda x: x['power']),
+            'channels': channels[:20],  # First 20 channels
+            'detected_at': datetime.now().isoformat(),
+            'confidence': 'high' if len(channels) >= 20 else 'medium' if len(channels) >= 10 else 'low'
+        }
+
+        # Estimate if this could be WiFi interference (2.4GHz WiFi overlaps)
+        # WiFi channels: 1 (2412), 6 (2437), 11 (2462)
+        wifi_overlaps = sum(1 for c in channels if c in [10, 35, 60])  # Near WiFi center freqs
+        if wifi_overlaps > 0:
+            piconet['wifi_interference'] = True
+            piconet['confidence'] = 'low'  # Downgrade due to potential WiFi
+
+        piconets.append(piconet)
+
+    return piconets
+
+
+def hackrf_continuous_sweep():
+    """Background thread for continuous HackRF spectrum sweeping."""
+    global hackrf_scanning, hackrf_spectrum_data, hackrf_piconet_detections
+
+    add_log("HackRF continuous spectrum sweep starting", "INFO")
+
+    while hackrf_scanning:
+        try:
+            # Run a quick sweep
+            proc = subprocess.Popen(
+                ['hackrf_sweep', '-f', '2400:2485', '-w', '1000000', '-1'],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+
+            channel_power = {}
+            try:
+                for _ in range(100):  # Read up to 100 lines per sweep
+                    if not hackrf_scanning:
+                        break
+                    line = proc.stdout.readline()
+                    if not line:
+                        break
+
+                    parts = line.strip().split(', ')
+                    if len(parts) >= 6:
+                        try:
+                            freq_low = int(float(parts[1]))
+                            freq_high = int(float(parts[2]))
+                            powers = [float(p) for p in parts[5:] if p]
+                            if powers:
+                                center_freq_mhz = (freq_low + freq_high) // 2 // 1000000
+                                max_power = max(powers)
+                                channel_power[center_freq_mhz] = max_power
+                        except (ValueError, IndexError):
+                            continue
+            finally:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=1)
+                except:
+                    proc.kill()
+
+            if channel_power:
+                hackrf_spectrum_data = channel_power
+                # Analyze for piconets
+                hackrf_piconet_detections = analyze_spectrum_for_piconets(channel_power)
+
+                # Emit spectrum update to clients
+                socketio.emit('hackrf_spectrum', {
+                    'spectrum': list(channel_power.items()),
+                    'piconets': hackrf_piconet_detections,
+                    'timestamp': datetime.now().isoformat()
+                })
+
+            time.sleep(1)  # Brief pause between sweeps
+
+        except Exception as e:
+            add_log(f"HackRF sweep error: {e}", "ERROR")
+            time.sleep(2)
+
+    add_log("HackRF continuous spectrum sweep stopped", "INFO")
+
+
+@app.route('/api/hackrf/status')
+@login_required
+def hackrf_status():
+    """Get HackRF status and device information."""
+    info = check_hackrf_info()
+    info['scanning'] = hackrf_scanning
+    info['spectrum_samples'] = len(hackrf_spectrum_data)
+    info['piconets_detected'] = len(hackrf_piconet_detections)
+    return jsonify(info)
+
+
+@app.route('/api/hackrf/sweep', methods=['POST'])
+@login_required
+def hackrf_single_sweep():
+    """Perform a single HackRF spectrum sweep."""
+    if not check_hackrf_available():
+        return jsonify({'error': 'HackRF not available'}), 400
+
+    duration = request.json.get('duration', 5) if request.json else 5
+    activity = scan_hackrf_sweep(duration=duration)
+
+    return jsonify({
+        'status': 'completed',
+        'activity_count': len(activity),
+        'activity': activity,
+        'timestamp': datetime.now().isoformat()
+    })
+
+
+@app.route('/api/hackrf/scan/start', methods=['POST'])
+@login_required
+def hackrf_start_continuous():
+    """Start continuous HackRF spectrum scanning."""
+    global hackrf_scanning, hackrf_thread
+
+    if hackrf_scanning:
+        return jsonify({'status': 'already_running'})
+
+    if not check_hackrf_available():
+        return jsonify({'error': 'HackRF not available'}), 400
+
+    hackrf_scanning = True
+    hackrf_thread = threading.Thread(target=hackrf_continuous_sweep, daemon=True)
+    hackrf_thread.start()
+
+    add_log("HackRF continuous scanning started", "INFO")
+    return jsonify({'status': 'started'})
+
+
+@app.route('/api/hackrf/scan/stop', methods=['POST'])
+@login_required
+def hackrf_stop_continuous():
+    """Stop continuous HackRF spectrum scanning."""
+    global hackrf_scanning
+
+    if not hackrf_scanning:
+        return jsonify({'status': 'not_running'})
+
+    hackrf_scanning = False
+    add_log("HackRF continuous scanning stopped", "INFO")
+    return jsonify({'status': 'stopped'})
+
+
+@app.route('/api/hackrf/spectrum')
+@login_required
+def hackrf_get_spectrum():
+    """Get current spectrum data and detected piconets."""
+    return jsonify({
+        'scanning': hackrf_scanning,
+        'spectrum': list(hackrf_spectrum_data.items()),
+        'piconets': hackrf_piconet_detections,
+        'timestamp': datetime.now().isoformat()
+    })
+
+
+@app.route('/api/spectrum/combined')
+@login_required
+def get_combined_spectrum():
+    """Get combined spectrum analysis from all RF sources.
+
+    Returns data from:
+    - HackRF spectrum sweep (2.4GHz Bluetooth band)
+    - Ubertooth piconet detections (LAP/UAP/channel info)
+    - Standard BT adapter devices
+    """
+    # Combine all data sources
+    combined = {
+        'hackrf': {
+            'available': check_hackrf_available(),
+            'scanning': hackrf_scanning,
+            'spectrum': list(hackrf_spectrum_data.items()),
+            'piconets': hackrf_piconet_detections
+        },
+        'ubertooth': {
+            'available': check_ubertooth_available(),
+            'running': ubertooth_running,
+            'piconets': []
+        },
+        'devices': {
+            'total': len(devices),
+            'classic': sum(1 for d in devices.values() if d.get('device_type') != 'ble'),
+            'ble': sum(1 for d in devices.values() if d.get('device_type') == 'ble')
+        },
+        'timestamp': datetime.now().isoformat()
+    }
+
+    # Format Ubertooth data
+    for lap, info in ubertooth_data.items():
+        piconet_entry = {
+            'lap': lap,
+            'uap': info.get('uap'),
+            'bd_partial': info.get('bd_partial'),
+            'channels': list(info.get('channels', set())),
+            'packet_count': info.get('packet_count', 0),
+            'first_seen': info.get('first_seen'),
+            'last_seen': info.get('last_seen')
+        }
+        combined['ubertooth']['piconets'].append(piconet_entry)
+
+    # Cross-reference with known devices
+    for piconet in combined['ubertooth']['piconets']:
+        lap = piconet['lap']
+        # Check if any detected device has this LAP
+        for bd_addr, dev in devices.items():
+            device_lap = bd_addr.replace(':', '')[-6:].upper()
+            if device_lap == lap.upper():
+                piconet['matched_device'] = {
+                    'bd_address': bd_addr,
+                    'name': dev.get('device_name', 'Unknown'),
+                    'type': dev.get('device_type', 'unknown')
+                }
+                break
+
+    return jsonify(combined)
 
 
 # ==================== WARHAMMER NETWORK (MESH NETWORK) ====================

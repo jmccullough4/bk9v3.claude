@@ -138,6 +138,7 @@
                     <button class="tools-tab" onclick="showToolsTab('phonebook')">Phone Book</button>
                     <button class="tools-tab" onclick="showToolsTab('services')">Services</button>
                     <button class="tools-tab" onclick="showToolsTab('analysis')">Analysis</button>
+                    <button class="tools-tab" onclick="showToolsTab('sdr')">SDR/Spectrum</button>
                     <button class="tools-tab" onclick="showToolsTab('cyber')">Cyber Tools</button>
                 </div>
 
@@ -285,6 +286,132 @@
                         <div class="analysis-results mt-10 hidden" id="analysisResults">
                             <div class="analysis-results-content" id="analysisResultsContent">
                                 <!-- Results populated by JS -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- SDR/Spectrum Tab - HackRF & Ubertooth Piconet Detection -->
+                <div id="toolsSdr" class="tools-content">
+                    <div class="tools-group">
+                        <h3>&#128225; SDR Spectrum Analysis</h3>
+                        <p class="tools-hint">Use HackRF or Ubertooth to detect Bluetooth piconets and analyze the 2.4GHz spectrum.</p>
+
+                        <!-- Hardware Status -->
+                        <div class="sdr-status-cards">
+                            <div class="sdr-status-card" id="hackrfStatusCard">
+                                <div class="sdr-card-header">
+                                    <span class="sdr-icon">&#128752;</span>
+                                    <span class="sdr-name">HackRF</span>
+                                    <span class="sdr-status-badge" id="hackrfStatusBadge">CHECKING</span>
+                                </div>
+                                <div class="sdr-card-body">
+                                    <div class="sdr-info-row">
+                                        <span>Serial:</span>
+                                        <span id="hackrfSerial">--</span>
+                                    </div>
+                                    <div class="sdr-info-row">
+                                        <span>Firmware:</span>
+                                        <span id="hackrfFirmware">--</span>
+                                    </div>
+                                </div>
+                                <div class="sdr-card-actions">
+                                    <button class="btn btn-success btn-sm" id="btnHackrfStart" onclick="startHackrfScan()">&#9654; START</button>
+                                    <button class="btn btn-danger btn-sm" id="btnHackrfStop" onclick="stopHackrfScan()" disabled>&#9632; STOP</button>
+                                </div>
+                            </div>
+
+                            <div class="sdr-status-card" id="ubertoothStatusCard">
+                                <div class="sdr-card-header">
+                                    <span class="sdr-icon">&#128752;</span>
+                                    <span class="sdr-name">Ubertooth</span>
+                                    <span class="sdr-status-badge" id="ubertoothStatusBadge">CHECKING</span>
+                                </div>
+                                <div class="sdr-card-body">
+                                    <div class="sdr-info-row">
+                                        <span>Device:</span>
+                                        <span id="ubertoothDevice">--</span>
+                                    </div>
+                                    <div class="sdr-info-row">
+                                        <span>Piconets:</span>
+                                        <span id="ubertoothPiconets">0</span>
+                                    </div>
+                                </div>
+                                <div class="sdr-card-actions">
+                                    <button class="btn btn-success btn-sm" id="btnUbertoothStart" onclick="startUbertoothPiconet()">&#9654; START</button>
+                                    <button class="btn btn-danger btn-sm" id="btnUbertoothStop" onclick="stopUbertoothPiconet()" disabled>&#9632; STOP</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Spectrum Visualization -->
+                        <div class="sdr-spectrum-container mt-10">
+                            <div class="spectrum-header">
+                                <span>2.4GHz Bluetooth Spectrum (2402-2480 MHz)</span>
+                                <div class="spectrum-legend">
+                                    <span class="legend-item"><span class="legend-dot bt"></span> BT Activity</span>
+                                    <span class="legend-item"><span class="legend-dot wifi"></span> WiFi Overlap</span>
+                                </div>
+                            </div>
+                            <div class="spectrum-canvas-container">
+                                <canvas id="sdrSpectrumCanvas" width="700" height="150"></canvas>
+                                <div class="spectrum-overlay" id="spectrumOverlay">
+                                    <span>Start scanning to view spectrum</span>
+                                </div>
+                            </div>
+                            <div class="spectrum-stats">
+                                <div class="stat-item">
+                                    <span class="stat-label">Active Channels:</span>
+                                    <span class="stat-value" id="sdrActiveChannels">--</span>
+                                </div>
+                                <div class="stat-item">
+                                    <span class="stat-label">Peak Power:</span>
+                                    <span class="stat-value" id="sdrPeakPower">-- dB</span>
+                                </div>
+                                <div class="stat-item">
+                                    <span class="stat-label">Last Update:</span>
+                                    <span class="stat-value" id="sdrLastUpdate">--</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Detected Piconets -->
+                        <div class="sdr-piconets mt-10">
+                            <div class="piconets-header">
+                                <h4>&#128279; Detected Piconets & BD Addresses</h4>
+                                <button class="btn btn-sm btn-secondary" onclick="clearPiconetData()">CLEAR</button>
+                            </div>
+                            <p class="tools-hint">LAP/UAP recovered from Bluetooth traffic. Partial BD_ADDR format: ??:UAP:LAP[0:2]:LAP[2:4]:LAP[4:6]</p>
+                            <div class="piconets-table-container">
+                                <table class="piconets-table" id="piconetsTable">
+                                    <thead>
+                                        <tr>
+                                            <th>LAP</th>
+                                            <th>UAP</th>
+                                            <th>Partial BD_ADDR</th>
+                                            <th>Channels</th>
+                                            <th>Packets</th>
+                                            <th>Matched Device</th>
+                                            <th>First Seen</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="piconetsTableBody">
+                                        <tr class="placeholder-row">
+                                            <td colspan="7">Start Ubertooth to detect piconets...</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- HackRF Spectrum Piconets (from frequency analysis) -->
+                        <div class="sdr-spectrum-piconets mt-10 hidden" id="spectrumPiconetsSection">
+                            <div class="piconets-header">
+                                <h4>&#128200; Spectrum-Detected Activity</h4>
+                            </div>
+                            <p class="tools-hint">Piconets inferred from FHSS activity patterns in the Bluetooth spectrum.</p>
+                            <div id="spectrumPiconetsList">
+                                <!-- Populated by JS -->
                             </div>
                         </div>
                     </div>
