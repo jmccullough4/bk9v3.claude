@@ -1775,8 +1775,8 @@ def generate_demo_devices(count=3, scan_type='both'):
 
 def scan_classic_bluetooth(interface='hci0'):
     """
-    Unified Bluetooth scan using btmgmt find as the primary method.
-    Falls back to bluetoothctl if btmgmt is unavailable.
+    Unified Bluetooth scan using hcitool as the primary method.
+    Falls back to bluetoothctl if hcitool is unavailable.
     This scans BOTH Classic and BLE devices simultaneously.
 
     Uses the current_scan_mode to determine scanning behavior.
@@ -1799,7 +1799,7 @@ def scan_classic_bluetooth(interface='hci0'):
     except Exception as e:
         add_log(f"Combined scan failed: {e}, falling back to bluetoothctl", "WARNING")
 
-    # Fallback to bluetoothctl if btmgmt methods fail
+    # Fallback to bluetoothctl if hcitool methods fail
     devices_found = []
     device_rssi = {}
     seen_addresses = set()
@@ -3915,8 +3915,8 @@ def hidden_device_hunt(interface='hci0', duration=45):
         # Most phones/watches advertise via BLE even when Classic is hidden
         add_log("Phase 2: Extended BLE passive scan (20s)...", "INFO")
         try:
-            # Use btmgmt for lower-level BLE scanning
-            subprocess.run(['btmgmt', '-i', interface, 'le', 'on'], capture_output=True, timeout=5)
+            # Enable LE mode using hciconfig
+            subprocess.run(['hciconfig', interface, 'leadv', '0'], capture_output=True, timeout=5)
 
             # Start aggressive BLE scan with duplicate filtering disabled
             proc = subprocess.Popen(
@@ -4330,8 +4330,8 @@ def ble_scan_for_targets(target_addresses, interface='hci0', duration=15):
     try:
         add_log(f"BLE scan for {len(target_addresses)} target(s) ({duration}s)...", "INFO")
 
-        # Ensure LE is enabled
-        subprocess.run(['btmgmt', '-i', interface, 'le', 'on'],
+        # Ensure LE is enabled using hciconfig
+        subprocess.run(['hciconfig', interface, 'leadv', '0'],
                       capture_output=True, timeout=5)
 
         # Use bluetoothctl for BLE scanning - it provides RSSI
