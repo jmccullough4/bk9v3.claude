@@ -180,6 +180,31 @@ install_cyber_tools() {
     mkdir -p "$TOOLS_DIR"
     cd "$TOOLS_DIR"
 
+    # Install HackRF tools (for SDR-based Bluetooth spectrum analysis)
+    log_info "Installing HackRF tools..."
+    if ! command -v hackrf_sweep &> /dev/null; then
+        apt-get install -y -qq hackrf libhackrf-dev 2>/dev/null || {
+            # If apt package not available, build from source
+            log_info "Building HackRF from source..."
+            git clone --depth 1 https://github.com/greatscottgadgets/hackrf.git 2>/dev/null || true
+            if [ -d "hackrf/host" ]; then
+                cd hackrf/host
+                mkdir -p build && cd build
+                cmake .. && make -j$(nproc) && make install
+                ldconfig
+                cd "$TOOLS_DIR"
+            fi
+        }
+        # Set udev rules for HackRF
+        if [ -f "/etc/udev/rules.d/53-hackrf.rules" ] || [ -f "hackrf/host/libhackrf/53-hackrf.rules" ]; then
+            cp hackrf/host/libhackrf/53-hackrf.rules /etc/udev/rules.d/ 2>/dev/null || true
+            udevadm control --reload-rules 2>/dev/null || true
+            udevadm trigger 2>/dev/null || true
+        fi
+    else
+        log_info "HackRF already installed"
+    fi
+
     # Install Ubertooth tools
     log_info "Installing Ubertooth tools..."
     if ! command -v ubertooth-util &> /dev/null; then
@@ -447,9 +472,59 @@ EOF
     log_info "System ID configured: $SYSTEM_ID"
 }
 
+# Verify Python environment
+verify_python_env() {
+    log_step "Verifying Python environment..."
+
+    VENV_PYTHON="$CLIENT_DIR/venv/bin/python"
+
+    # Check if venv exists
+    if [ ! -f "$VENV_PYTHON" ]; then
+        log_error "Virtual environment not found at $VENV_PYTHON"
+        log_info "Attempting to recreate virtual environment..."
+        python3 -m venv "$CLIENT_DIR/venv"
+        source "$CLIENT_DIR/venv/bin/activate"
+        pip install --upgrade pip
+        pip install -r "$CLIENT_DIR/requirements.txt"
+        deactivate
+    fi
+
+    # Verify Flask is installed
+    if ! "$VENV_PYTHON" -c "import flask" 2>/dev/null; then
+        log_warn "Flask not found in venv, installing dependencies..."
+        source "$CLIENT_DIR/venv/bin/activate"
+        pip install --upgrade pip
+        pip install -r "$CLIENT_DIR/requirements.txt"
+        deactivate
+    fi
+
+    # Final verification
+    if "$VENV_PYTHON" -c "import flask; import flask_socketio; print('Dependencies OK')" 2>/dev/null; then
+        log_info "Python environment verified successfully"
+    else
+        log_error "Failed to verify Python dependencies. Please check requirements.txt"
+        return 1
+    fi
+}
+
 # Create systemd service
 create_service() {
     log_step "Creating systemd service..."
+
+    # Get absolute paths (resolve any symlinks)
+    ABSOLUTE_PROJECT_DIR=$(cd "$PROJECT_DIR" && pwd -P)
+    ABSOLUTE_CLIENT_DIR="$ABSOLUTE_PROJECT_DIR/client"
+    VENV_PYTHON="$ABSOLUTE_CLIENT_DIR/venv/bin/python"
+
+    # Verify the venv python exists
+    if [ ! -f "$VENV_PYTHON" ]; then
+        log_error "Virtual environment Python not found at: $VENV_PYTHON"
+        log_error "Please ensure install_python_deps completed successfully"
+        return 1
+    fi
+
+    log_info "Using Python: $VENV_PYTHON"
+    log_info "Working directory: $ABSOLUTE_CLIENT_DIR"
 
     cat > /etc/systemd/system/bluek9.service << EOF
 [Unit]
@@ -460,18 +535,63 @@ Wants=bluetooth.target
 [Service]
 Type=simple
 User=root
-WorkingDirectory=$PROJECT_DIR/client
-ExecStart=$PROJECT_DIR/client/venv/bin/python app.py
+WorkingDirectory=$ABSOLUTE_CLIENT_DIR
+ExecStart=$VENV_PYTHON app.py
 Restart=always
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1
+Environment=PATH=$ABSOLUTE_CLIENT_DIR/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
+    # Verify service file was created
+    if [ -f /etc/systemd/system/bluek9.service ]; then
+        log_info "Service file created at /etc/systemd/system/bluek9.service"
+        log_info "Service configuration:"
+        grep -E "^(WorkingDirectory|ExecStart)=" /etc/systemd/system/bluek9.service
+    else
+        log_error "Failed to create service file"
+        return 1
+    fi
+
     systemctl daemon-reload
     log_info "Service created. Use 'sudo systemctl start bluek9' to start"
+}
+
+# Standalone service repair function (can be called directly)
+repair_service() {
+    log_step "Repairing BlueK9 service configuration..."
+
+    # Re-determine paths based on script location
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+    CLIENT_DIR="$PROJECT_DIR/client"
+
+    # Verify and fix Python environment
+    verify_python_env
+
+    # Recreate service file
+    create_service
+
+    # Test the service
+    log_info "Testing service configuration..."
+    systemctl daemon-reload
+
+    if systemctl start bluek9; then
+        sleep 2
+        if systemctl is-active --quiet bluek9; then
+            log_info "Service started successfully!"
+            systemctl status bluek9 --no-pager -l | head -10
+        else
+            log_error "Service failed to start"
+            journalctl -u bluek9 -n 20 --no-pager
+        fi
+    else
+        log_error "Failed to start service"
+        journalctl -u bluek9 -n 20 --no-pager
+    fi
 }
 
 # Print completion message
@@ -511,13 +631,19 @@ print_completion() {
     echo "  - Connect GPS device for location tracking"
     echo "  - Connect SIMCOM7600 for SMS alerts"
     echo "  - Primary Bluetooth radio: Sena UD100"
+    echo "  - HackRF for Bluetooth spectrum analysis"
     echo ""
     echo -e "${CYAN}Cyber Tools Arsenal:${NC}"
+    echo "  - HackRF tools: hackrf_sweep, hackrf_transfer, hackrf_info"
     echo "  - BlueToolkit (43 exploits): /opt/bluetooth-arsenal/BlueToolkit"
     echo "  - Blue Hydra: /opt/bluetooth-arsenal/blue_hydra"
     echo "  - Ubertooth tools: ubertooth-util, ubertooth-btle, etc."
     echo "  - Python tools: blesuite, bleah, btlejack, btproxy, internalblue"
     echo "  - BTLEJuice: btlejuice (npm global)"
+    echo ""
+    echo -e "${CYAN}Service Troubleshooting:${NC}"
+    echo "  If the service fails to start, run:"
+    echo "    sudo $PROJECT_DIR/scripts/install.sh --repair"
     echo ""
 }
 
@@ -536,9 +662,30 @@ main() {
     install_python_deps
     download_alert_sound
     generate_system_id
+    verify_python_env
     create_service
     print_completion
 }
 
-# Run main
-main "$@"
+# Handle command line arguments
+case "${1:-}" in
+    --repair|-r)
+        print_banner
+        check_root
+        repair_service
+        ;;
+    --help|-h)
+        echo "BlueK9 Installation Script"
+        echo ""
+        echo "Usage: $0 [OPTION]"
+        echo ""
+        echo "Options:"
+        echo "  --repair, -r    Repair service configuration without full reinstall"
+        echo "  --help, -h      Show this help message"
+        echo ""
+        echo "Without options, performs full installation."
+        ;;
+    *)
+        main "$@"
+        ;;
+esac

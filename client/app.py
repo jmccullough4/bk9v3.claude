@@ -13,6 +13,7 @@ import sqlite3
 import subprocess
 import threading
 import re
+import hashlib
 from datetime import datetime
 from functools import wraps
 from flask import Flask, render_template, request, jsonify, session, redirect, url_for, make_response
@@ -6914,10 +6915,6 @@ def export_hackrf_capture(filename=None):
         json.dump(export_data, f, indent=2, default=str)
 
     return filepath
-
-
-# Import hashlib for pattern ID generation
-import hashlib
 
 
 # ==================== FLASK ROUTES ====================
