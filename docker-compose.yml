@@ -37,6 +37,15 @@ services:
       # Full device access for Bluetooth and GPS
       - /dev:/dev
 
+      # Bluetooth runtime directories (use host's bluetoothd)
+      - /var/lib/bluetooth:/var/lib/bluetooth
+      - /etc/bluetooth:/etc/bluetooth:ro
+
+      # NetBird access (mount from host if installed)
+      - /usr/bin/netbird:/usr/bin/netbird:ro
+      - /var/run/netbird.sock:/var/run/netbird.sock
+      - /etc/netbird:/etc/netbird:ro
+
     # Environment variables
     environment:
       - FLASK_ENV=production

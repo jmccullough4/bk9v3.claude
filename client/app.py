@@ -1982,101 +1982,83 @@ def scan_btmgmt_find(interface='hci0', duration=10, flags=None):
     try:
         add_log(f"Starting btmgmt find on hci{hci_index} (duration: {duration}s)", "INFO")
 
-        # Build command
-        cmd = ['btmgmt', '-i', f'hci{hci_index}', 'find']
+        # Build command - btmgmt find runs discovery and outputs results
+        # Use --index for newer btmgmt versions
+        cmd = ['btmgmt', '--index', hci_index, 'find']
         if flags:
             cmd.extend(flags)
 
-        # Run btmgmt find with timeout
-        proc = subprocess.Popen(
+        # Run btmgmt find and let it complete (it has its own timeout)
+        # btmgmt find typically runs for ~10 seconds
+        result = subprocess.run(
             cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
+            capture_output=True,
             text=True,
-            bufsize=1
+            timeout=duration + 15  # Give extra time for btmgmt to complete
         )
 
-        start_time = time.time()
+        # Log the raw output for debugging
+        if result.returncode != 0:
+            add_log(f"btmgmt find returned {result.returncode}: {result.stderr}", "WARNING")
 
-        # Read output in real-time
-        try:
-            while time.time() - start_time < duration:
-                # Check if process has finished
-                if proc.poll() is not None:
-                    break
+        # Parse the output
+        output = result.stdout + result.stderr  # Some output may go to stderr
 
-                # Use select for non-blocking read on Unix
-                import select
-                ready, _, _ = select.select([proc.stdout], [], [], 0.5)
-                if not ready:
-                    continue
+        for line in output.split('\n'):
+            line = line.strip()
+            if not line:
+                continue
 
-                line = proc.stdout.readline()
-                if not line:
-                    continue
+            # Parse btmgmt find output formats:
+            # "hci0 dev_found: AA:BB:CC:DD:EE:FF type BR/EDR rssi -45 flags 0x0000"
+            # "hci0 dev_found: AA:BB:CC:DD:EE:FF type LE Random rssi -62 flags 0x0000"
+            # Also handle format without hci prefix: "dev_found: AA:BB:CC:DD:EE:FF ..."
+            dev_match = re.search(
+                r'dev_found:\s*([0-9A-Fa-f:]{17})\s+type\s+(\S+(?:\s+\S+)?)\s+rssi\s+(-?\d+)',
+                line
+            )
+            if dev_match:
+                bd_addr = dev_match.group(1).upper()
+                dev_type_raw = dev_match.group(2)
+                rssi = int(dev_match.group(3))
 
-                line = line.strip()
-                if not line:
-                    continue
+                # Determine device type
+                if 'LE' in dev_type_raw:
+                    dev_type = 'ble'
+                else:
+                    dev_type = 'classic'
 
-                # Parse btmgmt find output formats:
-                # "hci0 dev_found: AA:BB:CC:DD:EE:FF type BR/EDR rssi -45 flags 0x0000"
-                # "hci0 dev_found: AA:BB:CC:DD:EE:FF type LE Random rssi -62 flags 0x0000"
-                dev_match = re.search(
-                    r'dev_found:\s*([0-9A-Fa-f:]{17})\s+type\s+(\S+(?:\s+\S+)?)\s+rssi\s+(-?\d+)',
-                    line
-                )
-                if dev_match:
-                    bd_addr = dev_match.group(1).upper()
-                    dev_type_raw = dev_match.group(2)
-                    rssi = int(dev_match.group(3))
+                if bd_addr not in seen_addresses:
+                    seen_addresses.add(bd_addr)
+                    devices_found.append({
+                        'bd_address': bd_addr,
+                        'device_name': 'Unknown',  # btmgmt doesn't provide names
+                        'device_type': dev_type,
+                        'manufacturer': get_manufacturer(bd_addr),
+                        'rssi': rssi
+                    })
+                    add_log(f"btmgmt found: {bd_addr} ({dev_type}, RSSI: {rssi})", "DEBUG")
+                else:
+                    # Update RSSI for existing device
+                    for dev in devices_found:
+                        if dev['bd_address'] == bd_addr:
+                            dev['rssi'] = rssi
+                            break
 
-                    # Determine device type
-                    if 'LE' in dev_type_raw:
-                        dev_type = 'ble'
-                    else:
-                        dev_type = 'classic'
-
-                    if bd_addr not in seen_addresses:
-                        seen_addresses.add(bd_addr)
-                        devices_found.append({
-                            'bd_address': bd_addr,
-                            'device_name': 'Unknown',  # btmgmt doesn't provide names
-                            'device_type': dev_type,
-                            'manufacturer': get_manufacturer(bd_addr),
-                            'rssi': rssi
-                        })
-                        add_log(f"btmgmt found: {bd_addr} ({dev_type}, RSSI: {rssi})", "DEBUG")
-                    else:
-                        # Update RSSI for existing device
-                        for dev in devices_found:
-                            if dev['bd_address'] == bd_addr:
-                                dev['rssi'] = rssi
-                                break
-
-                # Also parse name responses
-                # "hci0 type 1 name AA:BB:CC:DD:EE:FF Device Name"
-                name_match = re.search(
-                    r'name\s+([0-9A-Fa-f:]{17})\s+(.*)',
-                    line
-                )
-                if name_match:
-                    bd_addr = name_match.group(1).upper()
-                    name = name_match.group(2).strip()
-                    if name:
-                        for dev in devices_found:
-                            if dev['bd_address'] == bd_addr:
-                                dev['device_name'] = name
-                                break
-
-        except Exception as e:
-            add_log(f"btmgmt read error: {e}", "WARNING")
-        finally:
-            proc.terminate()
-            try:
-                proc.wait(timeout=2)
-            except:
-                proc.kill()
+            # Also parse name responses
+            # "hci0 type 1 name AA:BB:CC:DD:EE:FF Device Name"
+            name_match = re.search(
+                r'name\s+([0-9A-Fa-f:]{17})\s+(.*)',
+                line
+            )
+            if name_match:
+                bd_addr = name_match.group(1).upper()
+                name = name_match.group(2).strip()
+                if name:
+                    for dev in devices_found:
+                        if dev['bd_address'] == bd_addr:
+                            dev['device_name'] = name
+                            break
 
         # Try to get names for devices without names using bluetoothctl
         for dev in devices_found:
@@ -2197,9 +2179,36 @@ def scan_btmon_passive(duration=10):
         return []
 
 
+def get_all_hci_interfaces():
+    """Get all available HCI (Bluetooth) interfaces."""
+    interfaces = []
+    try:
+        result = subprocess.run(['hciconfig', '-a'], capture_output=True, text=True, timeout=5)
+        for match in re.finditer(r'^(hci\d+):', result.stdout, re.MULTILINE):
+            iface = match.group(1)
+            # Check if interface is UP
+            detail = subprocess.run(['hciconfig', iface], capture_output=True, text=True, timeout=2)
+            if 'UP RUNNING' in detail.stdout:
+                interfaces.append(iface)
+            else:
+                # Try to bring it up
+                subprocess.run(['hciconfig', iface, 'up'], capture_output=True, timeout=2)
+                detail = subprocess.run(['hciconfig', iface], capture_output=True, text=True, timeout=2)
+                if 'UP RUNNING' in detail.stdout:
+                    interfaces.append(iface)
+    except Exception as e:
+        add_log(f"Error getting HCI interfaces: {e}", "WARNING")
+
+    if not interfaces:
+        interfaces = ['hci0']  # Fallback
+
+    return interfaces
+
+
 def scan_combined(interface='hci0', mode='balanced'):
     """
     Combined scanning using multiple techniques based on scan mode.
+    Automatically uses ALL available Bluetooth interfaces for maximum coverage.
 
     Modes:
         - stealth: btmon only (passive, no transmissions)
@@ -2211,11 +2220,14 @@ def scan_combined(interface='hci0', mode='balanced'):
     Returns deduplicated list of all discovered devices.
     """
     global current_scan_mode
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
     mode_config = SCAN_MODES.get(mode, SCAN_MODES['balanced'])
     current_scan_mode = mode
 
-    add_log(f"Combined scan starting - mode: {mode_config['name']}", "INFO")
+    # Get all available Bluetooth interfaces
+    all_interfaces = get_all_hci_interfaces()
+    add_log(f"Combined scan starting - mode: {mode_config['name']} on {len(all_interfaces)} interface(s): {', '.join(all_interfaces)}", "INFO")
 
     all_devices = []
     seen_addresses = set()
@@ -2229,62 +2241,76 @@ def scan_combined(interface='hci0', mode='balanced'):
                 seen_addresses.add(dev['bd_address'])
                 all_devices.append(dev)
 
-    # 2. btmgmt find (primary active scan)
+    # 2. btmgmt find on ALL interfaces in parallel
     if mode_config['use_btmgmt']:
-        btmgmt_devices = scan_btmgmt_find(
-            interface=interface,
-            duration=mode_config['duration'],
-            flags=mode_config['btmgmt_flags']
-        )
-        for dev in btmgmt_devices:
-            if dev['bd_address'] not in seen_addresses:
-                seen_addresses.add(dev['bd_address'])
-                all_devices.append(dev)
-            else:
-                # Merge data - update existing device with better info
-                for existing in all_devices:
-                    if existing['bd_address'] == dev['bd_address']:
-                        if dev['device_name'] != 'Unknown':
-                            existing['device_name'] = dev['device_name']
-                        if dev['rssi'] is not None:
-                            existing['rssi'] = dev['rssi']
-                        break
-
-    # 3. Bluetoothctl for additional coverage (aggressive mode)
-    if mode_config['use_bluetoothctl']:
-        try:
-            # Clear and rescan with bluetoothctl
-            subprocess.run(['bluetoothctl', 'select', interface], capture_output=True, timeout=2)
-            subprocess.run(['bluetoothctl', 'power', 'on'], capture_output=True, timeout=2)
-
-            proc = subprocess.Popen(
-                ['timeout', '8', 'bluetoothctl', 'scan', 'on'],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True
+        def scan_interface(iface):
+            return scan_btmgmt_find(
+                interface=iface,
+                duration=mode_config['duration'],
+                flags=mode_config['btmgmt_flags']
             )
 
-            for line in iter(proc.stdout.readline, ''):
-                if not line:
-                    break
-                new_match = re.search(r'\[NEW\]\s+Device\s+([0-9A-Fa-f:]{17})\s*(.*)', line.strip())
-                if new_match:
-                    bd_addr = new_match.group(1).upper()
-                    name = new_match.group(2).strip() or 'Unknown'
-                    if bd_addr not in seen_addresses:
-                        seen_addresses.add(bd_addr)
-                        all_devices.append({
-                            'bd_address': bd_addr,
-                            'device_name': name,
-                            'device_type': 'unknown',
-                            'manufacturer': get_manufacturer(bd_addr),
-                            'rssi': None
-                        })
+        # Run btmgmt on all interfaces in parallel
+        with ThreadPoolExecutor(max_workers=len(all_interfaces)) as executor:
+            futures = {executor.submit(scan_interface, iface): iface for iface in all_interfaces}
+            for future in as_completed(futures, timeout=mode_config['duration'] + 20):
+                iface = futures[future]
+                try:
+                    btmgmt_devices = future.result()
+                    for dev in btmgmt_devices:
+                        dev['adapter'] = iface  # Track which adapter found it
+                        if dev['bd_address'] not in seen_addresses:
+                            seen_addresses.add(dev['bd_address'])
+                            all_devices.append(dev)
+                        else:
+                            # Merge data - update existing device with better info
+                            for existing in all_devices:
+                                if existing['bd_address'] == dev['bd_address']:
+                                    if dev['device_name'] != 'Unknown':
+                                        existing['device_name'] = dev['device_name']
+                                    if dev['rssi'] is not None:
+                                        existing['rssi'] = dev['rssi']
+                                    break
+                except Exception as e:
+                    add_log(f"btmgmt scan error on {iface}: {e}", "WARNING")
 
-            proc.terminate()
-            proc.wait(timeout=2)
-        except Exception as e:
-            add_log(f"bluetoothctl scan error: {e}", "WARNING")
+    # 3. Bluetoothctl for additional coverage (aggressive mode) - on all interfaces
+    if mode_config['use_bluetoothctl']:
+        for iface in all_interfaces:
+            try:
+                # Clear and rescan with bluetoothctl
+                subprocess.run(['bluetoothctl', 'select', iface], capture_output=True, timeout=2)
+                subprocess.run(['bluetoothctl', 'power', 'on'], capture_output=True, timeout=2)
+
+                proc = subprocess.Popen(
+                    ['timeout', '8', 'bluetoothctl', 'scan', 'on'],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True
+                )
+
+                for line in iter(proc.stdout.readline, ''):
+                    if not line:
+                        break
+                    new_match = re.search(r'\[NEW\]\s+Device\s+([0-9A-Fa-f:]{17})\s*(.*)', line.strip())
+                    if new_match:
+                        bd_addr = new_match.group(1).upper()
+                        name = new_match.group(2).strip() or 'Unknown'
+                        if bd_addr not in seen_addresses:
+                            seen_addresses.add(bd_addr)
+                            all_devices.append({
+                                'bd_address': bd_addr,
+                                'device_name': name,
+                                'device_type': 'unknown',
+                                'manufacturer': get_manufacturer(bd_addr),
+                                'rssi': None,
+                                'adapter': iface
+                            })
+
+                proc.terminate()
+                proc.wait(timeout=2)
+            except Exception as e:
+                add_log(f"bluetoothctl scan error on {iface}: {e}", "WARNING")
 
     # Determine device types for any unknown devices
     for dev in all_devices:
