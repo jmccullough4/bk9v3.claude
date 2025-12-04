@@ -1897,51 +1897,51 @@ def scan_ble_devices(interface='hci0'):
 # Modern BlueZ management interface - more reliable on Ubuntu 24.04+
 # Replaces deprecated hcitool/hciconfig for device discovery
 
-# Scan mode configurations
+# Scan mode configurations - using hcitool which works reliably in Docker
 SCAN_MODES = {
     'stealth': {
         'name': 'Stealth',
         'description': 'Passive monitoring only - no transmissions',
-        'btmgmt_flags': [],
         'duration': 10,
         'use_btmon': True,
-        'use_btmgmt': False,
+        'use_hcitool_classic': False,
+        'use_hcitool_ble': False,
         'use_bluetoothctl': False,
     },
     'balanced': {
         'name': 'Balanced',
-        'description': 'Standard discovery - btmgmt find',
-        'btmgmt_flags': [],
+        'description': 'Standard discovery - Classic + BLE scan',
         'duration': 10,
         'use_btmon': True,
-        'use_btmgmt': True,
+        'use_hcitool_classic': True,
+        'use_hcitool_ble': True,
         'use_bluetoothctl': False,
     },
     'aggressive': {
         'name': 'Aggressive',
         'description': 'Maximum detection - all methods combined',
-        'btmgmt_flags': ['-l'],  # Limited discovery
         'duration': 15,
         'use_btmon': True,
-        'use_btmgmt': True,
+        'use_hcitool_classic': True,
+        'use_hcitool_ble': True,
         'use_bluetoothctl': True,
     },
     'ble_focus': {
         'name': 'BLE Focus',
         'description': 'BLE-only discovery for IoT devices',
-        'btmgmt_flags': ['-b'],  # BREDR (classic) off, LE only
         'duration': 12,
         'use_btmon': True,
-        'use_btmgmt': True,
+        'use_hcitool_classic': False,
+        'use_hcitool_ble': True,
         'use_bluetoothctl': False,
     },
     'classic_focus': {
         'name': 'Classic Focus',
         'description': 'Classic Bluetooth focus for phones/audio',
-        'btmgmt_flags': ['-B'],  # LE off, BREDR only
         'duration': 12,
         'use_btmon': True,
-        'use_btmgmt': True,
+        'use_hcitool_classic': True,
+        'use_hcitool_ble': False,
         'use_bluetoothctl': False,
     },
 }
@@ -1954,6 +1954,149 @@ def get_hci_index(interface='hci0'):
     """Extract numeric index from hci interface name."""
     match = re.match(r'hci(\d+)', interface)
     return match.group(1) if match else '0'
+
+
+def scan_hcitool_classic(interface='hci0', duration=8):
+    """
+    Scan for Classic Bluetooth devices using hcitool scan.
+    Works reliably in Docker containers.
+
+    Returns list of discovered devices with device_type='classic'.
+    """
+    if CONFIG.get('DEMO_MODE'):
+        return generate_demo_devices(random.randint(2, 5), 'classic')
+
+    devices_found = []
+    seen_addresses = set()
+
+    try:
+        add_log(f"Starting hcitool classic scan on {interface} (duration: {duration}s)", "INFO")
+
+        # Ensure interface is up
+        subprocess.run(['hciconfig', interface, 'up'], capture_output=True, timeout=3)
+
+        # Run hcitool scan with flush to clear cache
+        result = subprocess.run(
+            ['hcitool', '-i', interface, 'scan', '--flush', f'--length={duration}'],
+            capture_output=True,
+            text=True,
+            timeout=duration + 10
+        )
+
+        # Parse output: "XX:XX:XX:XX:XX:XX    Device Name"
+        for line in result.stdout.split('\n'):
+            line = line.strip()
+            if not line or line.startswith('Scanning'):
+                continue
+
+            # Match BD address and name
+            match = re.match(r'([0-9A-Fa-f:]{17})\s+(.*)', line)
+            if match:
+                bd_addr = match.group(1).upper()
+                name = match.group(2).strip() or 'Unknown'
+
+                if bd_addr not in seen_addresses:
+                    seen_addresses.add(bd_addr)
+                    devices_found.append({
+                        'bd_address': bd_addr,
+                        'device_name': name,
+                        'device_type': 'classic',  # Definitive - hcitool scan only finds Classic
+                        'manufacturer': get_manufacturer(bd_addr),
+                        'rssi': None,
+                        'adapter': interface
+                    })
+                    add_log(f"hcitool classic found: {bd_addr} ({name})", "DEBUG")
+
+        add_log(f"hcitool classic scan complete: {len(devices_found)} devices", "INFO")
+        return devices_found
+
+    except subprocess.TimeoutExpired:
+        add_log(f"hcitool classic scan timeout on {interface}", "WARNING")
+        return devices_found
+    except Exception as e:
+        add_log(f"hcitool classic scan error on {interface}: {e}", "ERROR")
+        return devices_found
+
+
+def scan_hcitool_ble(interface='hci0', duration=8):
+    """
+    Scan for BLE devices using hcitool lescan.
+    Works reliably in Docker containers.
+
+    Returns list of discovered devices with device_type='ble'.
+    """
+    if CONFIG.get('DEMO_MODE'):
+        return generate_demo_devices(random.randint(2, 5), 'ble')
+
+    devices_found = []
+    seen_addresses = set()
+
+    try:
+        add_log(f"Starting hcitool BLE scan on {interface} (duration: {duration}s)", "INFO")
+
+        # Ensure interface is up and LE enabled
+        subprocess.run(['hciconfig', interface, 'up'], capture_output=True, timeout=3)
+        subprocess.run(['hciconfig', interface, 'leadv', '0'], capture_output=True, timeout=2)
+
+        # Run hcitool lescan with timeout - it runs indefinitely otherwise
+        # Use --duplicates to see all advertisements but we'll dedupe
+        proc = subprocess.Popen(
+            ['hcitool', '-i', interface, 'lescan'],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True
+        )
+
+        start_time = time.time()
+        try:
+            while time.time() - start_time < duration:
+                # Non-blocking read with select
+                import select
+                ready, _, _ = select.select([proc.stdout], [], [], 0.5)
+                if not ready:
+                    continue
+
+                line = proc.stdout.readline()
+                if not line:
+                    break
+
+                line = line.strip()
+                if not line or line.startswith('LE Scan'):
+                    continue
+
+                # Parse output: "XX:XX:XX:XX:XX:XX Device Name" or "XX:XX:XX:XX:XX:XX (unknown)"
+                match = re.match(r'([0-9A-Fa-f:]{17})\s*(.*)', line)
+                if match:
+                    bd_addr = match.group(1).upper()
+                    name = match.group(2).strip()
+                    if name == '(unknown)' or not name:
+                        name = 'Unknown'
+
+                    if bd_addr not in seen_addresses:
+                        seen_addresses.add(bd_addr)
+                        devices_found.append({
+                            'bd_address': bd_addr,
+                            'device_name': name,
+                            'device_type': 'ble',  # Definitive - lescan only finds BLE
+                            'manufacturer': get_manufacturer(bd_addr),
+                            'rssi': None,
+                            'adapter': interface
+                        })
+                        add_log(f"hcitool BLE found: {bd_addr} ({name})", "DEBUG")
+
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(timeout=2)
+            except:
+                proc.kill()
+
+        add_log(f"hcitool BLE scan complete: {len(devices_found)} devices", "INFO")
+        return devices_found
+
+    except Exception as e:
+        add_log(f"hcitool BLE scan error on {interface}: {e}", "ERROR")
+        return devices_found
 
 
 def scan_btmgmt_find(interface='hci0', duration=10, flags=None):
@@ -2209,15 +2352,16 @@ def scan_combined(interface='hci0', mode='balanced'):
     """
     Combined scanning using multiple techniques based on scan mode.
     Automatically uses ALL available Bluetooth interfaces for maximum coverage.
+    Uses hcitool-based scanning which works reliably in Docker containers.
 
     Modes:
         - stealth: btmon only (passive, no transmissions)
-        - balanced: btmgmt find (standard discovery)
-        - aggressive: btmgmt + bluetoothctl + extended inquiry
-        - ble_focus: BLE-only discovery
-        - classic_focus: Classic Bluetooth only
+        - balanced: hcitool scan + lescan (standard discovery)
+        - aggressive: hcitool + bluetoothctl (all methods)
+        - ble_focus: BLE-only discovery (hcitool lescan)
+        - classic_focus: Classic Bluetooth only (hcitool scan)
 
-    Returns deduplicated list of all discovered devices.
+    Returns deduplicated list of all discovered devices with accurate device types.
     """
     global current_scan_mode
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -2241,24 +2385,20 @@ def scan_combined(interface='hci0', mode='balanced'):
                 seen_addresses.add(dev['bd_address'])
                 all_devices.append(dev)
 
-    # 2. btmgmt find on ALL interfaces in parallel
-    if mode_config['use_btmgmt']:
-        def scan_interface(iface):
-            return scan_btmgmt_find(
-                interface=iface,
-                duration=mode_config['duration'],
-                flags=mode_config['btmgmt_flags']
-            )
+    # 2. hcitool scans on ALL interfaces in parallel
+    # Classic Bluetooth scanning
+    if mode_config.get('use_hcitool_classic'):
+        def scan_classic_iface(iface):
+            return scan_hcitool_classic(interface=iface, duration=mode_config['duration'])
 
-        # Run btmgmt on all interfaces in parallel
         with ThreadPoolExecutor(max_workers=len(all_interfaces)) as executor:
-            futures = {executor.submit(scan_interface, iface): iface for iface in all_interfaces}
-            for future in as_completed(futures, timeout=mode_config['duration'] + 20):
+            futures = {executor.submit(scan_classic_iface, iface): iface for iface in all_interfaces}
+            for future in as_completed(futures, timeout=mode_config['duration'] + 15):
                 iface = futures[future]
                 try:
-                    btmgmt_devices = future.result()
-                    for dev in btmgmt_devices:
-                        dev['adapter'] = iface  # Track which adapter found it
+                    classic_devices = future.result()
+                    for dev in classic_devices:
+                        dev['adapter'] = iface
                         if dev['bd_address'] not in seen_addresses:
                             seen_addresses.add(dev['bd_address'])
                             all_devices.append(dev)
@@ -2272,7 +2412,36 @@ def scan_combined(interface='hci0', mode='balanced'):
                                         existing['rssi'] = dev['rssi']
                                     break
                 except Exception as e:
-                    add_log(f"btmgmt scan error on {iface}: {e}", "WARNING")
+                    add_log(f"hcitool classic scan error on {iface}: {e}", "WARNING")
+
+    # BLE scanning
+    if mode_config.get('use_hcitool_ble'):
+        def scan_ble_iface(iface):
+            return scan_hcitool_ble(interface=iface, duration=mode_config['duration'])
+
+        with ThreadPoolExecutor(max_workers=len(all_interfaces)) as executor:
+            futures = {executor.submit(scan_ble_iface, iface): iface for iface in all_interfaces}
+            for future in as_completed(futures, timeout=mode_config['duration'] + 15):
+                iface = futures[future]
+                try:
+                    ble_devices = future.result()
+                    for dev in ble_devices:
+                        dev['adapter'] = iface
+                        if dev['bd_address'] not in seen_addresses:
+                            seen_addresses.add(dev['bd_address'])
+                            all_devices.append(dev)
+                        else:
+                            # Merge - update existing with better info
+                            for existing in all_devices:
+                                if existing['bd_address'] == dev['bd_address']:
+                                    if dev['device_name'] != 'Unknown':
+                                        existing['device_name'] = dev['device_name']
+                                    # Update device type if we found it via BLE scan
+                                    if dev['device_type'] == 'ble':
+                                        existing['device_type'] = 'ble'
+                                    break
+                except Exception as e:
+                    add_log(f"hcitool BLE scan error on {iface}: {e}", "WARNING")
 
     # 3. Bluetoothctl for additional coverage (aggressive mode) - on all interfaces
     if mode_config['use_bluetoothctl']:
