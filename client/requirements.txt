@@ -9,6 +9,5 @@ gevent-websocket==0.10.1
 Werkzeug==3.0.1
 
 # Bluetooth Libraries
-# pybluez2 is the maintained fork compatible with Python 3.10+
-pybluez2>=0.46
+# bleak for async BLE operations
 bleak>=0.21.0
