@@ -1,166 +1,82 @@
 # BlueK9 Client - Dockerfile
-# Bluetooth Surveillance System with Cyber Tools Arsenal
+# Bluetooth Surveillance System - Docker Plugin Architecture
+# Optimized for Ubuntu 24.04+ and Python 3.12+
 
-FROM python:3.11-slim-bookworm
+FROM python:3.12-slim-bookworm
 
 LABEL maintainer="BlueK9 Team"
-LABEL description="BlueK9 Bluetooth Surveillance Client with Cyber Tools"
-LABEL version="2.0"
+LABEL description="BlueK9 Bluetooth Surveillance Client"
+LABEL version="3.3"
 
 # Prevent interactive prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
 
-# Install system dependencies
+# Install system dependencies - core Bluetooth and networking tools
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    # Bluetooth tools
+    # Core Bluetooth stack (BlueZ)
     bluetooth \
     bluez \
     bluez-tools \
     libbluetooth-dev \
     # Network tools
     iproute2 \
-    wireless-tools \
     iw \
     net-tools \
-    # GPS tools
+    # GPS support
     gpsd \
     gpsd-clients \
-    # Modem tools for SMS
+    # Modem tools for SMS alerts
     modemmanager \
     libqmi-utils \
-    # Audio tools
-    alsa-utils \
-    pulseaudio \
-    # Build tools
-    build-essential \
-    pkg-config \
-    cmake \
-    libssl-dev \
-    libffi-dev \
-    python3-dev \
-    # Utilities
-    curl \
-    wget \
-    git \
+    # D-Bus for BlueZ communication
     dbus \
+    # USB device access
     udev \
+    libusb-1.0-0 \
+    # RF control
     rfkill \
-    # Cyber tools dependencies
-    libpcap-dev \
-    libusb-1.0-0-dev \
-    libglib2.0-dev \
-    tshark \
-    tcpdump \
+    # Process management
+    procps \
+    # Minimal utilities
+    curl \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Node.js for BTLEJuice
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-    && apt-get install -y nodejs \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
-
-# Create tools directory
-RUN mkdir -p /opt/bluetooth-arsenal
-
-# Install Ubertooth tools (from source for latest)
-RUN cd /opt/bluetooth-arsenal && \
-    git clone --depth 1 https://github.com/greatscottgadgets/ubertooth.git && \
-    cd ubertooth/host && \
-    mkdir build && cd build && \
-    cmake .. && make && make install && \
-    ldconfig
-
-# Install BlueToolkit (43 exploits)
-RUN cd /opt/bluetooth-arsenal && \
-    git clone --depth 1 https://github.com/AetherBlack/BlueToolkit.git && \
-    cd BlueToolkit && \
-    pip3 install --no-cache-dir -r requirements.txt 2>/dev/null || true && \
-    chmod +x *.py 2>/dev/null || true
-
-# Install Blue Hydra (passive discovery)
-RUN cd /opt/bluetooth-arsenal && \
-    git clone --depth 1 https://github.com/ZeroChaos-/blue_hydra.git && \
-    cd blue_hydra && \
-    pip3 install --no-cache-dir -r requirements.txt 2>/dev/null || true
-
-# Install BlueBorne scanner
-RUN cd /opt/bluetooth-arsenal && \
-    git clone --depth 1 https://github.com/ArmisLabs/blueborne.git 2>/dev/null || \
-    git clone --depth 1 https://github.com/ArmySick/BlueBorne.git blueborne 2>/dev/null || true
-
-# Install GATTacker (BLE MITM)
-RUN cd /opt/bluetooth-arsenal && \
-    git clone --depth 1 https://github.com/securing/gattacker.git && \
-    cd gattacker && npm install 2>/dev/null || true
-
-# Install Frankenstein (firmware emulator)
-RUN cd /opt/bluetooth-arsenal && \
-    git clone --depth 1 https://github.com/seemoo-lab/frankenstein.git 2>/dev/null || true
-
-# Install Uberducky (HID attacks)
-RUN cd /opt/bluetooth-arsenal && \
-    git clone --depth 1 https://github.com/mikeryan/uberducky.git 2>/dev/null || true
-
-# Install Python-based cyber tools
-RUN pip3 install --no-cache-dir \
-    blesuite \
-    bleah \
-    btlejack \
-    btproxy \
-    internalblue \
-    pybluez \
-    bleak \
-    2>/dev/null || true
-
-# Install BTLEJuice (BLE MITM proxy)
-RUN npm install -g btlejuice 2>/dev/null || true
-
-# Create symlinks for tools
-RUN ln -sf /opt/bluetooth-arsenal/BlueToolkit /opt/BlueToolkit && \
-    ln -sf /opt/bluetooth-arsenal/blue_hydra /opt/blue_hydra && \
-    ln -sf /opt/bluetooth-arsenal/blueborne /opt/blueborne
-
-# Set PATH for tools
-ENV PATH="/opt/bluetooth-arsenal/BlueToolkit:/opt/bluetooth-arsenal/ubertooth/host/build:$PATH"
-
-# Create app directory
+# Create app directory structure
 WORKDIR /app
 
-# Copy requirements first for caching
+# Copy requirements first for layer caching
 COPY client/requirements.txt .
 
 # Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
 # Copy application files
 COPY client/ ./client/
 COPY scripts/ ./scripts/
-COPY logs/ ./logs/
 
 # Create necessary directories
-RUN mkdir -p /app/logs /app/data
-
-# Download alert sound during build
-RUN mkdir -p /app/client/static/sounds && \
-    wget -q -O /app/client/static/sounds/alert.mp3 \
-    "https://github.com/freeCodeCamp/cdn/raw/main/build/testable-projects-fcc/audio/BeepSound.wav" || \
-    echo "Alert sound download skipped - will use fallback"
+RUN mkdir -p /app/logs /app/data /app/client/static/sounds
 
 # Set working directory to client
 WORKDIR /app/client
 
-# Expose port
+# Create non-root user for container (but Bluetooth requires root)
+# Application will run as root for hardware access
+
+# Expose port for web UI
 EXPOSE 5000
 
 # Environment variables
 ENV FLASK_APP=app.py
 ENV FLASK_ENV=production
-ENV PYTHONUNBUFFERED=1
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+# Health check - verify web server is responding
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:5000/login || exit 1
 
-# Run the application
+# Default command - run the Flask application
 CMD ["python", "app.py"]
