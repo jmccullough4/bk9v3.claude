@@ -1,6 +1,6 @@
 # BlueK9 Client - Docker Compose Configuration
-# Bluetooth Surveillance System - Plugin Architecture
-# Designed to run as a container plugin alongside other web applications
+# Bluetooth Surveillance System - Docker Plugin Architecture
+# Configured for remote access on all interfaces
 
 services:
   bluek9:
@@ -12,14 +12,8 @@ services:
     hostname: bluek9
     restart: unless-stopped
 
-    # Network configuration - use bridge for plugin isolation
-    # Switch to host mode if Bluetooth doesn't work with bridge
-    networks:
-      - bluek9-net
-
-    # Port mapping for web UI
-    ports:
-      - "5000:5000"
+    # Host networking for remote access and Bluetooth hardware
+    network_mode: host
 
     # Privileged mode required for Bluetooth hardware access
     privileged: true
@@ -37,14 +31,11 @@ services:
       - bluek9-logs:/app/logs
 
       # D-Bus socket for BlueZ communication (required)
-      - /var/run/dbus:/var/run/dbus:ro
+      - /var/run/dbus:/var/run/dbus
       - /run/dbus/system_bus_socket:/run/dbus/system_bus_socket
 
-      # USB device access for Bluetooth adapters
-      - /dev/bus/usb:/dev/bus/usb
-
-      # Serial device access for GPS
-      - /dev/serial:/dev/serial:ro
+      # Full device access for Bluetooth and GPS
+      - /dev:/dev
 
     # Environment variables
     environment:
@@ -54,10 +45,6 @@ services:
       # Configuration overrides (optional)
       - BLUEK9_DEMO_MODE=false
       - BLUEK9_SCAN_MODE=balanced
-
-    # Device access for Bluetooth adapters
-    devices:
-      - /dev/bus/usb:/dev/bus/usb
 
     # Healthcheck
     healthcheck:
@@ -78,37 +65,6 @@ services:
     labels:
       - "com.bluek9.description=Bluetooth Surveillance System"
       - "com.bluek9.version=3.3"
-
-  # Alternative configuration using host networking
-  # Uncomment this service and comment out the above if bridge mode doesn't work
-  # bluek9-host:
-  #   build:
-  #     context: .
-  #     dockerfile: Dockerfile
-  #   image: bluek9:latest
-  #   container_name: bluek9-host
-  #   hostname: bluek9
-  #   restart: unless-stopped
-  #   network_mode: host
-  #   privileged: true
-  #   volumes:
-  #     - bluek9-data:/app/data
-  #     - bluek9-logs:/app/logs
-  #     - /var/run/dbus:/var/run/dbus:ro
-  #     - /run/dbus/system_bus_socket:/run/dbus/system_bus_socket
-  #     - /dev:/dev
-  #   environment:
-  #     - FLASK_ENV=production
-  #     - PYTHONUNBUFFERED=1
-  #     - DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket
-
-# Networks
-networks:
-  bluek9-net:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 172.28.0.0/16
 
 # Volumes for persistent data
 volumes:
