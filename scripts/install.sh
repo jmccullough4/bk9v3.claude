@@ -173,147 +173,19 @@ install_dependencies() {
 }
 
 # Install Bluetooth Cyber Tools Arsenal
+# Simplified for Ubuntu 24.04+ compatibility - uses apt packages only
 install_cyber_tools() {
-    log_step "Installing Bluetooth Cyber Tools Arsenal..."
+    log_step "Installing Bluetooth Tools (Ubuntu 24.04+ compatible)..."
 
-    TOOLS_DIR="/opt/bluetooth-arsenal"
-    mkdir -p "$TOOLS_DIR"
-    cd "$TOOLS_DIR"
-
-    # Install HackRF tools (for SDR-based Bluetooth spectrum analysis)
+    # Install HackRF tools via apt (SDR-based Bluetooth spectrum analysis)
     log_info "Installing HackRF tools..."
-    if ! command -v hackrf_sweep &> /dev/null; then
-        apt-get install -y -qq hackrf libhackrf-dev 2>/dev/null || {
-            # If apt package not available, build from source
-            log_info "Building HackRF from source..."
-            git clone --depth 1 https://github.com/greatscottgadgets/hackrf.git 2>/dev/null || true
-            if [ -d "hackrf/host" ]; then
-                cd hackrf/host
-                mkdir -p build && cd build
-                cmake .. && make -j$(nproc) && make install
-                ldconfig
-                cd "$TOOLS_DIR"
-            fi
-        }
-        # Set udev rules for HackRF
-        if [ -f "/etc/udev/rules.d/53-hackrf.rules" ] || [ -f "hackrf/host/libhackrf/53-hackrf.rules" ]; then
-            cp hackrf/host/libhackrf/53-hackrf.rules /etc/udev/rules.d/ 2>/dev/null || true
-            udevadm control --reload-rules 2>/dev/null || true
-            udevadm trigger 2>/dev/null || true
-        fi
-    else
-        log_info "HackRF already installed"
-    fi
+    apt-get install -y -qq hackrf libhackrf-dev 2>/dev/null || log_warn "HackRF tools not available via apt"
 
-    # Install Ubertooth tools
-    log_info "Installing Ubertooth tools..."
-    if ! command -v ubertooth-util &> /dev/null; then
-        git clone --depth 1 https://github.com/greatscottgadgets/ubertooth.git 2>/dev/null || true
-        if [ -d "ubertooth/host" ]; then
-            cd ubertooth/host
-            mkdir -p build && cd build
-            cmake .. && make -j$(nproc) && make install
-            ldconfig
-            cd "$TOOLS_DIR"
-        fi
-    else
-        log_info "Ubertooth already installed"
-    fi
+    # Install bleak for Python BLE support
+    log_info "Installing Python BLE tools..."
+    pip3 install --upgrade bleak 2>/dev/null || log_warn "bleak installation failed"
 
-    # Install BlueToolkit (43 exploits)
-    log_info "Installing BlueToolkit..."
-    if [ ! -d "$TOOLS_DIR/BlueToolkit" ]; then
-        git clone --depth 1 https://github.com/AetherBlack/BlueToolkit.git 2>/dev/null || true
-        if [ -d "BlueToolkit" ]; then
-            cd BlueToolkit
-            pip3 install -r requirements.txt 2>/dev/null || true
-            chmod +x *.py 2>/dev/null || true
-            cd "$TOOLS_DIR"
-        fi
-    else
-        log_info "BlueToolkit already installed"
-    fi
-
-    # Install Blue Hydra
-    log_info "Installing Blue Hydra..."
-    if [ ! -d "$TOOLS_DIR/blue_hydra" ]; then
-        git clone --depth 1 https://github.com/ZeroChaos-/blue_hydra.git 2>/dev/null || true
-        if [ -d "blue_hydra" ]; then
-            cd blue_hydra
-            pip3 install -r requirements.txt 2>/dev/null || true
-            cd "$TOOLS_DIR"
-        fi
-    else
-        log_info "Blue Hydra already installed"
-    fi
-
-    # Install BlueBorne scanner
-    log_info "Installing BlueBorne scanner..."
-    if [ ! -d "$TOOLS_DIR/blueborne" ]; then
-        git clone --depth 1 https://github.com/ArmisLabs/blueborne.git 2>/dev/null || \
-        git clone --depth 1 https://github.com/ArmySick/BlueBorne.git blueborne 2>/dev/null || true
-    else
-        log_info "BlueBorne already installed"
-    fi
-
-    # Install GATTacker
-    log_info "Installing GATTacker..."
-    if [ ! -d "$TOOLS_DIR/gattacker" ]; then
-        git clone --depth 1 https://github.com/securing/gattacker.git 2>/dev/null || true
-        if [ -d "gattacker" ]; then
-            cd gattacker
-            npm install 2>/dev/null || true
-            cd "$TOOLS_DIR"
-        fi
-    else
-        log_info "GATTacker already installed"
-    fi
-
-    # Install Frankenstein firmware emulator
-    log_info "Installing Frankenstein..."
-    if [ ! -d "$TOOLS_DIR/frankenstein" ]; then
-        git clone --depth 1 https://github.com/seemoo-lab/frankenstein.git 2>/dev/null || true
-    else
-        log_info "Frankenstein already installed"
-    fi
-
-    # Install Uberducky
-    log_info "Installing Uberducky..."
-    if [ ! -d "$TOOLS_DIR/uberducky" ]; then
-        git clone --depth 1 https://github.com/mikeryan/uberducky.git 2>/dev/null || true
-    else
-        log_info "Uberducky already installed"
-    fi
-
-    # Install Python-based cyber tools
-    log_info "Installing Python cyber tools..."
-    pip3 install --upgrade \
-        blesuite \
-        bleah \
-        btlejack \
-        btproxy \
-        internalblue \
-        pybluez \
-        bleak \
-        2>/dev/null || log_warn "Some Python cyber tools may need manual installation"
-
-    # Install BTLEJuice globally
-    log_info "Installing BTLEJuice..."
-    npm install -g btlejuice 2>/dev/null || log_warn "BTLEJuice installation failed - may need manual setup"
-
-    # Create symlinks
-    ln -sf "$TOOLS_DIR/BlueToolkit" /opt/BlueToolkit 2>/dev/null || true
-    ln -sf "$TOOLS_DIR/blue_hydra" /opt/blue_hydra 2>/dev/null || true
-    ln -sf "$TOOLS_DIR/blueborne" /opt/blueborne 2>/dev/null || true
-
-    # Add to PATH
-    if ! grep -q "bluetooth-arsenal" /etc/profile.d/bluetooth-arsenal.sh 2>/dev/null; then
-        echo 'export PATH="/opt/bluetooth-arsenal/BlueToolkit:$PATH"' > /etc/profile.d/bluetooth-arsenal.sh
-        chmod +x /etc/profile.d/bluetooth-arsenal.sh
-    fi
-
-    log_info "Cyber tools installation complete"
-    log_info "Installed tools in: $TOOLS_DIR"
+    log_info "Bluetooth tools installation complete"
 }
 
 # Configure Bluetooth
@@ -633,13 +505,11 @@ print_completion() {
     echo "  - Primary Bluetooth radio: Sena UD100"
     echo "  - HackRF for Bluetooth spectrum analysis"
     echo ""
-    echo -e "${CYAN}Cyber Tools Arsenal:${NC}"
-    echo "  - HackRF tools: hackrf_sweep, hackrf_transfer, hackrf_info"
-    echo "  - BlueToolkit (43 exploits): /opt/bluetooth-arsenal/BlueToolkit"
-    echo "  - Blue Hydra: /opt/bluetooth-arsenal/blue_hydra"
-    echo "  - Ubertooth tools: ubertooth-util, ubertooth-btle, etc."
-    echo "  - Python tools: blesuite, bleah, btlejack, btproxy, internalblue"
-    echo "  - BTLEJuice: btlejuice (npm global)"
+    echo -e "${CYAN}Bluetooth Tools:${NC}"
+    echo "  - btmgmt: Bluetooth management (scanning)"
+    echo "  - hcitool: Bluetooth device tools"
+    echo "  - HackRF: hackrf_sweep (if installed)"
+    echo "  - Python: bleak (BLE support)"
     echo ""
     echo -e "${CYAN}Service Troubleshooting:${NC}"
     echo "  If the service fails to start, run:"

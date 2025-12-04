@@ -1775,8 +1775,9 @@ def generate_demo_devices(count=3, scan_type='both'):
 
 def scan_classic_bluetooth(interface='hci0'):
     """
-    Unified Bluetooth scan using bluetoothctl scan on.
-    This scans BOTH Classic and BLE devices simultaneously.
+    Unified Bluetooth scan using btmgmt (Ubuntu 24.04+ compatible).
+    Uses btmgmt find for Classic and btmgmt find -l for BLE.
+    Falls back to hcitool if btmgmt is not available.
     """
     # DEMO MODE
     if CONFIG.get('DEMO_MODE'):
@@ -1787,135 +1788,137 @@ def scan_classic_bluetooth(interface='hci0'):
         return devices_found
 
     devices_found = []
-    device_rssi = {}
     seen_addresses = set()
 
+    # Extract hci index number from interface name (e.g., hci0 -> 0)
+    hci_index = interface.replace('hci', '') if interface.startswith('hci') else '0'
+
     try:
-        add_log(f"Starting unified BT scan on {interface} (Classic + LE)", "INFO")
+        add_log(f"Starting btmgmt scan on {interface} (Classic + LE)", "INFO")
 
-        # Select the controller and power on
-        subprocess.run(['bluetoothctl', 'select', interface], capture_output=True, timeout=5)
-        subprocess.run(['bluetoothctl', 'power', 'on'], capture_output=True, timeout=5)
+        # Ensure the adapter is powered on
+        subprocess.run(['btmgmt', '--index', hci_index, 'power', 'on'],
+                      capture_output=True, timeout=5)
 
-        # Run scan using timeout command - bluetoothctl scan on does BOTH Classic and LE
-        proc = subprocess.Popen(
-            ['stdbuf', '-oL', 'timeout', '10', 'bluetoothctl', 'scan', 'on'],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1  # Line buffered
-        )
-
-        # Read output in real-time
+        # Run Classic Bluetooth discovery using btmgmt find
+        # btmgmt find runs inquiry scan for ~10 seconds
+        add_log(f"Running Classic inquiry on {interface}...", "DEBUG")
         try:
-            for line in iter(proc.stdout.readline, ''):
-                if not line:
-                    break
-                line = line.strip()
-                if not line:
-                    continue
+            result = subprocess.run(
+                ['btmgmt', '--index', hci_index, 'find'],
+                capture_output=True,
+                text=True,
+                timeout=15
+            )
 
-                # Parse [NEW] Device XX:XX:XX:XX:XX:XX Name
-                new_match = re.search(r'\[NEW\]\s+Device\s+([0-9A-Fa-f:]{17})\s*(.*)', line)
-                if new_match:
-                    bd_addr = new_match.group(1).upper()
-                    name = new_match.group(2).strip() or 'Unknown'
+            # Parse btmgmt find output
+            # Format: "hci0 dev_found: AA:BB:CC:DD:EE:FF type BR/EDR rssi -XX flags 0x0000 name DeviceName ..."
+            for line in result.stdout.split('\n'):
+                # Match device found lines
+                match = re.search(r'dev_found:\s*([0-9A-Fa-f:]{17})\s+type\s+(\S+)(?:\s+rssi\s+(-?\d+))?(?:.*?name\s+(.+?)(?:\s+eir_len|$))?', line, re.IGNORECASE)
+                if match:
+                    bd_addr = match.group(1).upper()
+                    dev_type_str = match.group(2).lower()
+                    rssi = int(match.group(3)) if match.group(3) else None
+                    name = match.group(4).strip() if match.group(4) else 'Unknown'
+
+                    # Determine device type from btmgmt output
+                    if 'br/edr' in dev_type_str:
+                        dev_type = 'classic'
+                    elif 'le' in dev_type_str:
+                        dev_type = 'ble'
+                    else:
+                        dev_type = 'unknown'
+
                     if bd_addr not in seen_addresses:
                         seen_addresses.add(bd_addr)
                         devices_found.append({
                             'bd_address': bd_addr,
                             'device_name': name,
-                            'device_type': 'unknown',  # Will be determined after scan
+                            'device_type': dev_type,
                             'manufacturer': get_manufacturer(bd_addr),
-                            'rssi': device_rssi.get(bd_addr)
+                            'rssi': rssi
                         })
-                        add_log(f"Found device: {bd_addr} ({name})", "DEBUG")
+                        add_log(f"Found {dev_type} device: {bd_addr} ({name}) RSSI: {rssi}", "DEBUG")
 
-                # Parse [CHG] Device XX:XX:XX:XX:XX:XX RSSI: -XX
-                rssi_match = re.search(r'\[CHG\]\s+Device\s+([0-9A-Fa-f:]{17})\s+RSSI:\s*(-?\d+)', line)
-                if rssi_match:
-                    bd_addr = rssi_match.group(1).upper()
-                    rssi = int(rssi_match.group(2))
-                    device_rssi[bd_addr] = rssi
-                    # Update existing device or add new one
-                    found = False
-                    for dev in devices_found:
-                        if dev['bd_address'] == bd_addr:
-                            dev['rssi'] = rssi
-                            found = True
-                            break
-                    if not found and bd_addr not in seen_addresses:
+        except subprocess.TimeoutExpired:
+            add_log("Classic scan timeout", "WARNING")
+        except Exception as e:
+            add_log(f"Classic scan error: {e}", "WARNING")
+
+        # Run BLE scan using btmgmt find -l (LE scan)
+        add_log(f"Running BLE scan on {interface}...", "DEBUG")
+        try:
+            result = subprocess.run(
+                ['btmgmt', '--index', hci_index, 'find', '-l'],
+                capture_output=True,
+                text=True,
+                timeout=12
+            )
+
+            # Parse btmgmt find -l output (same format as find but for LE devices)
+            for line in result.stdout.split('\n'):
+                match = re.search(r'dev_found:\s*([0-9A-Fa-f:]{17})\s+type\s+(\S+)(?:\s+rssi\s+(-?\d+))?(?:.*?name\s+(.+?)(?:\s+eir_len|$))?', line, re.IGNORECASE)
+                if match:
+                    bd_addr = match.group(1).upper()
+                    rssi = int(match.group(3)) if match.group(3) else None
+                    name = match.group(4).strip() if match.group(4) else 'Unknown'
+
+                    if bd_addr not in seen_addresses:
+                        seen_addresses.add(bd_addr)
+                        devices_found.append({
+                            'bd_address': bd_addr,
+                            'device_name': name,
+                            'device_type': 'ble',
+                            'manufacturer': get_manufacturer(bd_addr),
+                            'rssi': rssi
+                        })
+                        add_log(f"Found BLE device: {bd_addr} ({name}) RSSI: {rssi}", "DEBUG")
+                    else:
+                        # Update RSSI if we already have this device
+                        for dev in devices_found:
+                            if dev['bd_address'] == bd_addr and rssi is not None:
+                                dev['rssi'] = rssi
+                                if name != 'Unknown':
+                                    dev['device_name'] = name
+
+        except subprocess.TimeoutExpired:
+            add_log("BLE scan timeout", "WARNING")
+        except Exception as e:
+            add_log(f"BLE scan error: {e}", "WARNING")
+
+        # Fallback: Also try hcitool inq for any missed classic devices
+        try:
+            result = subprocess.run(
+                ['hcitool', '-i', interface, 'inq', '--flush'],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            # Parse: "XX:XX:XX:XX:XX:XX clock:... class:..."
+            for line in result.stdout.split('\n'):
+                match = re.match(r'\s*([0-9A-Fa-f:]{17})', line.strip())
+                if match:
+                    bd_addr = match.group(1).upper()
+                    if bd_addr not in seen_addresses:
                         seen_addresses.add(bd_addr)
                         devices_found.append({
                             'bd_address': bd_addr,
                             'device_name': 'Unknown',
-                            'device_type': 'unknown',
+                            'device_type': 'classic',
                             'manufacturer': get_manufacturer(bd_addr),
-                            'rssi': rssi
+                            'rssi': None
                         })
-                        add_log(f"Found device via RSSI: {bd_addr} (RSSI: {rssi})", "DEBUG")
+        except Exception:
+            pass  # hcitool inq is optional fallback
 
-                # Parse [CHG] Device XX:XX:XX:XX:XX:XX Name: XXX
-                name_match = re.search(r'\[CHG\]\s+Device\s+([0-9A-Fa-f:]{17})\s+Name:\s*(.*)', line)
-                if name_match:
-                    bd_addr = name_match.group(1).upper()
-                    name = name_match.group(2).strip()
-                    for dev in devices_found:
-                        if dev['bd_address'] == bd_addr and name:
-                            dev['device_name'] = name
-
-        except Exception as read_err:
-            add_log(f"Error reading scan output: {read_err}", "WARNING")
-        finally:
-            proc.terminate()
-            proc.wait()
-
-        # Determine device type for each found device
-        classic_count = 0
-        ble_count = 0
-        for dev in devices_found:
-            dev_type = get_device_type(dev['bd_address'])
-            dev['device_type'] = dev_type
-            if dev_type == 'classic':
-                classic_count += 1
-            elif dev_type == 'ble':
-                ble_count += 1
-
-        # Also get list of cached devices from bluetoothctl
-        result = subprocess.run(
-            ['bluetoothctl', 'devices'],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-
-        # Parse "Device XX:XX:XX:XX:XX:XX Name"
-        for line in result.stdout.split('\n'):
-            match = re.match(r'Device\s+([0-9A-Fa-f:]{17})\s+(.*)', line.strip())
-            if match:
-                bd_addr = match.group(1).upper()
-                name = match.group(2).strip() or 'Unknown'
-                if bd_addr not in seen_addresses:
-                    seen_addresses.add(bd_addr)
-                    dev_type = get_device_type(bd_addr)
-                    devices_found.append({
-                        'bd_address': bd_addr,
-                        'device_name': name,
-                        'device_type': dev_type,
-                        'manufacturer': get_manufacturer(bd_addr),
-                        'rssi': device_rssi.get(bd_addr)
-                    })
-                    if dev_type == 'classic':
-                        classic_count += 1
-                    elif dev_type == 'ble':
-                        ble_count += 1
+        # Count device types
+        classic_count = sum(1 for d in devices_found if d['device_type'] == 'classic')
+        ble_count = sum(1 for d in devices_found if d['device_type'] == 'ble')
 
         add_log(f"Scan found {len(devices_found)} devices ({classic_count} Classic, {ble_count} BLE)", "INFO")
         return devices_found
 
-    except subprocess.TimeoutExpired:
-        add_log("Scan timeout", "WARNING")
-        return devices_found
     except Exception as e:
         add_log(f"Scan error: {str(e)}", "ERROR")
         return devices_found
