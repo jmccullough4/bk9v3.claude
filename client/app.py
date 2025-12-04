@@ -1894,7 +1894,7 @@ def scan_ble_devices(interface='hci0'):
 
 
 # ==================== BLUETOOTH SCANNING ====================
-# Using hcitool for Docker compatibility (btmgmt doesn't work in containers)
+# Using bluetoothctl for Docker compatibility - scans Classic AND BLE simultaneously
 
 # Simplified scan modes - each with distinct behavior
 SCAN_MODES = {
@@ -1903,32 +1903,43 @@ SCAN_MODES = {
         'description': 'Monitor only - no transmissions (stealth)',
         'duration': 10,
         'use_btmon': True,
-        'use_hcitool_classic': False,
-        'use_hcitool_ble': False,
         'use_bluetoothctl': False,
+        'use_hackrf': False,
     },
     'active': {
         'name': 'Active',
-        'description': 'Standard scan - Classic + BLE discovery',
+        'description': 'bluetoothctl scan on all interfaces + btmon RSSI',
         'duration': 10,
-        'use_btmon': False,
-        'use_hcitool_classic': True,
-        'use_hcitool_ble': True,
-        'use_bluetoothctl': False,
+        'use_btmon': True,
+        'use_bluetoothctl': True,
+        'use_hackrf': False,
     },
     'full': {
         'name': 'Full',
-        'description': 'All methods - maximum device detection',
+        'description': 'All methods including HackRF spectrum sweep',
         'duration': 12,
         'use_btmon': True,
-        'use_hcitool_classic': True,
-        'use_hcitool_ble': True,
         'use_bluetoothctl': True,
+        'use_hackrf': True,
     },
 }
 
 # Current scan mode (can be changed via API)
 current_scan_mode = 'active'
+
+# HackRF availability cache
+_hackrf_available = None
+
+def check_hackrf_available():
+    """Check if HackRF tools are available."""
+    global _hackrf_available
+    if _hackrf_available is None:
+        try:
+            result = subprocess.run(['hackrf_info'], capture_output=True, timeout=5)
+            _hackrf_available = result.returncode == 0
+        except:
+            _hackrf_available = False
+    return _hackrf_available
 
 
 def get_hci_index(interface='hci0'):
@@ -2222,145 +2233,341 @@ def get_all_hci_interfaces():
     return interfaces
 
 
-def scan_combined(interface='hci0', mode='active'):
+def scan_bluetoothctl_all(interfaces, duration=10):
     """
-    Combined scanning using multiple techniques based on scan mode.
-    Automatically uses ALL available Bluetooth interfaces for maximum coverage.
-    Uses hcitool-based scanning which works reliably in Docker containers.
+    Run bluetoothctl scan on ALL interfaces simultaneously.
+    bluetoothctl 'scan on' discovers BOTH Classic AND BLE devices at once.
 
-    Modes:
-        - passive: btmon only (stealth - no RF transmissions)
-        - active: hcitool scan + lescan (standard discovery)
-        - full: all methods combined (hcitool + bluetoothctl)
+    This is the preferred scanning method - simpler and more reliable than
+    separate hcitool scan/lescan calls.
 
-    Returns deduplicated list of all discovered devices with accurate device types.
+    Returns list of discovered devices with manufacturer detection.
     """
-    global current_scan_mode
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    mode_config = SCAN_MODES.get(mode, SCAN_MODES['active'])
-    current_scan_mode = mode
-
-    # Get all available Bluetooth interfaces
-    all_interfaces = get_all_hci_interfaces()
-    add_log(f"Combined scan starting - mode: {mode_config['name']} on {len(all_interfaces)} interface(s): {', '.join(all_interfaces)}", "INFO")
+    if CONFIG.get('DEMO_MODE'):
+        return generate_demo_devices(random.randint(5, 10), 'mixed')
 
     all_devices = []
     seen_addresses = set()
+    device_rssi = {}  # Track RSSI per device
 
-    # 1. Passive btmon monitoring (always first if enabled)
-    if mode_config['use_btmon']:
-        btmon_duration = max(3, mode_config['duration'] // 3)
-        btmon_devices = scan_btmon_passive(btmon_duration)
-        for dev in btmon_devices:
-            if dev['bd_address'] not in seen_addresses:
-                seen_addresses.add(dev['bd_address'])
-                all_devices.append(dev)
+    def scan_interface(iface):
+        """Scan on a single interface."""
+        devices = []
+        rssi_map = {}
+        seen = set()
 
-    # 2. hcitool scans on ALL interfaces in parallel
-    # Classic Bluetooth scanning
-    if mode_config.get('use_hcitool_classic'):
-        def scan_classic_iface(iface):
-            return scan_hcitool_classic(interface=iface, duration=mode_config['duration'])
+        try:
+            add_log(f"Starting bluetoothctl scan on {iface} (duration: {duration}s)", "INFO")
 
-        with ThreadPoolExecutor(max_workers=len(all_interfaces)) as executor:
-            futures = {executor.submit(scan_classic_iface, iface): iface for iface in all_interfaces}
-            for future in as_completed(futures, timeout=mode_config['duration'] + 15):
-                iface = futures[future]
-                try:
-                    classic_devices = future.result()
-                    for dev in classic_devices:
-                        dev['adapter'] = iface
-                        if dev['bd_address'] not in seen_addresses:
-                            seen_addresses.add(dev['bd_address'])
-                            all_devices.append(dev)
-                        else:
-                            # Merge data - update existing device with better info
-                            for existing in all_devices:
-                                if existing['bd_address'] == dev['bd_address']:
-                                    if dev['device_name'] != 'Unknown':
-                                        existing['device_name'] = dev['device_name']
-                                    if dev['rssi'] is not None:
-                                        existing['rssi'] = dev['rssi']
-                                    break
-                except Exception as e:
-                    add_log(f"hcitool classic scan error on {iface}: {e}", "WARNING")
+            # Select interface and power on
+            subprocess.run(['bluetoothctl', 'select', iface], capture_output=True, timeout=3)
+            subprocess.run(['bluetoothctl', 'power', 'on'], capture_output=True, timeout=3)
 
-    # BLE scanning
-    if mode_config.get('use_hcitool_ble'):
-        def scan_ble_iface(iface):
-            return scan_hcitool_ble(interface=iface, duration=mode_config['duration'])
-
-        with ThreadPoolExecutor(max_workers=len(all_interfaces)) as executor:
-            futures = {executor.submit(scan_ble_iface, iface): iface for iface in all_interfaces}
-            for future in as_completed(futures, timeout=mode_config['duration'] + 15):
-                iface = futures[future]
-                try:
-                    ble_devices = future.result()
-                    for dev in ble_devices:
-                        dev['adapter'] = iface
-                        if dev['bd_address'] not in seen_addresses:
-                            seen_addresses.add(dev['bd_address'])
-                            all_devices.append(dev)
-                        else:
-                            # Merge - update existing with better info
-                            for existing in all_devices:
-                                if existing['bd_address'] == dev['bd_address']:
-                                    if dev['device_name'] != 'Unknown':
-                                        existing['device_name'] = dev['device_name']
-                                    # Update device type if we found it via BLE scan
-                                    if dev['device_type'] == 'ble':
-                                        existing['device_type'] = 'ble'
-                                    break
-                except Exception as e:
-                    add_log(f"hcitool BLE scan error on {iface}: {e}", "WARNING")
-
-    # 3. Bluetoothctl for additional coverage (aggressive mode) - on all interfaces
-    if mode_config['use_bluetoothctl']:
-        for iface in all_interfaces:
+            # Clear cached devices for fresh discovery
             try:
-                # Clear and rescan with bluetoothctl
-                subprocess.run(['bluetoothctl', 'select', iface], capture_output=True, timeout=2)
-                subprocess.run(['bluetoothctl', 'power', 'on'], capture_output=True, timeout=2)
+                result = subprocess.run(['bluetoothctl', 'devices'], capture_output=True, text=True, timeout=3)
+                for line in result.stdout.splitlines():
+                    match = re.search(r'Device\s+([0-9A-Fa-f:]{17})', line)
+                    if match:
+                        subprocess.run(['bluetoothctl', 'remove', match.group(1)],
+                                       capture_output=True, timeout=1)
+            except:
+                pass
 
-                proc = subprocess.Popen(
-                    ['timeout', '8', 'bluetoothctl', 'scan', 'on'],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True
-                )
+            # Run scan with real-time parsing
+            proc = subprocess.Popen(
+                ['stdbuf', '-oL', 'timeout', str(duration), 'bluetoothctl', 'scan', 'on'],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1
+            )
 
-                for line in iter(proc.stdout.readline, ''):
-                    if not line:
-                        break
-                    new_match = re.search(r'\[NEW\]\s+Device\s+([0-9A-Fa-f:]{17})\s*(.*)', line.strip())
-                    if new_match:
-                        bd_addr = new_match.group(1).upper()
-                        name = new_match.group(2).strip() or 'Unknown'
-                        if bd_addr not in seen_addresses:
-                            seen_addresses.add(bd_addr)
-                            all_devices.append({
-                                'bd_address': bd_addr,
-                                'device_name': name,
-                                'device_type': 'unknown',
-                                'manufacturer': get_manufacturer(bd_addr),
-                                'rssi': None,
-                                'adapter': iface
-                            })
+            for line in iter(proc.stdout.readline, ''):
+                if not line:
+                    break
+                line = line.strip()
 
-                proc.terminate()
-                proc.wait(timeout=2)
+                # Parse [NEW] Device XX:XX:XX:XX:XX:XX Name
+                new_match = re.search(r'\[NEW\]\s+Device\s+([0-9A-Fa-f:]{17})\s*(.*)', line)
+                if new_match:
+                    bd_addr = new_match.group(1).upper()
+                    name = new_match.group(2).strip() or 'Unknown'
+
+                    if bd_addr not in seen:
+                        seen.add(bd_addr)
+                        # Determine device type based on address pattern
+                        # Random addresses (BLE) often start with specific patterns
+                        first_byte = int(bd_addr.split(':')[0], 16)
+                        is_random = (first_byte & 0xC0) == 0xC0  # Random static address
+
+                        devices.append({
+                            'bd_address': bd_addr,
+                            'device_name': name,
+                            'device_type': 'ble' if is_random else 'unknown',
+                            'manufacturer': get_manufacturer(bd_addr),
+                            'rssi': rssi_map.get(bd_addr),
+                            'adapter': iface
+                        })
+
+                # Parse RSSI: [CHG] Device XX:XX:XX:XX:XX:XX RSSI: -55
+                rssi_match = re.search(r'\[CHG\]\s+Device\s+([0-9A-Fa-f:]{17})\s+RSSI:\s*(-?\d+)', line)
+                if rssi_match:
+                    bd_addr = rssi_match.group(1).upper()
+                    rssi = int(rssi_match.group(2))
+                    rssi_map[bd_addr] = rssi
+                    # Update existing device
+                    for dev in devices:
+                        if dev['bd_address'] == bd_addr:
+                            dev['rssi'] = rssi
+                            break
+
+                # Parse ManufacturerData to detect Apple, Garmin, etc.
+                # [CHG] Device XX:XX:XX:XX:XX:XX ManufacturerData Key: 0x004c
+                mfg_match = re.search(r'Device\s+([0-9A-Fa-f:]{17})\s+ManufacturerData Key:\s*0x([0-9a-fA-F]+)', line)
+                if mfg_match:
+                    bd_addr = mfg_match.group(1).upper()
+                    mfg_id = int(mfg_match.group(2), 16)
+                    for dev in devices:
+                        if dev['bd_address'] == bd_addr:
+                            dev['company_id'] = mfg_id
+                            dev['device_type'] = 'ble'  # ManufacturerData = BLE
+                            # Tag known devices
+                            if mfg_id == 0x004C:
+                                dev['vendor'] = 'Apple'
+                            elif mfg_id == 0x0087:
+                                dev['vendor'] = 'Garmin'
+                            elif mfg_id == 0x0075:
+                                dev['vendor'] = 'Samsung'
+                            elif mfg_id == 0x00E0:
+                                dev['vendor'] = 'Google'
+                            elif mfg_id == 0x0157:
+                                dev['vendor'] = 'Xiaomi'
+                            elif mfg_id == 0x01B0:
+                                dev['vendor'] = 'Fitbit'
+                            break
+
+            proc.wait(timeout=2)
+
+        except Exception as e:
+            add_log(f"bluetoothctl scan error on {iface}: {e}", "WARNING")
+
+        return devices, rssi_map
+
+    # Run scans on all interfaces in parallel
+    add_log(f"Starting parallel bluetoothctl scan on {len(interfaces)} interface(s)", "INFO")
+
+    with ThreadPoolExecutor(max_workers=len(interfaces)) as executor:
+        futures = {executor.submit(scan_interface, iface): iface for iface in interfaces}
+
+        for future in as_completed(futures, timeout=duration + 10):
+            iface = futures[future]
+            try:
+                devices, rssi_map = future.result()
+                device_rssi.update(rssi_map)
+
+                for dev in devices:
+                    if dev['bd_address'] not in seen_addresses:
+                        seen_addresses.add(dev['bd_address'])
+                        all_devices.append(dev)
+                    else:
+                        # Merge - update with better info
+                        for existing in all_devices:
+                            if existing['bd_address'] == dev['bd_address']:
+                                if dev['device_name'] != 'Unknown':
+                                    existing['device_name'] = dev['device_name']
+                                if dev.get('rssi') is not None:
+                                    existing['rssi'] = dev['rssi']
+                                if dev.get('vendor'):
+                                    existing['vendor'] = dev['vendor']
+                                if dev.get('company_id'):
+                                    existing['company_id'] = dev['company_id']
+                                if dev['device_type'] != 'unknown':
+                                    existing['device_type'] = dev['device_type']
+                                break
+
+                add_log(f"bluetoothctl on {iface}: found {len(devices)} devices", "DEBUG")
+
             except Exception as e:
-                add_log(f"bluetoothctl scan error on {iface}: {e}", "WARNING")
+                add_log(f"bluetoothctl scan failed on {iface}: {e}", "WARNING")
 
-    # Determine device types for any unknown devices
+    # Determine device types for unknowns
     for dev in all_devices:
         if dev['device_type'] == 'unknown':
             dev['device_type'] = get_device_type(dev['bd_address'])
 
     classic_count = sum(1 for d in all_devices if d['device_type'] == 'classic')
     ble_count = sum(1 for d in all_devices if d['device_type'] == 'ble')
-    add_log(f"Combined scan complete: {len(all_devices)} devices ({classic_count} Classic, {ble_count} BLE)", "INFO")
+    add_log(f"bluetoothctl scan complete: {len(all_devices)} devices ({classic_count} Classic, {ble_count} BLE)", "INFO")
+
+    return all_devices
+
+
+def scan_hackrf_sweep(duration=5):
+    """
+    Use HackRF to sweep the 2.4GHz Bluetooth band.
+    Detects Bluetooth activity even from non-discoverable devices.
+
+    Returns list of detected frequency activity (piconet indicators).
+    """
+    if not check_hackrf_available():
+        add_log("HackRF not available", "DEBUG")
+        return []
+
+    activity = []
+
+    try:
+        add_log(f"Starting HackRF 2.4GHz sweep (duration: {duration}s)", "INFO")
+
+        # Bluetooth uses 2402-2480 MHz (79 channels, 1MHz spacing)
+        # hackrf_sweep outputs: timestamp, hz_low, hz_high, bin_width, num_samples, dB values
+        proc = subprocess.Popen(
+            ['hackrf_sweep', '-f', '2400:2485', '-w', '1000000', '-1'],  # 1MHz bins, single sweep
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+
+        start_time = time.time()
+        channel_power = {}  # channel -> max power seen
+
+        try:
+            while time.time() - start_time < duration:
+                line = proc.stdout.readline()
+                if not line:
+                    break
+
+                parts = line.strip().split(', ')
+                if len(parts) >= 6:
+                    try:
+                        freq_low = int(float(parts[1]))
+                        freq_high = int(float(parts[2]))
+                        # Power values are in remaining parts
+                        powers = [float(p) for p in parts[5:] if p]
+                        if powers:
+                            max_power = max(powers)
+                            center_freq = (freq_low + freq_high) // 2
+                            channel = (center_freq - 2402000000) // 1000000
+
+                            if 0 <= channel <= 78:
+                                if channel not in channel_power or max_power > channel_power[channel]:
+                                    channel_power[channel] = max_power
+                    except (ValueError, IndexError):
+                        continue
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(timeout=2)
+            except:
+                proc.kill()
+
+        # Find channels with significant activity (above noise floor)
+        noise_floor = -60  # Approximate noise floor in dB
+        active_channels = [(ch, power) for ch, power in channel_power.items() if power > noise_floor]
+
+        if active_channels:
+            # Group adjacent channels (potential piconets)
+            active_channels.sort(key=lambda x: x[0])
+            add_log(f"HackRF detected activity on {len(active_channels)} channels", "INFO")
+
+            activity = [{
+                'channel': ch,
+                'frequency_mhz': 2402 + ch,
+                'power_db': power,
+                'type': 'bluetooth_activity'
+            } for ch, power in active_channels]
+        else:
+            add_log("HackRF sweep complete: no significant Bluetooth activity", "INFO")
+
+    except FileNotFoundError:
+        add_log("hackrf_sweep not found", "WARNING")
+    except Exception as e:
+        add_log(f"HackRF sweep error: {e}", "ERROR")
+
+    return activity
+
+
+def scan_combined(interface='hci0', mode='active'):
+    """
+    Combined scanning using multiple techniques based on scan mode.
+    Uses ALL available Bluetooth interfaces for maximum coverage.
+
+    Modes:
+        - passive: btmon only (stealth - no RF transmissions)
+        - active: bluetoothctl scan on all interfaces + btmon for RSSI
+        - full: all methods + HackRF spectrum sweep
+
+    Returns deduplicated list of discovered devices with vendor detection.
+    """
+    global current_scan_mode
+
+    mode_config = SCAN_MODES.get(mode, SCAN_MODES['active'])
+    current_scan_mode = mode
+
+    # Get all available Bluetooth interfaces
+    all_interfaces = get_all_hci_interfaces()
+    add_log(f"Scan starting - mode: {mode_config['name']} on {len(all_interfaces)} interface(s): {', '.join(all_interfaces)}", "INFO")
+
+    all_devices = []
+    seen_addresses = set()
+    hackrf_activity = []
+
+    # 1. HackRF spectrum sweep (if enabled and available)
+    if mode_config.get('use_hackrf') and check_hackrf_available():
+        hackrf_activity = scan_hackrf_sweep(duration=3)
+        if hackrf_activity:
+            add_log(f"HackRF detected {len(hackrf_activity)} active Bluetooth channels", "INFO")
+
+    # 2. Passive btmon monitoring (runs concurrently with bluetoothctl in active mode)
+    btmon_devices = []
+    if mode_config['use_btmon']:
+        # In active mode, run btmon for the full duration to capture RSSI
+        # In passive mode, btmon is the only scan method
+        btmon_duration = mode_config['duration'] if not mode_config['use_bluetoothctl'] else mode_config['duration']
+        btmon_devices = scan_btmon_passive(btmon_duration)
+
+        for dev in btmon_devices:
+            if dev['bd_address'] not in seen_addresses:
+                seen_addresses.add(dev['bd_address'])
+                all_devices.append(dev)
+
+    # 3. bluetoothctl scan on all interfaces (Classic + BLE simultaneously)
+    if mode_config['use_bluetoothctl']:
+        bctl_devices = scan_bluetoothctl_all(all_interfaces, duration=mode_config['duration'])
+
+        for dev in bctl_devices:
+            if dev['bd_address'] not in seen_addresses:
+                seen_addresses.add(dev['bd_address'])
+                all_devices.append(dev)
+            else:
+                # Merge with existing device data
+                for existing in all_devices:
+                    if existing['bd_address'] == dev['bd_address']:
+                        if dev['device_name'] != 'Unknown':
+                            existing['device_name'] = dev['device_name']
+                        if dev.get('rssi') is not None:
+                            existing['rssi'] = dev['rssi']
+                        if dev.get('vendor'):
+                            existing['vendor'] = dev['vendor']
+                        if dev.get('company_id'):
+                            existing['company_id'] = dev['company_id']
+                        if dev['device_type'] != 'unknown':
+                            existing['device_type'] = dev['device_type']
+                        break
+
+    # Final device type determination for unknowns
+    for dev in all_devices:
+        if dev.get('device_type') == 'unknown':
+            dev['device_type'] = get_device_type(dev['bd_address'])
+
+    # Count by type
+    classic_count = sum(1 for d in all_devices if d.get('device_type') == 'classic')
+    ble_count = sum(1 for d in all_devices if d.get('device_type') == 'ble')
+    vendor_count = sum(1 for d in all_devices if d.get('vendor'))
+
+    add_log(f"Scan complete: {len(all_devices)} devices ({classic_count} Classic, {ble_count} BLE, {vendor_count} vendor-identified)", "INFO")
 
     return all_devices
 

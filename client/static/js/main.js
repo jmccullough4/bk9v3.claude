@@ -1359,12 +1359,12 @@ function clearAllDevices() {
 // Scan mode descriptions for UI feedback
 const SCAN_MODE_INFO = {
     // Primary scan modes
-    'active': 'Active scan - hcitool Classic + BLE discovery',
-    'passive': 'Passive monitoring - no RF transmissions (stealth)',
-    'full': 'Full scan - all methods for maximum detection',
+    'active': 'bluetoothctl on all interfaces (Classic + BLE) + btmon RSSI capture',
+    'passive': 'btmon only - no RF transmissions (stealth mode)',
+    'full': 'All methods + HackRF 2.4GHz sweep (detects hidden piconets)',
     // Special modes
     'target_survey': 'Continuous target monitoring - L2PING, SDP, Name, RSSI',
-    'hidden_hunt': 'Hidden device hunt - phones/watches/trackers'
+    'hidden_hunt': 'Hidden device hunt - Apple/Garmin/Samsung vendor detection'
 };
 
 // Standard scan modes that use the scan/modes API
