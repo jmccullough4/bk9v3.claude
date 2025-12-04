@@ -8,9 +8,7 @@ gevent==23.9.1
 gevent-websocket==0.10.1
 Werkzeug==3.0.1
 
-# Bluetooth Cyber Tools
-pybluez>=0.23
+# Bluetooth Libraries
+# pybluez2 is the maintained fork compatible with Python 3.10+
+pybluez2>=0.46
 bleak>=0.21.0
-blesuite>=2.0.0
-btlejack>=2.1.1
-internalblue>=0.4
