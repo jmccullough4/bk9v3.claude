@@ -7285,6 +7285,200 @@ def restart_system():
         return jsonify({'error': str(e)}), 500
 
 
+# ==================== VERSION & UPDATE API ====================
+
+def get_version_info():
+    """Get current version information from git."""
+    version_info = {
+        'version': '1.0.0',
+        'commit': 'unknown',
+        'branch': 'unknown',
+        'date': 'unknown',
+        'updates_available': False,
+        'commits_behind': 0
+    }
+
+    try:
+        # Read VERSION file
+        version_file = os.path.join(INSTALL_DIR, 'VERSION')
+        if os.path.exists(version_file):
+            with open(version_file, 'r') as f:
+                version_info['version'] = f.read().strip()
+
+        # Get git info
+        result = subprocess.run(
+            ['git', 'rev-parse', '--short', 'HEAD'],
+            capture_output=True, text=True, timeout=5, cwd=INSTALL_DIR
+        )
+        if result.returncode == 0:
+            version_info['commit'] = result.stdout.strip()
+
+        result = subprocess.run(
+            ['git', 'branch', '--show-current'],
+            capture_output=True, text=True, timeout=5, cwd=INSTALL_DIR
+        )
+        if result.returncode == 0:
+            version_info['branch'] = result.stdout.strip()
+
+        result = subprocess.run(
+            ['git', 'log', '-1', '--format=%ci'],
+            capture_output=True, text=True, timeout=5, cwd=INSTALL_DIR
+        )
+        if result.returncode == 0:
+            version_info['date'] = result.stdout.strip()[:10]
+
+    except Exception as e:
+        add_log(f"Error getting version info: {e}", "DEBUG")
+
+    return version_info
+
+
+def check_for_updates():
+    """Check if updates are available from remote."""
+    update_info = {
+        'update_available': False,
+        'commits_behind': 0,
+        'current_commit': None,
+        'current_branch': None,
+        'remote_commit': None,
+        'recent_changes': []
+    }
+
+    try:
+        # Get current commit/branch
+        result = subprocess.run(
+            ['git', 'rev-parse', 'HEAD'],
+            capture_output=True, text=True, timeout=5, cwd=INSTALL_DIR
+        )
+        if result.returncode == 0:
+            update_info['current_commit'] = result.stdout.strip()
+
+        result = subprocess.run(
+            ['git', 'branch', '--show-current'],
+            capture_output=True, text=True, timeout=5, cwd=INSTALL_DIR
+        )
+        if result.returncode == 0:
+            update_info['current_branch'] = result.stdout.strip()
+
+        # Fetch from remote (but don't merge)
+        subprocess.run(
+            ['git', 'fetch', 'origin'],
+            capture_output=True, timeout=30, cwd=INSTALL_DIR
+        )
+
+        # Check how many commits we're behind
+        result = subprocess.run(
+            ['git', 'rev-list', '--count', 'HEAD..@{u}'],
+            capture_output=True, text=True, timeout=5, cwd=INSTALL_DIR
+        )
+        if result.returncode == 0:
+            behind = int(result.stdout.strip())
+            update_info['commits_behind'] = behind
+            update_info['update_available'] = behind > 0
+
+        # Get remote commit and changes
+        if update_info['update_available']:
+            result = subprocess.run(
+                ['git', 'rev-parse', '@{u}'],
+                capture_output=True, text=True, timeout=5, cwd=INSTALL_DIR
+            )
+            if result.returncode == 0:
+                update_info['remote_commit'] = result.stdout.strip()
+
+            result = subprocess.run(
+                ['git', 'log', '--oneline', 'HEAD..@{u}'],
+                capture_output=True, text=True, timeout=5, cwd=INSTALL_DIR
+            )
+            if result.returncode == 0:
+                update_info['recent_changes'] = result.stdout.strip().split('\n')[:10]
+
+    except Exception as e:
+        add_log(f"Error checking for updates: {e}", "WARNING")
+
+    return update_info
+
+
+@app.route('/api/system/version')
+@login_required
+def api_get_version():
+    """Get current version information."""
+    return jsonify(get_version_info())
+
+
+@app.route('/api/system/updates/check', methods=['POST'])
+@login_required
+def api_check_updates():
+    """Check for available updates."""
+    add_log("Checking for updates...", "INFO")
+    update_info = check_for_updates()
+
+    if update_info['updates_available']:
+        add_log(f"Updates available: {update_info['commits_behind']} commits behind", "INFO")
+    else:
+        add_log("System is up to date", "INFO")
+
+    return jsonify(update_info)
+
+
+@app.route('/api/system/updates/apply', methods=['POST'])
+@login_required
+def api_apply_updates():
+    """
+    Apply available updates.
+    In Docker: triggers container rebuild via update script.
+    """
+    add_log("Update requested by operator", "INFO")
+
+    try:
+        # Check if running in Docker
+        in_docker = os.path.exists('/.dockerenv')
+
+        if in_docker:
+            # In Docker, we can't rebuild ourselves
+            # Return instructions for the host
+            return jsonify({
+                'status': 'docker_update_required',
+                'message': 'Run ./update.sh on the host to update',
+                'instructions': [
+                    'SSH to the host machine',
+                    'cd to the BlueK9 directory',
+                    'Run: ./update.sh'
+                ]
+            })
+        else:
+            # Not in Docker - can do direct update
+            add_log("Pulling latest code...", "INFO")
+
+            # Git pull
+            result = subprocess.run(
+                ['git', 'pull', 'origin'],
+                capture_output=True, text=True, timeout=60, cwd=INSTALL_DIR
+            )
+
+            if result.returncode != 0:
+                add_log(f"Git pull failed: {result.stderr}", "ERROR")
+                return jsonify({'error': 'Git pull failed', 'details': result.stderr}), 500
+
+            add_log("Update complete, restarting...", "INFO")
+
+            # Schedule restart
+            def delayed_restart():
+                time.sleep(2)
+                do_system_restart()
+
+            restart_thread = threading.Thread(target=delayed_restart, daemon=False)
+            restart_thread.start()
+
+            return jsonify({
+                'status': 'updating',
+                'message': 'Update applied, restarting...'
+            })
+
+    except Exception as e:
+        add_log(f"Update failed: {e}", "ERROR")
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/state')
 @login_required
 def get_system_state():

@@ -4516,7 +4516,7 @@ function checkForUpdates() {
     actions.classList.add('hidden');
     checkBtn.disabled = true;
 
-    fetch('/api/updates/check')
+    fetch('/api/system/updates/check', { method: 'POST' })
         .then(r => r.json())
         .then(data => {
             checkBtn.disabled = false;
@@ -4636,7 +4636,7 @@ function applyUpdates() {
 
     addLogEntry('Applying system update...', 'INFO');
 
-    fetch('/api/updates/apply', {
+    fetch('/api/system/updates/apply', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' }
     })
