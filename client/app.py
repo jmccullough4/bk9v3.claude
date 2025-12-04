@@ -9059,6 +9059,32 @@ def send_udp_announcement(peer_ips=None):
     return sent_count
 
 
+def is_netbird_available():
+    """Check if netbird is installed and accessible."""
+    try:
+        result = subprocess.run(
+            ['which', 'netbird'],
+            capture_output=True, text=True, timeout=5
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+# Cache netbird availability check
+_netbird_available = None
+
+
+def check_netbird_available():
+    """Check if netbird is available (cached)."""
+    global _netbird_available
+    if _netbird_available is None:
+        _netbird_available = is_netbird_available()
+        if not _netbird_available:
+            add_log("NetBird not installed - WARHAMMER network features disabled", "INFO")
+    return _netbird_available
+
+
 def parse_netbird_status():
     """Parse netbird status -d output to get peer information.
 
@@ -9071,6 +9097,10 @@ def parse_netbird_status():
     """
     global warhammer_peers
 
+    # Check if netbird is available
+    if not check_netbird_available():
+        return []
+
     try:
         result = subprocess.run(
             ['netbird', 'status', '-d'],
@@ -9078,7 +9108,7 @@ def parse_netbird_status():
         )
 
         if result.returncode != 0:
-            add_log(f"netbird status failed: {result.stderr}", "WARNING")
+            # Don't log warning every time - netbird might just not be running
             return []
 
         output = result.stdout
@@ -9615,13 +9645,16 @@ def sync_targets_with_peers():
 @login_required
 def get_network_status():
     """Get WARHAMMER network status."""
+    netbird_installed = check_netbird_available()
     return jsonify({
         'network_name': WARHAMMER_CONFIG['NETWORK_NAME'],
-        'running': warhammer_running,
-        'peer_count': len(warhammer_peers),
-        'connected_peers': sum(1 for p in warhammer_peers.values() if p.get('connected')),
+        'netbird_available': netbird_installed,
+        'running': warhammer_running if netbird_installed else False,
+        'peer_count': len(warhammer_peers) if netbird_installed else 0,
+        'connected_peers': sum(1 for p in warhammer_peers.values() if p.get('connected')) if netbird_installed else 0,
         'bluek9_peers': len(bluek9_peers),
-        'route_count': len(warhammer_routes)
+        'route_count': len(warhammer_routes) if netbird_installed else 0,
+        'message': None if netbird_installed else 'NetBird not installed - install on host for mesh networking'
     })
 
 
@@ -9629,19 +9662,22 @@ def get_network_status():
 def get_network_diagnostic():
     # No login required - diagnostic endpoint for troubleshooting
     """Get detailed diagnostic info for WARHAMMER network troubleshooting."""
-    # Get fresh netbird status
-    peers = parse_netbird_status()
+    netbird_installed = check_netbird_available()
+
+    # Get fresh netbird status if available
+    peers = parse_netbird_status() if netbird_installed else []
     connected_ips = [p['ip'] for p in peers if p.get('connected') and p.get('ip')]
 
     return jsonify({
-        'warhammer_running': warhammer_running,
+        'netbird_available': netbird_installed,
+        'warhammer_running': warhammer_running if netbird_installed else False,
         'udp_listener_running': udp_listener_running,
         'udp_port': BLUEK9_UDP_PORT,
         'netbird_peers': {
             'total': len(peers),
             'connected': len([p for p in peers if p.get('connected')]),
             'connected_ips': connected_ips
-        },
+        } if netbird_installed else {'total': 0, 'connected': 0, 'connected_ips': [], 'message': 'NetBird not installed'},
         'bluek9_peers': {
             'count': len(bluek9_peers),
             'peers': list(bluek9_peers.values())
