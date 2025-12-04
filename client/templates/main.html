@@ -2196,13 +2196,24 @@
                         <div class="scan-mode-row">
                             <label class="scan-mode-label">MODE:</label>
                             <select class="scan-mode-select" id="scanModeSelect">
-                                <option value="quick">QUICK SCAN</option>
-                                <option value="target_survey">TARGET SURVEY (PROBE ALL TARGETS)</option>
-                                <option value="hidden_hunt">HIDDEN DEVICE HUNT (PHONES/WATCHES)</option>
-                                <option value="stimulate_classic">STIMULATE (CLASSIC)</option>
-                                <option value="stimulate_ble">STIMULATE (BLE)</option>
-                                <option value="aggressive_inquiry">AGGRESSIVE INQUIRY</option>
-                                <option value="advanced" selected>ADVANCED (ALL)</option>
+                                <optgroup label="── BTMGMT SCAN MODES ──">
+                                    <option value="balanced" selected>BALANCED (STANDARD)</option>
+                                    <option value="stealth">STEALTH (PASSIVE ONLY)</option>
+                                    <option value="aggressive">AGGRESSIVE (ALL METHODS)</option>
+                                    <option value="ble_focus">BLE FOCUS (IOT DEVICES)</option>
+                                    <option value="classic_focus">CLASSIC FOCUS (PHONES/AUDIO)</option>
+                                </optgroup>
+                                <optgroup label="── SPECIAL MODES ──">
+                                    <option value="target_survey">TARGET SURVEY (PROBE ALL TARGETS)</option>
+                                    <option value="hidden_hunt">HIDDEN DEVICE HUNT (PHONES/WATCHES)</option>
+                                </optgroup>
+                                <optgroup label="── LEGACY MODES ──">
+                                    <option value="quick">QUICK SCAN</option>
+                                    <option value="stimulate_classic">STIMULATE (CLASSIC)</option>
+                                    <option value="stimulate_ble">STIMULATE (BLE)</option>
+                                    <option value="aggressive_inquiry">AGGRESSIVE INQUIRY</option>
+                                    <option value="advanced">ADVANCED (ALL)</option>
+                                </optgroup>
                             </select>
                         </div>
                         <div class="btn-group">
